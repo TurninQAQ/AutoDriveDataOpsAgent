@@ -35,6 +35,8 @@ V1.1 评测体系见：[docs/V1.1_EVALUATION_ALIGNMENT.md](docs/V1.1_EVALUATION_
 
 Gemini 模型/RAG 适配见：[docs/V1.2_GEMINI_PROVIDER.md](docs/V1.2_GEMINI_PROVIDER.md)。
 
+Qwen V1.3.1 迁移与验收见：[docs/V1.3.1_QWEN_RUNTIME_MIGRATION.md](docs/V1.3.1_QWEN_RUNTIME_MIGRATION.md)、[docs/V1.3.1_TEST_REPORT.md](docs/V1.3.1_TEST_REPORT.md) 和 [部署报告](docs/deployment/CODEX_LUNA_V1.3.1_QWEN_DEPLOYMENT_REPORT_2026-08-20.md)。
+
 
 本项目用于把数据处理 pipeline 部署到 Airflow，并通过任务 YAML 提交和管理多任务动态 DAG。
 
@@ -107,6 +109,30 @@ dataops-agent ask "当前 GPU Reservation 和显存情况怎么样？" --json
 ```
 
 若 `PLATFORM_RAG_EMBED_PROVIDER=hash`，则继续使用 V1.1 的 BM25 + feature-hashing baseline，不调用 embedding API。
+
+## Qwen 本地 Runtime（V1.3.1）
+
+正式 runtime 默认使用 Qwen；密钥只通过环境变量或本机 secure env 注入，不要提交仓库，也不要把 `/home/ubuntu/project/auth/ali.api` 内容复制到源码或报告。
+
+```bash
+export DASHSCOPE_API_KEY='YOUR_KEY'
+export DASHSCOPE_OPENAI_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
+export DASHSCOPE_API_BASE_URL='https://dashscope.aliyuncs.com/api/v1'
+export PLATFORM_AGENT_PROVIDER=qwen
+export PLATFORM_AGENT_MODEL=qwen3.7-flash
+export PLATFORM_RAG_EMBED_PROVIDER=qwen
+export PLATFORM_RAG_EMBED_MODEL=qwen3.7-text-embedding
+export PLATFORM_RAG_EMBED_DIM=1024
+export PLATFORM_RAG_EMBED_BATCH_SIZE=20
+
+./platform install
+dataops-agent doctor --strict --json
+dataops-agent knowledge build --json
+dataops-agent knowledge status --json
+dataops-agent eval-aligned --json
+```
+
+Qwen dense sidecar 与历史 Gemini sidecar 分开保存；第一轮固定 lexical/dense=0.50/0.50，不启用 instruct 或 reranker。
 
 
 ## Agent V0.9 Observability / Evaluation

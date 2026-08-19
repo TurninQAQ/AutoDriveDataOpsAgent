@@ -1,4 +1,12 @@
 ## 版本发布说明
+v1.3.1 2026-08-20：Qwen Runtime Migration & Evaluation Closure
+1. 正式 Runtime Provider 切换到阿里云百炼 Qwen：Agent 使用 `qwen3.7-flash`，RAG 使用 `qwen3.7-text-embedding`。
+2. 新增 provider-neutral model retry facade，保留 Gemini compatibility API；Qwen Agent 采用 JSON Object + Pydantic structured output，并保持 MCP / Policy / HITL / Verification 边界不变。
+3. 新增 DashScope native embedding adapter，document/query 使用非对称 `text_type`，有效 batch 上限 20，固定 1024 维，并复用 Dense sidecar schema v2 的 checkpoint/resume 逻辑。
+4. Qwen sidecar 独立于旧 Gemini 768 维 sidecar，最终完成 503/503 vectors；同一 V1.1 Golden Set 上完成 Hash/Qwen A/B、Tool Grounding 和 HITL acceptance。
+5. 保留 Gemini 历史报告与代码；未修改 Golden Set/thresholds，未再次轮换 Airflow secrets，未执行 history rewrite 或 force push。
+6. Ragas 记录为 `BLOCKED_NOT_VALIDATED`；DeepEval 使用 custom Qwen model 完成 21-case 真实 judge；Promptfoo 因 npm 镜像网络 `ECONNRESET` 记录为未验证。
+
 v1.2.1 2026-08-19:(new:local_runtime_integration_fix base:agent-v1.2.0)
 1. 修复空的 RAG hybrid 权重配置在 runtime 环境中触发 `float('')` 的问题。
 2. 增加空权重配置回归测试，保持 Gemini/hash 模式默认权重不变。
