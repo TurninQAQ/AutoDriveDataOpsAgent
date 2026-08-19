@@ -1,0 +1,59 @@
+gpu_ids: "7,8,9"
+gpu_stages: "segment,od,occ"
+gpu_stage_memory_mb:
+  segment: 24000
+  od: 12000
+  occ: 4000
+gpu_wait_interval_sec: 10
+gpu_reservation_pending_sec: 60
+
+# /opt/airflow/config/datasets_config.yaml
+datasets:
+- dataset_name: clip_segment_gpu_test_000
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/segment_gpu_sched_test
+  image_segment: 172.16.201.100:5000/sam31:v1.0.9_cfy_07-13_11_17_09
+  image_od: 172.16.201.100:5000/label_od:v1.1.12_nty_06-29_16_11_23
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.23_ni.xs_06-30_09_28_03
+  timeout_min: 45
+- dataset_name: clip_segment_gpu_test_001
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/segment_gpu_sched_test
+  image_segment: 172.16.201.100:5000/sam31:v1.0.9_cfy_07-13_11_17_09
+  image_od: 172.16.201.100:5000/label_od:v1.1.12_nty_06-29_16_11_23
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.23_ni.xs_06-30_09_28_03
+  timeout_min: 45
+- dataset_name: clip_segment_gpu_test_002
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/segment_gpu_sched_test
+  image_segment: 172.16.201.100:5000/sam31:v1.0.9_cfy_07-13_11_17_09
+  image_od: 172.16.201.100:5000/label_od:v1.1.12_nty_06-29_16_11_23
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.23_ni.xs_06-30_09_28_03
+  timeout_min: 45
+- dataset_name: clip_segment_gpu_test_003
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/segment_gpu_sched_test
+  image_segment: 172.16.201.100:5000/sam31:v1.0.9_cfy_07-13_11_17_09
+  image_od: 172.16.201.100:5000/label_od:v1.1.12_nty_06-29_16_11_23
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.23_ni.xs_06-30_09_28_03
+  timeout_min: 45
+- dataset_name: clip_segment_gpu_test_004
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/segment_gpu_sched_test
+  image_segment: 172.16.201.100:5000/sam31:v1.0.9_cfy_07-13_11_17_09
+  image_od: 172.16.201.100:5000/label_od:v1.1.12_nty_06-29_16_11_23
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.23_ni.xs_06-30_09_28_03
+  timeout_min: 45
+- dataset_name: clip_segment_gpu_test_005
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/segment_gpu_sched_test
+  image_segment: 172.16.201.100:5000/sam31:v1.0.9_cfy_07-13_11_17_09
+  image_od: 172.16.201.100:5000/label_od:v1.1.12_nty_06-29_16_11_23
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.23_ni.xs_06-30_09_28_03
+  timeout_min: 45

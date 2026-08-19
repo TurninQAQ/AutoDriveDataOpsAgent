@@ -1,0 +1,74 @@
+[
+  {
+    "id": "gpu_wait",
+    "query": "Segment 一直拿不到 GPU，显存和独占 Reservation 应该怎么排查？",
+    "expected_sources": [
+      "runbooks/gpu_wait.md",
+      "platform/gpu_scheduling.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "draining",
+    "query": "任务为什么会长期处于 draining，软抢占的安全边界是什么？",
+    "expected_sources": [
+      "runbooks/draining_stuck.md",
+      "platform/soft_preemption_recovery.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "recovery",
+    "query": "RecoveryDagRun 怎么从 checkpoint 继续而不是从头运行？",
+    "expected_sources": [
+      "platform/soft_preemption_recovery.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "container_token",
+    "query": "为什么 clip_001 不能误匹配 clip_0010，容器怎么精准停止？",
+    "expected_sources": [
+      "runbooks/container_cleanup.md",
+      "platform/docker_lifecycle.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "validate_failure",
+    "query": "Stage 运行成功但是 Validate 失败后能不能形成 checkpoint？",
+    "expected_sources": [
+      "runbooks/stage_failure.md",
+      "platform/soft_preemption_recovery.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "airflow_postgres",
+    "query": "Airflow 多任务后 Metadata Database 为什么从 SQLite 迁到 PostgreSQL？",
+    "expected_sources": [
+      "runbooks/airflow_health.md",
+      "repository/README.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "gpu_timeout",
+    "query": "GPU 排队等待时间是否应该计入 Stage timeout_min？",
+    "expected_sources": [
+      "platform/gpu_scheduling.md",
+      "runbooks/gpu_wait.md"
+    ],
+    "top_k": 5
+  },
+  {
+    "id": "grounding",
+    "query": "RAG 能不能直接判断当前 GPU 是否显存不足？",
+    "expected_sources": [
+      "security/grounding.md",
+      "platform/architecture.md",
+      "repository/V0.5_RAG_RUNBOOK.md"
+    ],
+    "top_k": 5
+  }
+]

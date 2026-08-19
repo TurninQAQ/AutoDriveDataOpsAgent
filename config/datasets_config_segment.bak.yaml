@@ -1,0 +1,31 @@
+# /opt/airflow/config/datasets_config.yaml
+datasets:
+
+
+#   - dataset_name: clip_009_20260617_154135
+#     tier: small
+#     pool: default_pool
+#     dataset_path: "/home/cidi/data_pipeline/2026-06-17/record_CLOUD_MAPPING_2026-06-17_153655"
+#     image_parser: "172.16.201.100:5000/data_parser:v1.0.7_cidi_06-27_09_27_35"
+#     image_segment: "172.16.201.100:5000/sam31:v1.0.6_cfy_06-26_10_52_06"
+#     image_od: "172.16.201.100:5000/label_od:v1.1.11_nty_06-26_19_56_26"
+#     image_map: "172.16.201.100:5000/offline_mapping:v1.0.6_root_06-26_18_00_46"
+#     image_coloration: "172.16.201.100:5000/pointcloud_coloration:v1.0.6_cidi_06-26_17_53_47"
+#     image_occ: "172.16.201.100:5000/label_occ:v1.0.20_ni.xs_06-24_17_30_55"
+#     image_qc: "batch-processor:d"
+#     timeout_min: 45
+#     gpu_ids: "1"
+
+- dataset_name: clip_005_20260627_095742
+  tier: small
+  pool: default_pool
+  dataset_path: /home/cidi/data_pipeline/2026-06-17/record_CLOUD_MAPPING_2026-06-27_095504
+  image_parser: 172.16.201.100:5000/data_parser:v1.0.7_cidi_06-27_09_27_35
+  image_segment: 172.16.201.100:5000/sam31:v1.0.6_cfy_06-26_10_52_06
+  image_od: 172.16.201.100:5000/label_od:v1.1.11_nty_06-26_19_56_26
+  image_map: 172.16.201.100:5000/offline_mapping:v1.0.6_root_06-26_18_00_46
+  image_coloration: 172.16.201.100:5000/pointcloud_coloration:v1.0.6_cidi_06-26_17_53_47
+  image_occ: 172.16.201.100:5000/label_occ:v1.0.20_ni.xs_06-24_17_30_55
+  image_qc: batch-processor:d
+  timeout_min: 45
+  gpu_ids: '1'

@@ -1,0 +1,96 @@
+# 任务提交 YAML 参考模板。
+# 生产 YAML 通常应使用 /opt/airflow/scripts/generate.py 生成，
+# 按需检查/编辑后，再使用以下命令提交：
+#   /opt/airflow/scripts/manage_task.sh submit --name <task_prefix> --yaml /path/to/your_task.yaml
+# 系统会自动追加精确到秒的 Asia/Shanghai 时间戳。
+
+# 必填。定义阶段执行顺序。
+# 普通列表项表示串行执行；列表嵌套项表示其中的阶段并行执行。
+#
+# 示例：
+#   全流程串行：
+#     pipeline_stages:
+#       - precheck
+#       - parser
+#       - segment
+#       - map
+#       - od
+#       - coloration
+#       - occ
+#
+#   map 之后 OD 和 OCC 并行：
+#     pipeline_stages:
+#       - map
+#       - [od, occ]
+#       - coloration
+#
+#   只运行 OD：
+#     pipeline_stages:
+#       - od
+pipeline_stages:
+  - precheck
+  - parser
+  - segment
+  - map
+  - [od, occ]
+  - coloration
+
+# 可选。控制该任务 DAG 中最多同时运行多少个 clip。
+max_active_runs: 5
+
+# 可选。让已提交任务在全局范围内按批次串行执行。开启后，
+# 任务 B 会等待任务 A 的所有 running/queued DagRun 结束后再运行。
+task_exclusive: true
+task_lock_wait_interval_sec: 10
+# 可选。异常兜底清理时间。正常抢占会等待当前 stage 和 validate 完成，
+# 然后从下一个 stage 恢复；该值只用于锁泄漏或旧抢占状态残留时的强制清理。
+preempt_grace_timeout_min: 60
+
+# GPU 调度配置。
+# 如果 pipeline_stages 中没有阶段需要 GPU，gpu_stages 可以为空。
+gpu_ids: "5,6,7,8,9"
+gpu_stages: "segment,od,occ"
+# 可选。需要独占一张接近空闲 GPU 的阶段。
+# 如果省略，运行时默认所有 gpu_stages 都按独占 GPU 处理。当前模板显式让
+# segment 和 od 独占，occ 只按显存预约调度。设为 "" 表示关闭独占 GPU 模式。
+exclusive_gpu_stages: "segment,od"
+exclusive_gpu_idle_used_max_mb: 512
+gpu_stage_memory_mb:
+  segment: 24000
+  od: 24000
+  occ: 4000
+gpu_wait_interval_sec: 10
+# 为兼容已有 0708 风格 YAML 保留的字段。当前预约会覆盖整个阶段运行时间，
+# 不再只按这里配置的秒数统计。
+gpu_reservation_pending_sec: 60
+
+datasets:
+  - dataset_name: clip_xxx
+    tier: small
+    pool: default_pool
+    dataset_path: /home/cidi/data_pipeline/YYYY-MM-DD/record_xxx
+
+    # 只需要填写 pipeline_stages 中用到的 image_<stage>。
+    # 例如 pipeline_stages 只包含 od 和 occ 时，只需要 image_od
+    # 和 image_occ。
+    image_parser: 172.16.201.100:5000/data_parser:xxx
+    image_segment: 172.16.201.100:5000/sam31:xxx
+    image_map: 172.16.201.100:5000/offline_mapping:xxx
+    image_od: 172.16.201.100:5000/label_od:xxx
+    image_coloration: 172.16.201.100:5000/pointcloud_coloration:xxx
+    image_occ: 172.16.201.100:5000/label_occ:v1.0.27_cidi_07-21_10_15_45
+
+    timeout_min: 60
+
+  # 如需增加更多 clip，复制下面这个配置块即可。
+  # - dataset_name: clip_yyy
+  #   tier: small
+  #   pool: default_pool
+  #   dataset_path: /home/cidi/data_pipeline/YYYY-MM-DD/record_xxx
+  #   image_parser: 172.16.201.100:5000/data_parser:xxx
+  #   image_segment: 172.16.201.100:5000/sam31:xxx
+  #   image_map: 172.16.201.100:5000/offline_mapping:xxx
+  #   image_od: 172.16.201.100:5000/label_od:xxx
+  #   image_coloration: 172.16.201.100:5000/pointcloud_coloration:xxx
+  #   image_occ: 172.16.201.100:5000/label_occ:v1.0.27_cidi_07-21_10_15_45
+  #   timeout_min: 60

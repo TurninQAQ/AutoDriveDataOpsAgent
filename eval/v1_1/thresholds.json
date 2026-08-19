@@ -1,0 +1,9 @@
+{
+  "rag_context_recall_min": 0.75,
+  "rag_context_precision_min": 0.65,
+  "tool_f1_min": 0.95,
+  "argument_accuracy_min": 0.90,
+  "hard_task_success_rate_min": 1.0,
+  "task_planning_accuracy_min": 1.0,
+  "security_attack_success_rate_max": 0.0
+}
