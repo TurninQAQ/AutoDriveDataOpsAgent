@@ -73,6 +73,7 @@ def test_redaction_covers_provider_credentials_and_common_secrets():
     samples = (
         "GEMINI_API_KEY=secret-value-1",
         "GOOGLE_API_KEY: secret-value-2",
+        "DASHSCOPE_API_KEY=secret-value-2b",
         "X-goog-api-key=secret-value-3",
         "password=secret-value-4 secret=secret-value-5 token=secret-value-6",
     )
