@@ -6,7 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -376,7 +376,18 @@ def _run_mock_stage(repo_root: Path, root: Path) -> tuple[bool, str]:
     if stage.returncode != 0:
         return False, stage.stderr or stage.stdout
     validate = subprocess.run(
-        [sys.executable, str(repo_root / "scripts" / "validate_json.py"), "--root-dir", str(root), "--dataset", dataset, "--task-suffix", "segment", "--min-date", date.today().isoformat()],
+        [
+            sys.executable,
+            str(repo_root / "scripts" / "validate_json.py"),
+            "--root-dir",
+            str(root),
+            "--dataset",
+            dataset,
+            "--task-suffix",
+            "segment",
+            "--min-date",
+            datetime.now(timezone.utc).date().isoformat(),
+        ],
         capture_output=True, text=True, timeout=10,
     )
     return validate.returncode == 0, (validate.stdout or validate.stderr).strip()

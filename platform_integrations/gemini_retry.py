@@ -33,16 +33,23 @@ class GeminiRetryPolicy:
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "GeminiRetryPolicy":
         env = environ or os.environ
+
+        def configured(primary: str, legacy: str, default: str) -> str:
+            value = env.get(primary)
+            if value is None or not str(value).strip():
+                value = env.get(legacy)
+            return str(value if value is not None else default)
+
         return cls(
-            attempts=max(1, _int_env(env, "PLATFORM_GEMINI_RETRY_ATTEMPTS", 5)),
-            base_sec=max(0.0, _float_env(env, "PLATFORM_GEMINI_RETRY_BASE_SEC", 1.0)),
-            max_sec=max(0.0, _float_env(env, "PLATFORM_GEMINI_RETRY_MAX_SEC", 20.0)),
-            jitter_sec=max(0.0, _float_env(env, "PLATFORM_GEMINI_RETRY_JITTER_SEC", 0.25)),
+            attempts=max(1, _int_env({"value": configured("PLATFORM_MODEL_RETRY_ATTEMPTS", "PLATFORM_GEMINI_RETRY_ATTEMPTS", "5")}, "value", 5)),
+            base_sec=max(0.0, _float_env({"value": configured("PLATFORM_MODEL_RETRY_BASE_SEC", "PLATFORM_GEMINI_RETRY_BASE_SEC", "1")}, "value", 1.0)),
+            max_sec=max(0.0, _float_env({"value": configured("PLATFORM_MODEL_RETRY_MAX_SEC", "PLATFORM_GEMINI_RETRY_MAX_SEC", "20")}, "value", 20.0)),
+            jitter_sec=max(0.0, _float_env({"value": configured("PLATFORM_MODEL_RETRY_JITTER_SEC", "PLATFORM_GEMINI_RETRY_JITTER_SEC", "0.25")}, "value", 0.25)),
         )
 
 
 class GeminiRequestError(RuntimeError):
-    """Safe, classified failure that never includes a prompt or credential."""
+    """Safe, classified model failure without prompt or credential content."""
 
     def __init__(
         self,
@@ -57,7 +64,7 @@ class GeminiRequestError(RuntimeError):
         self.retryable = retryable
         status = str(status_code) if status_code is not None else "unknown"
         super().__init__(
-            f"Gemini operation {redact_text(operation)} failed after {attempts} attempt(s) "
+            f"Model operation {redact_text(operation)} failed after {attempts} attempt(s) "
             f"(status_code={status}, retryable={str(retryable).lower()})"
         )
 
@@ -175,7 +182,7 @@ def _delay(policy: GeminiRetryPolicy, attempt: int, failure: _Failure, jitter: C
 def _safe_failure(operation: str, attempt: int, policy: GeminiRetryPolicy, exc: BaseException) -> GeminiRequestError:
     failure = classify_exception(exc)
     LOGGER.warning(
-        "Gemini operation failed operation=%s attempt=%d status_code=%s retryable=%s",
+        "Model operation failed operation=%s attempt=%d status_code=%s retryable=%s",
         redact_text(operation),
         attempt,
         failure.status_code,
@@ -202,7 +209,7 @@ def retry_sync(
                 raise _safe_failure(operation_name, attempt, active_policy, exc) from None
             delay = _delay(active_policy, attempt, failure, jitter)
             LOGGER.warning(
-                "Gemini operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",
+                "Model operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",
                 redact_text(operation_name),
                 attempt,
                 failure.status_code,
@@ -233,7 +240,7 @@ async def retry_async(
                 raise _safe_failure(operation_name, attempt, active_policy, exc) from None
             delay = _delay(active_policy, attempt, failure, jitter)
             LOGGER.warning(
-                "Gemini operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",
+                "Model operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",
                 redact_text(operation_name),
                 attempt,
                 failure.status_code,
@@ -241,3 +248,8 @@ async def retry_async(
             )
             await sleep(delay)
     raise AssertionError("unreachable")
+
+
+# V1.3 compatibility aliases. New providers should import model_retry instead.
+ModelRetryPolicy = GeminiRetryPolicy
+ModelRequestError = GeminiRequestError

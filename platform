@@ -199,9 +199,48 @@ require_airflow_database() {
 
 load_platform_env() {
     local platform_env="$RUNTIME_DIR/config/platform.env"
+    local override_dashscope_api_key="${DASHSCOPE_API_KEY:-}"
+    local override_dashscope_openai_base_url="${DASHSCOPE_OPENAI_BASE_URL:-}"
+    local override_dashscope_api_base_url="${DASHSCOPE_API_BASE_URL:-}"
+    local override_agent_provider="${PLATFORM_AGENT_PROVIDER:-}"
+    local override_agent_model="${PLATFORM_AGENT_MODEL:-}"
+    local override_embed_provider="${PLATFORM_RAG_EMBED_PROVIDER:-}"
+    local override_embed_model="${PLATFORM_RAG_EMBED_MODEL:-}"
+    local override_embed_dim="${PLATFORM_RAG_EMBED_DIM:-}"
+    local override_embed_batch="${PLATFORM_RAG_EMBED_BATCH_SIZE:-}"
+    local override_embed_index="${PLATFORM_RAG_EMBED_INDEX:-}"
+    local override_qwen_instruct="${PLATFORM_RAG_QWEN_INSTRUCT:-}"
+    local override_model_retry_attempts="${PLATFORM_MODEL_RETRY_ATTEMPTS:-}"
+    local override_model_retry_base="${PLATFORM_MODEL_RETRY_BASE_SEC:-}"
+    local override_model_retry_max="${PLATFORM_MODEL_RETRY_MAX_SEC:-}"
+    local override_model_retry_jitter="${PLATFORM_MODEL_RETRY_JITTER_SEC:-}"
+    local override_eval_provider="${PLATFORM_EVAL_PROVIDER:-}"
+    local override_eval_judge_model="${PLATFORM_EVAL_JUDGE_MODEL:-}"
+    local override_eval_judge_base_url="${PLATFORM_EVAL_JUDGE_BASE_URL:-}"
+    local override_eval_embed_model="${PLATFORM_EVAL_EMBED_MODEL:-}"
     [ -f "$platform_env" ] || error "runtime config not found: $platform_env. Run ./platform install first."
     # shellcheck disable=SC1090
     source "$platform_env"
+    [ -n "$override_dashscope_api_key" ] && export DASHSCOPE_API_KEY="$override_dashscope_api_key"
+    [ -n "$override_dashscope_openai_base_url" ] && export DASHSCOPE_OPENAI_BASE_URL="$override_dashscope_openai_base_url"
+    [ -n "$override_dashscope_api_base_url" ] && export DASHSCOPE_API_BASE_URL="$override_dashscope_api_base_url"
+    [ -n "$override_agent_provider" ] && export PLATFORM_AGENT_PROVIDER="$override_agent_provider"
+    [ -n "$override_agent_model" ] && export PLATFORM_AGENT_MODEL="$override_agent_model"
+    [ -n "$override_embed_provider" ] && export PLATFORM_RAG_EMBED_PROVIDER="$override_embed_provider"
+    [ -n "$override_embed_model" ] && export PLATFORM_RAG_EMBED_MODEL="$override_embed_model"
+    [ -n "$override_embed_dim" ] && export PLATFORM_RAG_EMBED_DIM="$override_embed_dim"
+    [ -n "$override_embed_batch" ] && export PLATFORM_RAG_EMBED_BATCH_SIZE="$override_embed_batch"
+    [ -n "$override_embed_index" ] && export PLATFORM_RAG_EMBED_INDEX="$override_embed_index"
+    [ -n "$override_qwen_instruct" ] && export PLATFORM_RAG_QWEN_INSTRUCT="$override_qwen_instruct"
+    [ -n "$override_model_retry_attempts" ] && export PLATFORM_MODEL_RETRY_ATTEMPTS="$override_model_retry_attempts"
+    [ -n "$override_model_retry_base" ] && export PLATFORM_MODEL_RETRY_BASE_SEC="$override_model_retry_base"
+    [ -n "$override_model_retry_max" ] && export PLATFORM_MODEL_RETRY_MAX_SEC="$override_model_retry_max"
+    [ -n "$override_model_retry_jitter" ] && export PLATFORM_MODEL_RETRY_JITTER_SEC="$override_model_retry_jitter"
+    [ -n "$override_eval_provider" ] && export PLATFORM_EVAL_PROVIDER="$override_eval_provider"
+    [ -n "$override_eval_judge_model" ] && export PLATFORM_EVAL_JUDGE_MODEL="$override_eval_judge_model"
+    [ -n "$override_eval_judge_base_url" ] && export PLATFORM_EVAL_JUDGE_BASE_URL="$override_eval_judge_base_url"
+    [ -n "$override_eval_embed_model" ] && export PLATFORM_EVAL_EMBED_MODEL="$override_eval_embed_model"
+    return 0
 }
 
 load_runtime_secrets() {
@@ -297,8 +336,8 @@ write_platform_env() {
             esac
             printf 'export %s=%q\n' "$mock_var" "${!mock_var}"
         done < <(compgen -A variable | grep '^MOCK_STAGE_')
-        printf 'export PLATFORM_AGENT_PROVIDER=%q\n' "${PLATFORM_AGENT_PROVIDER:-auto}"
-        printf 'export PLATFORM_AGENT_MODEL=%q\n' "${PLATFORM_AGENT_MODEL:-}"
+        printf 'export PLATFORM_AGENT_PROVIDER=%q\n' "${PLATFORM_AGENT_PROVIDER:-qwen}"
+        printf 'export PLATFORM_AGENT_MODEL=%q\n' "${PLATFORM_AGENT_MODEL:-qwen3.7-flash}"
         printf 'export PLATFORM_AGENT_TEMPERATURE=%q\n' "${PLATFORM_AGENT_TEMPERATURE:-0}"
         printf 'export PLATFORM_AGENT_RUNTIME=%q\n' "${PLATFORM_AGENT_RUNTIME:-langgraph}"
         printf 'export PLATFORM_AGENT_MAX_TOOL_CALLS=%q\n' "${PLATFORM_AGENT_MAX_TOOL_CALLS:-6}"
@@ -308,13 +347,18 @@ write_platform_env() {
         printf 'export PLATFORM_AGENT_KNOWLEDGE_INDEX=%q\n' "${PLATFORM_AGENT_KNOWLEDGE_INDEX:-$AIRFLOW_STATE_DIR/agent_knowledge/index.json}"
         printf 'export PLATFORM_AGENT_KNOWLEDGE_TOP_K=%q\n' "${PLATFORM_AGENT_KNOWLEDGE_TOP_K:-5}"
         printf 'export PLATFORM_AGENT_KNOWLEDGE_MIN_SCORE=%q\n' "${PLATFORM_AGENT_KNOWLEDGE_MIN_SCORE:-0.08}"
-        printf 'export PLATFORM_RAG_EMBED_PROVIDER=%q\n' "${PLATFORM_RAG_EMBED_PROVIDER:-hash}"
-        printf 'export PLATFORM_RAG_EMBED_MODEL=%q\n' "${PLATFORM_RAG_EMBED_MODEL:-gemini-embedding-2}"
-        printf 'export PLATFORM_RAG_EMBED_DIM=%q\n' "${PLATFORM_RAG_EMBED_DIM:-768}"
-        printf 'export PLATFORM_RAG_EMBED_BATCH_SIZE=%q\n' "${PLATFORM_RAG_EMBED_BATCH_SIZE:-32}"
-        printf 'export PLATFORM_RAG_EMBED_INDEX=%q\n' "${PLATFORM_RAG_EMBED_INDEX:-$AIRFLOW_STATE_DIR/agent_knowledge/embeddings.json}"
+        printf 'export PLATFORM_RAG_EMBED_PROVIDER=%q\n' "${PLATFORM_RAG_EMBED_PROVIDER:-qwen}"
+        printf 'export PLATFORM_RAG_EMBED_MODEL=%q\n' "${PLATFORM_RAG_EMBED_MODEL:-qwen3.7-text-embedding}"
+        printf 'export PLATFORM_RAG_EMBED_DIM=%q\n' "${PLATFORM_RAG_EMBED_DIM:-1024}"
+        printf 'export PLATFORM_RAG_EMBED_BATCH_SIZE=%q\n' "${PLATFORM_RAG_EMBED_BATCH_SIZE:-20}"
+        printf 'export PLATFORM_RAG_EMBED_INDEX=%q\n' "${PLATFORM_RAG_EMBED_INDEX:-$AIRFLOW_STATE_DIR/agent_knowledge/embeddings_qwen.json}"
         printf 'export PLATFORM_RAG_LEXICAL_WEIGHT=%q\n' "${PLATFORM_RAG_LEXICAL_WEIGHT:-}"
         printf 'export PLATFORM_RAG_VECTOR_WEIGHT=%q\n' "${PLATFORM_RAG_VECTOR_WEIGHT:-}"
+        printf 'export PLATFORM_RAG_QWEN_INSTRUCT=%q\n' "${PLATFORM_RAG_QWEN_INSTRUCT:-}"
+        printf 'export PLATFORM_MODEL_RETRY_ATTEMPTS=%q\n' "${PLATFORM_MODEL_RETRY_ATTEMPTS:-5}"
+        printf 'export PLATFORM_MODEL_RETRY_BASE_SEC=%q\n' "${PLATFORM_MODEL_RETRY_BASE_SEC:-1}"
+        printf 'export PLATFORM_MODEL_RETRY_MAX_SEC=%q\n' "${PLATFORM_MODEL_RETRY_MAX_SEC:-20}"
+        printf 'export PLATFORM_MODEL_RETRY_JITTER_SEC=%q\n' "${PLATFORM_MODEL_RETRY_JITTER_SEC:-0.25}"
         printf 'export PLATFORM_AGENT_APPROVAL_DIR=%q\n' "${PLATFORM_AGENT_APPROVAL_DIR:-$AIRFLOW_STATE_DIR/agent_approvals}"
         printf 'export PLATFORM_AGENT_APPROVAL_TTL_SEC=%q\n' "${PLATFORM_AGENT_APPROVAL_TTL_SEC:-900}"
         printf 'export PLATFORM_AGENT_VERIFY_ATTEMPTS=%q\n' "${PLATFORM_AGENT_VERIFY_ATTEMPTS:-5}"
@@ -332,6 +376,9 @@ write_platform_env() {
         printf 'export OPENAI_BASE_URL=%q\n' "${OPENAI_BASE_URL:-}"
         printf 'export GEMINI_API_KEY=%q\n' "${GEMINI_API_KEY:-}"
         printf 'export GOOGLE_API_KEY=%q\n' "${GOOGLE_API_KEY:-}"
+        printf 'export DASHSCOPE_API_KEY=%q\n' "${DASHSCOPE_API_KEY:-}"
+        printf 'export DASHSCOPE_OPENAI_BASE_URL=%q\n' "${DASHSCOPE_OPENAI_BASE_URL:-}"
+        printf 'export DASHSCOPE_API_BASE_URL=%q\n' "${DASHSCOPE_API_BASE_URL:-}"
         printf 'export PLATFORM_EVAL_PROVIDER=%q\n' "${PLATFORM_EVAL_PROVIDER:-}"
         printf 'export PLATFORM_EVAL_JUDGE_MODEL=%q\n' "${PLATFORM_EVAL_JUDGE_MODEL:-}"
         printf 'export PLATFORM_EVAL_JUDGE_BASE_URL=%q\n' "${PLATFORM_EVAL_JUDGE_BASE_URL:-}"
@@ -616,11 +663,20 @@ set -euo pipefail
 
 RUNTIME_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." &>/dev/null && pwd)
 PLATFORM_ENV="$RUNTIME_DIR/config/platform.env"
+PLATFORM_EVAL_PROVIDER_OVERRIDE="${PLATFORM_EVAL_PROVIDER:-}"
+PLATFORM_EVAL_JUDGE_MODEL_OVERRIDE="${PLATFORM_EVAL_JUDGE_MODEL:-}"
+PLATFORM_EVAL_JUDGE_BASE_URL_OVERRIDE="${PLATFORM_EVAL_JUDGE_BASE_URL:-}"
+PLATFORM_EVAL_EMBED_MODEL_OVERRIDE="${PLATFORM_EVAL_EMBED_MODEL:-}"
 
 [ -f "$RUNTIME_DIR/.deploy_ci_cloud_runtime" ] || { echo "[ERROR] runtime marker not found" >&2; exit 1; }
 [ -f "$PLATFORM_ENV" ] || { echo "[ERROR] platform env not found: $PLATFORM_ENV" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$PLATFORM_ENV"
+
+[ -n "$PLATFORM_EVAL_PROVIDER_OVERRIDE" ] && export PLATFORM_EVAL_PROVIDER="$PLATFORM_EVAL_PROVIDER_OVERRIDE"
+[ -n "$PLATFORM_EVAL_JUDGE_MODEL_OVERRIDE" ] && export PLATFORM_EVAL_JUDGE_MODEL="$PLATFORM_EVAL_JUDGE_MODEL_OVERRIDE"
+[ -n "$PLATFORM_EVAL_JUDGE_BASE_URL_OVERRIDE" ] && export PLATFORM_EVAL_JUDGE_BASE_URL="$PLATFORM_EVAL_JUDGE_BASE_URL_OVERRIDE"
+[ -n "$PLATFORM_EVAL_EMBED_MODEL_OVERRIDE" ] && export PLATFORM_EVAL_EMBED_MODEL="$PLATFORM_EVAL_EMBED_MODEL_OVERRIDE"
 
 export PLATFORM_HOME="${PLATFORM_HOME:-$RUNTIME_DIR}"
 export AIRFLOW_HOME AIRFLOW_API_BASE AIRFLOW_API_USER AIRFLOW_PASSWORD_FILE

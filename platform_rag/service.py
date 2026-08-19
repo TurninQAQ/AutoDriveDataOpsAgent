@@ -73,7 +73,11 @@ class KnowledgeService:
             "index_exists": self.index_file.exists(),
             "current_source_fingerprint": current_fingerprint,
             "index_fresh": bool(stats and stats.source_fingerprint == current_fingerprint),
-            "retrieval_mode": "gemini_hybrid" if self.embedding_provider is not None else "hash_hybrid",
+            "retrieval_mode": (
+                f"{getattr(self.embedding_provider, 'provider_name', 'dense')}_hybrid"
+                if self.embedding_provider is not None
+                else "hash_hybrid"
+            ),
             "lexical_weight": self.retriever_config.lexical_weight,
             "vector_weight": self.retriever_config.vector_weight,
             "stats": stats.model_dump(mode="json") if stats else None,

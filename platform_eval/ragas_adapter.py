@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+import types
 from typing import Any
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -27,6 +29,23 @@ def _judge_config() -> tuple[str, str, str | None, str, str]:
         model = os.getenv("PLATFORM_EVAL_JUDGE_MODEL", "").strip() or "gemini-3.7-flash"
         embedding_model = os.getenv("PLATFORM_EVAL_EMBED_MODEL", "").strip() or "gemini-embedding-2"
         return provider, api_key, base_url, model, embedding_model
+    if provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
+        api_key = _require(
+            os.getenv("DASHSCOPE_API_KEY", ""),
+            "DASHSCOPE_API_KEY is required for Qwen Ragas evaluation",
+        )
+        base_url = (
+            os.getenv("PLATFORM_EVAL_JUDGE_BASE_URL", "").strip()
+            or os.getenv("DASHSCOPE_OPENAI_BASE_URL", "").strip()
+            or None
+        )
+        if not base_url:
+            raise RuntimeError(
+                "DASHSCOPE_OPENAI_BASE_URL (or PLATFORM_EVAL_JUDGE_BASE_URL) is required for Qwen Ragas evaluation"
+            )
+        model = os.getenv("PLATFORM_EVAL_JUDGE_MODEL", "").strip() or "qwen3.7-flash"
+        embedding_model = os.getenv("PLATFORM_EVAL_EMBED_MODEL", "").strip() or "qwen3.7-text-embedding"
+        return provider, api_key, base_url, model, embedding_model
     if provider in {"openai", "openai-compatible", "openai_compatible"}:
         api_key = _require(os.getenv("OPENAI_API_KEY", ""), "OPENAI_API_KEY is required for OpenAI Ragas evaluation")
         base_url = os.getenv("PLATFORM_EVAL_JUDGE_BASE_URL", "").strip() or os.getenv("OPENAI_BASE_URL", "").strip() or None
@@ -38,6 +57,18 @@ def _judge_config() -> tuple[str, str, str | None, str, str]:
 
 async def _run(samples: list[dict[str, Any]]) -> dict[str, Any]:
     try:
+        # Ragas 0.4.3 imports this legacy optional Vertex adapter eagerly, while
+        # the current langchain-community package removed that module. Qwen's
+        # OpenAI-compatible path never uses Vertex; provide the smallest import
+        # shim so the supported Ragas OpenAI factory remains usable.
+        try:
+            import langchain_community.chat_models.vertexai  # type: ignore[import-not-found]
+        except ModuleNotFoundError as exc:
+            if exc.name != "langchain_community.chat_models.vertexai":
+                raise
+            vertexai_shim = types.ModuleType("langchain_community.chat_models.vertexai")
+            vertexai_shim.ChatVertexAI = type("ChatVertexAI", (), {})
+            sys.modules[vertexai_shim.__name__] = vertexai_shim
         from openai import AsyncOpenAI
         from ragas.embeddings.base import embedding_factory
         from ragas.llms import llm_factory
@@ -52,10 +83,11 @@ async def _run(samples: list[dict[str, Any]]) -> dict[str, Any]:
         raise RuntimeError("Install requirements-eval.txt before running Ragas judge metrics") from exc
 
     provider, api_key, base_url, model, embedding_model = _judge_config()
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=45.0, max_retries=0)
     llm = llm_factory(model, client=client)
-    # Gemini's official OpenAI-compat endpoint exposes /embeddings, so the same
-    # Ragas OpenAI adapter can drive gemini-embedding-2 without a separate judge stack.
+    # Gemini and DashScope both expose OpenAI-compatible /embeddings endpoints,
+    # so Ragas can use its standard OpenAI embedding adapter without changing
+    # the Agent's native provider implementation.
     embeddings = embedding_factory("openai", model=embedding_model, client=client)
     metrics = {
         "context_precision": ContextPrecision(llm=llm),

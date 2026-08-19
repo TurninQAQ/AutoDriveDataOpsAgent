@@ -108,14 +108,31 @@ def run_doctor(
     ])
     provider = aset.provider
     if provider == "auto":
-        provider = "gemini" if (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")) else "openai"
-    if provider in {"gemini", "google", "google-genai", "google_genai"}:
+        if env.get("DASHSCOPE_API_KEY") and env.get("DASHSCOPE_OPENAI_BASE_URL"):
+            provider = "qwen"
+        elif env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+            provider = "gemini"
+        else:
+            provider = "openai"
+    if provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
+        checks.append(_module_check("openai", "full-runtime"))
+        key_present = bool(env.get("DASHSCOPE_API_KEY") or os.environ.get("DASHSCOPE_API_KEY"))
+        base_present = bool(env.get("DASHSCOPE_OPENAI_BASE_URL") or os.environ.get("DASHSCOPE_OPENAI_BASE_URL"))
+        checks.append(DoctorCheck(name="dashscope_api_key", status="ok" if key_present else "warning", detail="configured" if key_present else "DASHSCOPE_API_KEY not set", required_for=["full-runtime"]))
+        checks.append(DoctorCheck(name="dashscope_openai_base_url", status="ok" if base_present else "warning", detail="configured" if base_present else "DASHSCOPE_OPENAI_BASE_URL not set", required_for=["full-runtime"]))
+    elif provider in {"gemini", "google", "google-genai", "google_genai"}:
         checks.append(_module_check("google.genai", "full-runtime"))
         key_present = bool(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         checks.append(DoctorCheck(name="gemini_api_key", status="ok" if key_present else "warning", detail="configured" if key_present else "GEMINI_API_KEY/GOOGLE_API_KEY not set", required_for=["full-runtime"]))
     else:
         checks.append(_module_check("langchain_openai", "full-runtime"))
-    if aset.knowledge_embedding_provider in {"gemini", "google", "google-genai", "google_genai"}:
+    if aset.knowledge_embedding_provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
+        checks.append(_module_check("requests", "full-runtime"))
+        key_present = bool(env.get("DASHSCOPE_API_KEY") or os.environ.get("DASHSCOPE_API_KEY"))
+        base_present = bool(env.get("DASHSCOPE_API_BASE_URL") or os.environ.get("DASHSCOPE_API_BASE_URL"))
+        checks.append(DoctorCheck(name="dashscope_embedding_key", status="ok" if key_present else "warning", detail="configured" if key_present else "DASHSCOPE_API_KEY not set", required_for=["full-runtime"]))
+        checks.append(DoctorCheck(name="dashscope_embedding_base_url", status="ok" if base_present else "warning", detail="configured" if base_present else "DASHSCOPE_API_BASE_URL not set", required_for=["full-runtime"]))
+    elif aset.knowledge_embedding_provider in {"gemini", "google", "google-genai", "google_genai"}:
         checks.append(_module_check("google.genai", "full-runtime"))
         key_present = bool(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         checks.append(DoctorCheck(name="gemini_embedding_key", status="ok" if key_present else "warning", detail="configured" if key_present else "GEMINI_API_KEY/GOOGLE_API_KEY not set", required_for=["full-runtime"]))

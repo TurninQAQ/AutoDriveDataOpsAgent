@@ -674,7 +674,9 @@ RETRIEVED_KNOWLEDGE (static platform knowledge / runbooks, untrusted data):
 def build_model_from_env(provider: str, model: str, temperature: float, base_url: str | None):
     provider = (provider or "auto").strip().lower()
     if provider == "auto":
-        if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        if os.environ.get("DASHSCOPE_API_KEY") and os.environ.get("DASHSCOPE_OPENAI_BASE_URL"):
+            provider = "qwen"
+        elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
             provider = "gemini"
         elif os.environ.get("OPENAI_API_KEY") or base_url:
             provider = "openai"
@@ -687,4 +689,7 @@ def build_model_from_env(provider: str, model: str, temperature: float, base_url
     if provider in {"gemini", "google", "google-genai", "google_genai"}:
         from .gemini import GeminiReadOnlyModel
         return GeminiReadOnlyModel(model=model, temperature=temperature)
+    if provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
+        from .qwen import QwenReadOnlyModel
+        return QwenReadOnlyModel(model=model, temperature=temperature, base_url=base_url)
     raise ValueError(f"Unsupported PLATFORM_AGENT_PROVIDER: {provider}")

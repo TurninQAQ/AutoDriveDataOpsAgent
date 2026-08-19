@@ -67,7 +67,7 @@ class GeminiReadOnlyModel:
                 contents=prompt,
                 config=config,
             ),
-            operation_name=f"generate_content:{self.model}",
+            operation_name=f"gemini:generate_content:{self.model}",
         )
         text = getattr(response, "text", None)
         if not text:

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from platform_integrations.gemini_retry import retry_sync
+from platform_integrations.model_retry import retry_sync
 
 from .models import KnowledgeChunk
 
@@ -108,7 +108,7 @@ class GeminiEmbeddingProvider:
                     contents=contents,
                     config=config,
                 ),
-                operation_name=f"embed_content:{self.model_name}",
+                operation_name=f"gemini:embed_content:{self.model_name}",
             )
             embeddings = getattr(response, "embeddings", None) or []
             if len(embeddings) != len(batch):
@@ -127,6 +127,123 @@ class GeminiEmbeddingProvider:
 
     def embed_query(self, query: str) -> list[float]:
         vectors = self._embed_strings([self._query_text(query)])
+        return vectors[0] if vectors else []
+
+
+class QwenEmbeddingProvider:
+    """DashScope native HTTP adapter for qwen3.7-text-embedding."""
+
+    provider_name = "qwen"
+
+    def __init__(
+        self,
+        model_name: str = "qwen3.7-text-embedding",
+        dimension: int = 1024,
+        batch_size: int = 20,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        client=None,
+        instruct: str = "",
+    ):
+        configured_dimension = int(dimension)
+        if configured_dimension != 1024:
+            raise ValueError("Qwen text embedding requires dimension=1024")
+        self.model_name = model_name
+        self.dimension = 1024
+        self.batch_size = min(20, max(1, int(batch_size)))
+        self.instruct = instruct.strip()
+        self.base_url = (base_url or os.environ.get("DASHSCOPE_API_BASE_URL", "")).strip().rstrip("/")
+        self.api_key = (api_key or os.environ.get("DASHSCOPE_API_KEY", "")).strip()
+        if client is not None:
+            self.client = client
+        else:
+            try:
+                import requests
+            except ImportError as exc:  # pragma: no cover - runtime dependency
+                raise RuntimeError("requests is not installed. Install requirements-agent.txt first.") from exc
+            if not self.api_key:
+                raise RuntimeError("DASHSCOPE_API_KEY is required for Qwen embeddings")
+            if not self.base_url:
+                raise RuntimeError("DASHSCOPE_API_BASE_URL is required for Qwen embeddings")
+            self.client = requests
+
+    @staticmethod
+    def _document_text(chunk: KnowledgeChunk) -> str:
+        title = chunk.title or chunk.section or "none"
+        section = f"\nsection: {chunk.section}" if chunk.section else ""
+        return f"title: {title} | text: {section}\n{chunk.content}"
+
+    def _endpoint(self) -> str:
+        return f"{self.base_url}/services/embeddings/text-embedding/text-embedding"
+
+    def _request_batch(self, texts: list[str], text_type: str) -> list[list[float]]:
+        parameters = {
+            "text_type": text_type,
+            "dimension": self.dimension,
+            "output_type": "dense",
+        }
+        if self.instruct:
+            parameters["instruct"] = self.instruct
+        response = self.client.post(
+            self._endpoint(),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model_name,
+                "input": {"texts": texts},
+                "parameters": parameters,
+            },
+            timeout=60,
+        )
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if not 200 <= status_code < 300:
+            response.raise_for_status()
+            raise RuntimeError("Qwen embedding request failed")
+        payload = response.json()
+        embeddings = ((payload.get("output") or {}).get("embeddings") or []) if isinstance(payload, dict) else []
+        if len(embeddings) != len(texts):
+            raise RuntimeError(
+                f"Qwen embedding response count mismatch: expected {len(texts)}, got {len(embeddings)}"
+            )
+        ordered: list[list[float] | None] = [None] * len(texts)
+        for item in embeddings:
+            if not isinstance(item, dict) or "text_index" not in item:
+                raise RuntimeError("Qwen embedding response is missing text_index")
+            index = int(item["text_index"])
+            if index < 0 or index >= len(texts) or ordered[index] is not None:
+                raise RuntimeError("Qwen embedding response has invalid text_index")
+            values = item.get("embedding")
+            if not isinstance(values, list) or len(values) != self.dimension:
+                raise RuntimeError("Qwen embedding response has the wrong dimension")
+            vector = [float(value) for value in values]
+            if not all(math.isfinite(value) for value in vector):
+                raise RuntimeError("Qwen embedding response contains non-finite values")
+            ordered[index] = _normalize(vector)
+        if any(vector is None for vector in ordered):
+            raise RuntimeError("Qwen embedding response has incomplete text_index values")
+        return [vector for vector in ordered if vector is not None]
+
+    def _embed_strings(self, texts: list[str], text_type: str) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            vectors.extend(
+                retry_sync(
+                    lambda batch=batch: self._request_batch(batch, text_type),
+                    operation_name=f"qwen:embedding:{self.model_name}",
+                )
+            )
+        return vectors
+
+    def embed_documents(self, chunks: list[KnowledgeChunk]) -> dict[str, list[float]]:
+        texts = [self._document_text(chunk) for chunk in chunks]
+        vectors = self._embed_strings(texts, "document")
+        return {chunk.chunk_id: vector for chunk, vector in zip(chunks, vectors)}
+
+    def embed_query(self, query: str) -> list[float]:
+        vectors = self._embed_strings([query.strip()], "query")
         return vectors[0] if vectors else []
 
 
@@ -311,6 +428,7 @@ class DenseEmbeddingIndex:
             "provider": (payload or {}).get("provider", self.provider.provider_name),
             "model": (payload or {}).get("model", self.provider.model_name),
             "dimension": int((payload or {}).get("dimension", self.provider.dimension)),
+            "batch_size": getattr(self.provider, "batch_size", None),
             "vector_count": len((payload or {}).get("vectors", {})),
             "expected_vector_count": int((payload or {}).get("expected_chunk_count", 0)),
             "complete": bool((payload or {}).get("complete", False)),

@@ -11,7 +11,7 @@ _SECRET_KEY = re.compile(
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+\-/=]{8,}")
 _OPENAI_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
 _ASSIGNMENT = re.compile(
-    r"(?i)\b(OPENAI_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|X-GOOG-API-KEY|AIRFLOW_API_TOKEN|AIRFLOW_API_PASSWORD|PASSWORD|TOKEN|SECRET)\s*[=:]\s*([^\s,;'\"]+)"
+    r"(?i)\b(OPENAI_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|DASHSCOPE_API_KEY|X-GOOG-API-KEY|AIRFLOW_API_TOKEN|AIRFLOW_API_PASSWORD|PASSWORD|TOKEN|SECRET)\s*[=:]\s*([^\s,;'\"]+)"
 )
 
 

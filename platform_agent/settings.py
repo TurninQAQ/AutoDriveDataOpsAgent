@@ -33,6 +33,7 @@ class AgentSettings:
     knowledge_embedding_dimension: int
     knowledge_embedding_batch_size: int
     knowledge_embedding_index_file: Path
+    knowledge_qwen_instruct: str
     knowledge_lexical_weight: float
     knowledge_vector_weight: float
     approval_dir: Path
@@ -52,19 +53,33 @@ class AgentSettings:
     def from_env(cls, platform_settings: PlatformSettings | None = None) -> "AgentSettings":
         platform_settings = platform_settings or PlatformSettings.from_env()
         provider = os.environ.get("PLATFORM_AGENT_PROVIDER", "auto").strip().lower() or "auto"
+        qwen_provider = provider in {"qwen", "dashscope", "aliyun", "alibaba"}
         model_raw = os.environ.get("PLATFORM_AGENT_MODEL", "").strip()
         if model_raw:
             model = model_raw
         else:
             gemini_configured = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+            qwen_configured = bool(
+                os.environ.get("DASHSCOPE_API_KEY") and os.environ.get("DASHSCOPE_OPENAI_BASE_URL")
+            )
             gemini_provider = provider in {"gemini", "google", "google-genai", "google_genai"}
-            model = "gemini-3.7-flash" if (gemini_provider or (provider == "auto" and gemini_configured)) else "gpt-5.4-mini"
+            model = (
+                "qwen3.7-flash"
+                if (provider == "auto" and qwen_configured) or qwen_provider
+                else "gemini-3.7-flash"
+                if (gemini_provider or (provider == "auto" and gemini_configured))
+                else "gpt-5.4-mini"
+            )
         runtime = os.environ.get("PLATFORM_AGENT_RUNTIME", "langgraph").strip().lower() or "langgraph"
         max_tool_calls = int(os.environ.get("PLATFORM_AGENT_MAX_TOOL_CALLS", "6"))
         temperature = float(os.environ.get("PLATFORM_AGENT_TEMPERATURE", "0"))
         session_dir_raw = os.environ.get("PLATFORM_AGENT_SESSION_DIR", "").strip()
         session_dir = Path(session_dir_raw) if session_dir_raw else platform_settings.state_dir / "agent_sessions"
-        base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+        base_url = (
+            os.environ.get("OPENAI_BASE_URL", "").strip()
+            or os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "").strip()
+            or None
+        )
 
         # This default works both in source checkout and deployed runtime:
         #   <repo>/platform_agent/settings.py         -> <repo>/knowledge
@@ -81,17 +96,21 @@ class AgentSettings:
         knowledge_top_k = int(os.environ.get("PLATFORM_AGENT_KNOWLEDGE_TOP_K", "5"))
         knowledge_min_score = float(os.environ.get("PLATFORM_AGENT_KNOWLEDGE_MIN_SCORE", "0.08"))
         knowledge_embedding_provider = os.environ.get("PLATFORM_RAG_EMBED_PROVIDER", "hash").strip().lower() or "hash"
-        knowledge_embedding_model = os.environ.get("PLATFORM_RAG_EMBED_MODEL", "gemini-embedding-2").strip() or "gemini-embedding-2"
-        knowledge_embedding_dimension = int(os.environ.get("PLATFORM_RAG_EMBED_DIM", "768"))
-        knowledge_embedding_batch_size = int(os.environ.get("PLATFORM_RAG_EMBED_BATCH_SIZE", "32"))
+        qwen_embedding_provider = knowledge_embedding_provider in {"qwen", "dashscope", "aliyun", "alibaba"}
+        default_embedding_model = "qwen3.7-text-embedding" if qwen_embedding_provider else "gemini-embedding-2"
+        default_embedding_dimension = "1024" if qwen_embedding_provider else "768"
+        default_embedding_batch_size = "20" if qwen_embedding_provider else "32"
+        knowledge_embedding_model = os.environ.get("PLATFORM_RAG_EMBED_MODEL", default_embedding_model).strip() or default_embedding_model
+        knowledge_embedding_dimension = int(os.environ.get("PLATFORM_RAG_EMBED_DIM", default_embedding_dimension))
+        knowledge_embedding_batch_size = int(os.environ.get("PLATFORM_RAG_EMBED_BATCH_SIZE", default_embedding_batch_size))
         knowledge_embedding_index_raw = os.environ.get("PLATFORM_RAG_EMBED_INDEX", "").strip()
         knowledge_embedding_index_file = (
             Path(knowledge_embedding_index_raw)
             if knowledge_embedding_index_raw
             else platform_settings.state_dir / "agent_knowledge" / "embeddings.json"
         )
-        default_lexical = "0.50" if knowledge_embedding_provider == "gemini" else "0.65"
-        default_vector = "0.50" if knowledge_embedding_provider == "gemini" else "0.35"
+        default_lexical = "0.50" if knowledge_embedding_provider in {"gemini", "qwen", "google", "dashscope", "aliyun", "alibaba"} else "0.65"
+        default_vector = "0.50" if knowledge_embedding_provider in {"gemini", "qwen", "google", "dashscope", "aliyun", "alibaba"} else "0.35"
         lexical_raw = os.environ.get("PLATFORM_RAG_LEXICAL_WEIGHT", "").strip() or default_lexical
         vector_raw = os.environ.get("PLATFORM_RAG_VECTOR_WEIGHT", "").strip() or default_vector
         knowledge_lexical_weight = float(lexical_raw)
@@ -135,6 +154,7 @@ class AgentSettings:
             knowledge_embedding_dimension=max(128, min(3072, knowledge_embedding_dimension)),
             knowledge_embedding_batch_size=max(1, knowledge_embedding_batch_size),
             knowledge_embedding_index_file=knowledge_embedding_index_file,
+            knowledge_qwen_instruct=os.environ.get("PLATFORM_RAG_QWEN_INSTRUCT", "").strip(),
             knowledge_lexical_weight=knowledge_lexical_weight,
             knowledge_vector_weight=knowledge_vector_weight,
             approval_dir=approval_dir,

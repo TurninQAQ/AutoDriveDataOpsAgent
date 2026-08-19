@@ -3,7 +3,7 @@ from __future__ import annotations
 from platform_core.settings import PlatformSettings
 from platform_mcp.facade import build_default_facade
 from platform_rag.service import AsyncKnowledgeRetriever, KnowledgeService
-from platform_rag.embeddings import GeminiEmbeddingProvider
+from platform_rag.embeddings import GeminiEmbeddingProvider, QwenEmbeddingProvider
 from platform_planning.service import TaskPlanningService
 from platform_observability import ObservedToolClient, TraceRecorder, TraceStore
 
@@ -24,6 +24,13 @@ def build_knowledge_service(agent_settings: AgentSettings) -> KnowledgeService:
             model_name=agent_settings.knowledge_embedding_model,
             dimension=agent_settings.knowledge_embedding_dimension,
             batch_size=agent_settings.knowledge_embedding_batch_size,
+        )
+    elif provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
+        embedding_provider = QwenEmbeddingProvider(
+            model_name=agent_settings.knowledge_embedding_model,
+            dimension=agent_settings.knowledge_embedding_dimension,
+            batch_size=agent_settings.knowledge_embedding_batch_size,
+            instruct=agent_settings.knowledge_qwen_instruct,
         )
     elif provider not in {"hash", "hashed", "feature-hash", "feature_hash", "none", "off", "disabled"}:
         raise ValueError(f"Unsupported PLATFORM_RAG_EMBED_PROVIDER: {provider}")
