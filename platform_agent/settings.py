@@ -92,8 +92,10 @@ class AgentSettings:
         )
         default_lexical = "0.50" if knowledge_embedding_provider == "gemini" else "0.65"
         default_vector = "0.50" if knowledge_embedding_provider == "gemini" else "0.35"
-        knowledge_lexical_weight = float(os.environ.get("PLATFORM_RAG_LEXICAL_WEIGHT", default_lexical))
-        knowledge_vector_weight = float(os.environ.get("PLATFORM_RAG_VECTOR_WEIGHT", default_vector))
+        lexical_raw = os.environ.get("PLATFORM_RAG_LEXICAL_WEIGHT", "").strip() or default_lexical
+        vector_raw = os.environ.get("PLATFORM_RAG_VECTOR_WEIGHT", "").strip() or default_vector
+        knowledge_lexical_weight = float(lexical_raw)
+        knowledge_vector_weight = float(vector_raw)
         weight_sum = knowledge_lexical_weight + knowledge_vector_weight
         if weight_sum <= 0:
             knowledge_lexical_weight, knowledge_vector_weight = 1.0, 0.0

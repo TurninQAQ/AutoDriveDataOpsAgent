@@ -135,6 +135,19 @@ def test_agent_settings_auto_prefers_gemini_and_provider_defaults(monkeypatch, t
     assert settings.knowledge_vector_weight == pytest.approx(0.5)
 
 
+def test_agent_settings_accepts_empty_optional_hybrid_weights(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("AIRFLOW_HOME", str(tmp_path / "runtime" / "opt_airflow"))
+    monkeypatch.setenv("AIRFLOW_STATE_DIR", str(tmp_path / "runtime" / "state"))
+    monkeypatch.setenv("AIRFLOW_TASK_CONFIG_ROOT", str(tmp_path / "runtime" / "opt_airflow" / "config" / "tasks"))
+    monkeypatch.setenv("PLATFORM_RAG_EMBED_PROVIDER", "gemini")
+    monkeypatch.setenv("PLATFORM_RAG_LEXICAL_WEIGHT", "")
+    monkeypatch.setenv("PLATFORM_RAG_VECTOR_WEIGHT", "")
+    settings = AgentSettings.from_env(PlatformSettings.from_env())
+    assert settings.knowledge_lexical_weight == pytest.approx(0.5)
+    assert settings.knowledge_vector_weight == pytest.approx(0.5)
+
+
 def _install_fake_google(monkeypatch, plan_json: str, answer_json: str):
     queue = [plan_json, answer_json]
 
@@ -219,6 +232,13 @@ def test_v12_deploy_contract_and_version_marker():
     for name in (
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
+        "PLATFORM_GPU_RUNTIME",
+        "PLATFORM_GPU_SIM_CONFIG",
+        "PLATFORM_GPU_SIM_STATE",
+        "PLATFORM_GPU_SIM_FALLBACK_OS_PROCESS",
+        "PLATFORM_STAGE_RUNTIME",
+        "MOCK_STAGE_RESULT",
+        "MOCK_STAGE_DURATION_SEC",
         "PLATFORM_RAG_EMBED_PROVIDER",
         "PLATFORM_RAG_EMBED_MODEL",
         "PLATFORM_RAG_EMBED_DIM",

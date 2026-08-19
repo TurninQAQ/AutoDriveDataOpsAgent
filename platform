@@ -267,6 +267,20 @@ write_platform_env() {
         printf 'export AIRFLOW_DB_URI=%q\n' "$AIRFLOW_DB_URI"
         printf 'export AIRFLOW_ADMIN_USER=%q\n' "$AIRFLOW_ADMIN_USER"
         printf 'export AIRFLOW_API_USER=%q\n' "$AIRFLOW_ADMIN_USER"
+        printf 'export PLATFORM_GPU_RUNTIME=%q\n' "${PLATFORM_GPU_RUNTIME:-nvidia}"
+        printf 'export PLATFORM_GPU_SIM_CONFIG=%q\n' "${PLATFORM_GPU_SIM_CONFIG:-$RUNTIME_DIR/opt_airflow/config/gpu_simulator.yaml}"
+        printf 'export PLATFORM_GPU_SIM_STATE=%q\n' "${PLATFORM_GPU_SIM_STATE:-$AIRFLOW_STATE_DIR/gpu_simulator.json}"
+        printf 'export PLATFORM_GPU_SIM_FALLBACK_OS_PROCESS=%q\n' "${PLATFORM_GPU_SIM_FALLBACK_OS_PROCESS:-1}"
+        printf 'export PLATFORM_STAGE_RUNTIME=%q\n' "${PLATFORM_STAGE_RUNTIME:-real}"
+        printf 'export MOCK_STAGE_RESULT=%q\n' "${MOCK_STAGE_RESULT:-success}"
+        printf 'export MOCK_STAGE_DURATION_SEC=%q\n' "${MOCK_STAGE_DURATION_SEC:-0}"
+        while IFS= read -r mock_var; do
+            [ -n "$mock_var" ] || continue
+            case "$mock_var" in
+                MOCK_STAGE_RESULT|MOCK_STAGE_DURATION_SEC) continue ;;
+            esac
+            printf 'export %s=%q\n' "$mock_var" "${!mock_var}"
+        done < <(compgen -A variable | grep '^MOCK_STAGE_')
         printf 'export PLATFORM_AGENT_PROVIDER=%q\n' "${PLATFORM_AGENT_PROVIDER:-auto}"
         printf 'export PLATFORM_AGENT_MODEL=%q\n' "${PLATFORM_AGENT_MODEL:-}"
         printf 'export PLATFORM_AGENT_TEMPERATURE=%q\n' "${PLATFORM_AGENT_TEMPERATURE:-0}"

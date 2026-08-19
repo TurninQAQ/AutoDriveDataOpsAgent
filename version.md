@@ -1,4 +1,10 @@
 ## 版本发布说明
+v1.2.1 2026-08-19:(new:local_runtime_integration_fix base:agent-v1.2.0)
+1. 修复空的 RAG hybrid 权重配置在 runtime 环境中触发 `float('')` 的问题。
+2. 增加空权重配置回归测试，保持 Gemini/hash 模式默认权重不变。
+3. 修复 GPU Simulator 与 Mock Stage 配置未持久化到 runtime `platform.env` 的问题。
+4. 增加 runtime 环境传播契约检查。
+
 v1.0.1 2026-06-23:(new:None  base:None)
 1. 初始化版本：支持 CI/CD 部署。
 2. 支持 occ 和 parser部署。
