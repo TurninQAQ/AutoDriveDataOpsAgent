@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import asyncio
+import inspect
+import logging
+import math
+import os
+import random
+import re
+import time
+from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from typing import Any, Awaitable, Callable, Mapping, TypeVar
+
+from platform_observability.redaction import redact_text
+
+
+T = TypeVar("T")
+LOGGER = logging.getLogger(__name__)
+RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+STATUS_PATTERN = re.compile(r"(?<!\d)(408|429|500|502|503|504)(?!\d)")
+
+
+@dataclass(frozen=True)
+class GeminiRetryPolicy:
+    """Bounded retry settings shared by Gemini generation and embedding calls."""
+
+    attempts: int = 5
+    base_sec: float = 1.0
+    max_sec: float = 20.0
+    jitter_sec: float = 0.25
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "GeminiRetryPolicy":
+        env = environ or os.environ
+        return cls(
+            attempts=max(1, _int_env(env, "PLATFORM_GEMINI_RETRY_ATTEMPTS", 5)),
+            base_sec=max(0.0, _float_env(env, "PLATFORM_GEMINI_RETRY_BASE_SEC", 1.0)),
+            max_sec=max(0.0, _float_env(env, "PLATFORM_GEMINI_RETRY_MAX_SEC", 20.0)),
+            jitter_sec=max(0.0, _float_env(env, "PLATFORM_GEMINI_RETRY_JITTER_SEC", 0.25)),
+        )
+
+
+class GeminiRequestError(RuntimeError):
+    """Safe, classified failure that never includes a prompt or credential."""
+
+    def __init__(
+        self,
+        operation: str,
+        attempts: int,
+        status_code: int | None,
+        retryable: bool,
+    ) -> None:
+        self.operation = operation
+        self.attempts = attempts
+        self.status_code = status_code
+        self.retryable = retryable
+        status = str(status_code) if status_code is not None else "unknown"
+        super().__init__(
+            f"Gemini operation {redact_text(operation)} failed after {attempts} attempt(s) "
+            f"(status_code={status}, retryable={str(retryable).lower()})"
+        )
+
+
+@dataclass(frozen=True)
+class _Failure:
+    status_code: int | None
+    retry_after_sec: float | None
+    retryable: bool
+
+
+def _int_env(env: Mapping[str, str], name: str, default: int) -> int:
+    try:
+        return int(env.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_env(env: Mapping[str, str], name: str, default: float) -> float:
+    try:
+        value = float(env.get(name, str(default)))
+        return value if math.isfinite(value) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _status_code(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        code = int(value)
+    except (TypeError, ValueError):
+        return None
+    return code if 100 <= code <= 599 else None
+
+
+def _status_from_exception(exc: BaseException) -> int | None:
+    candidates: list[Any] = []
+    for source in (exc, getattr(exc, "response", None), getattr(exc, "http_response", None)):
+        if source is None:
+            continue
+        for name in ("status_code", "http_status", "status", "code"):
+            try:
+                candidates.append(getattr(source, name, None))
+            except Exception:
+                continue
+    for candidate in candidates:
+        status = _status_code(candidate)
+        if status is not None:
+            return status
+    match = STATUS_PATTERN.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _retry_after_value(source: Any) -> float | None:
+    if source is None:
+        return None
+    for name in ("retry_after", "retry_after_sec"):
+        try:
+            raw = getattr(source, name, None)
+        except Exception:
+            raw = None
+        if raw is not None:
+            try:
+                value = float(raw)
+                if math.isfinite(value) and value >= 0:
+                    return value
+            except (TypeError, ValueError):
+                pass
+    for name in ("headers", "response_headers"):
+        try:
+            headers = getattr(source, name, None)
+        except Exception:
+            headers = None
+        if not isinstance(headers, Mapping):
+            continue
+        raw = next((value for key, value in headers.items() if str(key).lower() == "retry-after"), None)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+            if math.isfinite(value) and value >= 0:
+                return value
+        except (TypeError, ValueError):
+            try:
+                parsed = parsedate_to_datetime(str(raw))
+                value = parsed.timestamp() - time.time()
+                return max(0.0, value)
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return None
+
+
+def classify_exception(exc: BaseException) -> _Failure:
+    status = _status_from_exception(exc)
+    retry_after = _retry_after_value(exc)
+    if retry_after is None:
+        retry_after = _retry_after_value(getattr(exc, "response", None))
+    temporary_transport = isinstance(exc, (TimeoutError, ConnectionError, OSError))
+    return _Failure(
+        status_code=status,
+        retry_after_sec=retry_after,
+        retryable=status in RETRYABLE_STATUS_CODES or (status is None and temporary_transport),
+    )
+
+
+def _delay(policy: GeminiRetryPolicy, attempt: int, failure: _Failure, jitter: Callable[[float], float]) -> float:
+    exponential = min(policy.max_sec, policy.base_sec * (2 ** (attempt - 1)))
+    selected = failure.retry_after_sec if failure.retry_after_sec is not None else exponential
+    selected = min(policy.max_sec, max(0.0, selected))
+    extra = max(0.0, float(jitter(policy.jitter_sec))) if policy.jitter_sec else 0.0
+    return selected + extra
+
+
+def _safe_failure(operation: str, attempt: int, policy: GeminiRetryPolicy, exc: BaseException) -> GeminiRequestError:
+    failure = classify_exception(exc)
+    LOGGER.warning(
+        "Gemini operation failed operation=%s attempt=%d status_code=%s retryable=%s",
+        redact_text(operation),
+        attempt,
+        failure.status_code,
+        failure.retryable,
+    )
+    return GeminiRequestError(operation, attempt, failure.status_code, failure.retryable)
+
+
+def retry_sync(
+    operation: Callable[[], T],
+    *,
+    operation_name: str,
+    policy: GeminiRetryPolicy | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    jitter: Callable[[float], float] = lambda amount: random.uniform(0.0, amount),
+) -> T:
+    active_policy = policy or GeminiRetryPolicy.from_env()
+    for attempt in range(1, active_policy.attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            failure = classify_exception(exc)
+            if not failure.retryable or attempt >= active_policy.attempts:
+                raise _safe_failure(operation_name, attempt, active_policy, exc) from None
+            delay = _delay(active_policy, attempt, failure, jitter)
+            LOGGER.warning(
+                "Gemini operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",
+                redact_text(operation_name),
+                attempt,
+                failure.status_code,
+                round(delay * 1000),
+            )
+            sleep(delay)
+    raise AssertionError("unreachable")
+
+
+async def retry_async(
+    operation: Callable[[], Awaitable[T]],
+    *,
+    operation_name: str,
+    policy: GeminiRetryPolicy | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    jitter: Callable[[float], float] = lambda amount: random.uniform(0.0, amount),
+) -> T:
+    active_policy = policy or GeminiRetryPolicy.from_env()
+    for attempt in range(1, active_policy.attempts + 1):
+        try:
+            result = operation()
+            if not inspect.isawaitable(result):
+                raise TypeError("async Gemini operation did not return an awaitable")
+            return await result
+        except Exception as exc:
+            failure = classify_exception(exc)
+            if not failure.retryable or attempt >= active_policy.attempts:
+                raise _safe_failure(operation_name, attempt, active_policy, exc) from None
+            delay = _delay(active_policy, attempt, failure, jitter)
+            LOGGER.warning(
+                "Gemini operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",
+                redact_text(operation_name),
+                attempt,
+                failure.status_code,
+                round(delay * 1000),
+            )
+            await sleep(delay)
+    raise AssertionError("unreachable")

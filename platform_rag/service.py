@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from .embeddings import DenseEmbeddingIndex, EmbeddingProvider
@@ -48,11 +49,16 @@ class KnowledgeService:
         self._fingerprint: str | None = None
         self._retriever: HybridRetriever | None = None
 
-    def build(self, force: bool = False) -> KnowledgeIndexStats:
+    def build(self, force: bool = False, reset_embeddings: bool = False) -> KnowledgeIndexStats:
         stats = self.index.build(force=force)
         if self.embedding_index is not None:
             chunks = self.index.load_chunks(ensure_fresh=False)
-            self.embedding_index.ensure(stats.source_fingerprint, chunks, force=force)
+            self.embedding_index.ensure(
+                stats.source_fingerprint,
+                chunks,
+                force=force,
+                reset=reset_embeddings,
+            )
         self._fingerprint = None
         self._retriever = None
         return stats
@@ -110,4 +116,4 @@ class AsyncKnowledgeRetriever:
     async def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedKnowledge]:
         if not self.enabled:
             return []
-        return self.service.search(query, top_k=top_k).results
+        return (await asyncio.to_thread(self.service.search, query, top_k)).results

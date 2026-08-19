@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from platform_integrations.gemini_retry import retry_sync
+
 from .models import KnowledgeChunk
 
 
@@ -100,10 +102,13 @@ class GeminiEmbeddingProvider:
             else:
                 contents = batch
                 config = {"output_dimensionality": self.dimension}
-            response = self.client.models.embed_content(
-                model=self.model_name,
-                contents=contents,
-                config=config,
+            response = retry_sync(
+                lambda: self.client.models.embed_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
+                ),
+                operation_name=f"embed_content:{self.model_name}",
             )
             embeddings = getattr(response, "embeddings", None) or []
             if len(embeddings) != len(batch):
@@ -126,9 +131,9 @@ class GeminiEmbeddingProvider:
 
 
 class DenseEmbeddingIndex:
-    """File-backed dense vector sidecar keyed by the KnowledgeIndex fingerprint."""
+    """Incremental, resumable file-backed dense vector sidecar."""
 
-    schema_version = 1
+    schema_version = 2
 
     def __init__(self, path: Path, provider: EmbeddingProvider):
         self.path = Path(path)
@@ -164,30 +169,130 @@ class DenseEmbeddingIndex:
             and payload.get("provider") == self.provider.provider_name
             and payload.get("model") == self.provider.model_name
             and int(payload.get("dimension", 0)) == self.provider.dimension
+            and bool(payload.get("complete"))
+            and int(payload.get("expected_chunk_count", 0)) == len(chunk_ids)
             and set(payload.get("vectors", {}).keys()) == set(chunk_ids)
         )
 
-    def ensure(self, source_fingerprint: str, chunks: list[KnowledgeChunk], force: bool = False) -> dict[str, list[float]]:
+    def _provider_matches(self, payload: dict | None) -> bool:
+        return bool(payload) and (
+            int(payload.get("schema_version", 0)) == self.schema_version
+            and payload.get("provider") == self.provider.provider_name
+            and payload.get("model") == self.provider.model_name
+            and int(payload.get("dimension", 0)) == self.provider.dimension
+        )
+
+    def _atomic_write(self, payload: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(self.path)
+
+    def _checkpoint(
+        self,
+        *,
+        source_fingerprint: str,
+        chunks: list[KnowledgeChunk],
+        vectors: dict[str, list[float]],
+        complete: bool,
+        built_at: str | None,
+    ) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "schema_version": self.schema_version,
+            "source_fingerprint": source_fingerprint,
+            "provider": self.provider.provider_name,
+            "model": self.provider.model_name,
+            "dimension": self.provider.dimension,
+            "expected_chunk_count": len(chunks),
+            "complete": complete,
+            "content_hashes": {chunk.chunk_id: chunk.content_hash for chunk in chunks},
+            "vectors": vectors,
+            "updated_at": now,
+            "built_at": built_at if complete else None,
+        }
+        self._atomic_write(payload)
+        return payload
+
+    def ensure(
+        self,
+        source_fingerprint: str,
+        chunks: list[KnowledgeChunk],
+        force: bool = False,
+        reset: bool = False,
+    ) -> dict[str, list[float]]:
+        """Build or resume vectors, reusing matching chunk content.
+
+        ``force`` refreshes the lexical index but intentionally does not discard
+        matching dense vectors. ``reset`` is the explicit full dense rebuild.
+        """
         chunk_ids = [chunk.chunk_id for chunk in chunks]
-        if not force and self.is_fresh(source_fingerprint, chunk_ids):
+        if not reset and self.is_fresh(source_fingerprint, chunk_ids):
             return self.load_vectors()
         with self._lock():
-            if not force and self.is_fresh(source_fingerprint, chunk_ids):
+            if not reset and self.is_fresh(source_fingerprint, chunk_ids):
                 return self.load_vectors()
-            vectors = self.provider.embed_documents(chunks)
-            payload = {
-                "schema_version": self.schema_version,
-                "source_fingerprint": source_fingerprint,
-                "provider": self.provider.provider_name,
-                "model": self.provider.model_name,
-                "dimension": self.provider.dimension,
-                "built_at": datetime.now(timezone.utc).isoformat(),
-                "vectors": vectors,
+            existing = self._load_payload()
+            old_vectors = (existing or {}).get("vectors", {}) if self._provider_matches(existing) and not reset else {}
+            old_hashes = (existing or {}).get("content_hashes", {}) if self._provider_matches(existing) and not reset else {}
+            vectors = {
+                chunk.chunk_id: old_vectors[chunk.chunk_id]
+                for chunk in chunks
+                if chunk.chunk_id in old_vectors
+                and old_hashes.get(chunk.chunk_id) == chunk.content_hash
+                and old_vectors[chunk.chunk_id]
             }
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
-            tmp.replace(self.path)
+            missing = [chunk for chunk in chunks if chunk.chunk_id not in vectors]
+            self._checkpoint(
+                source_fingerprint=source_fingerprint,
+                chunks=chunks,
+                vectors=vectors,
+                complete=not missing,
+                built_at=(datetime.now(timezone.utc).isoformat() if not missing else None),
+            )
+            if not missing:
+                return vectors
+
+            batch_size = max(1, int(getattr(self.provider, "batch_size", len(missing)) or len(missing)))
+            try:
+                for start in range(0, len(missing), batch_size):
+                    batch = missing[start : start + batch_size]
+                    batch_vectors = self.provider.embed_documents(batch)
+                    expected = {chunk.chunk_id for chunk in batch}
+                    if set(batch_vectors) != expected:
+                        raise RuntimeError(
+                            "Gemini embedding response ids mismatch while building dense sidecar"
+                        )
+                    vectors.update({str(key): list(value) for key, value in batch_vectors.items()})
+                    self._checkpoint(
+                        source_fingerprint=source_fingerprint,
+                        chunks=chunks,
+                        vectors=vectors,
+                        complete=False,
+                        built_at=None,
+                    )
+            except Exception:
+                # The last successful checkpoint remains resumable and the
+                # explicit incomplete marker is published even on batch zero.
+                self._checkpoint(
+                    source_fingerprint=source_fingerprint,
+                    chunks=chunks,
+                    vectors=vectors,
+                    complete=False,
+                    built_at=None,
+                )
+                raise
+
+            self._checkpoint(
+                source_fingerprint=source_fingerprint,
+                chunks=chunks,
+                vectors=vectors,
+                complete=True,
+                built_at=datetime.now(timezone.utc).isoformat(),
+            )
             return vectors
 
     def load_vectors(self) -> dict[str, list[float]]:
@@ -207,5 +312,14 @@ class DenseEmbeddingIndex:
             "model": (payload or {}).get("model", self.provider.model_name),
             "dimension": int((payload or {}).get("dimension", self.provider.dimension)),
             "vector_count": len((payload or {}).get("vectors", {})),
+            "expected_vector_count": int((payload or {}).get("expected_chunk_count", 0)),
+            "complete": bool((payload or {}).get("complete", False)),
+            "missing_vector_count": max(
+                0,
+                int((payload or {}).get("expected_chunk_count", 0))
+                - len((payload or {}).get("vectors", {})),
+            ),
+            "resumable": bool(payload) and not bool((payload or {}).get("complete", False)),
+            "updated_at": (payload or {}).get("updated_at"),
             "built_at": (payload or {}).get("built_at"),
         }

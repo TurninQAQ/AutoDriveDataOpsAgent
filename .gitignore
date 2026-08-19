@@ -1,5 +1,11 @@
 .env
+**/platform.env
+**/runtime_secrets.env
+local_acceptance/
 __pycache__/
 *.py[cod]
 .runtime/
 CODEX_HANDOFF_*.md
+recover/*
+!recover/README.md
+*.generated

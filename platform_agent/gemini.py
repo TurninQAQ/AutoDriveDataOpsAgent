@@ -6,6 +6,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from platform_integrations.gemini_retry import retry_async
+
 from .models import AgentPlan, AgentResponse, ConversationTurn, KnowledgeObservation, ToolObservation
 
 T = TypeVar("T", bound=BaseModel)
@@ -59,10 +61,13 @@ class GeminiReadOnlyModel:
             response_mime_type="application/json",
             response_json_schema=schema.model_json_schema(),
         )
-        response = await self.client.aio.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=config,
+        response = await retry_async(
+            lambda: self.client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=config,
+            ),
+            operation_name=f"generate_content:{self.model}",
         )
         text = getattr(response, "text", None)
         if not text:

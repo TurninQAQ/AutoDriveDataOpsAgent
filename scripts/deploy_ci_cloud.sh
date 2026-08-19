@@ -11,6 +11,7 @@ CONFIG_DIR="${AIRFLOW_CONFIG_DIR:-/opt/airflow/config}"
 SCRIPTS_DIR="${AIRFLOW_SCRIPTS_DIR:-/opt/airflow/scripts}"
 TOOLS_DIR="$SCRIPTS_DIR/tools"
 PLATFORM_CORE_DIR="${AIRFLOW_PLATFORM_CORE_DIR:-$(dirname "$SCRIPTS_DIR")/platform_core}"
+PLATFORM_INTEGRATIONS_DIR="${AIRFLOW_PLATFORM_INTEGRATIONS_DIR:-$(dirname "$SCRIPTS_DIR")/platform_integrations}"
 PLATFORM_MCP_DIR="${AIRFLOW_PLATFORM_MCP_DIR:-$(dirname "$SCRIPTS_DIR")/platform_mcp}"
 PLATFORM_AGENT_DIR="${AIRFLOW_PLATFORM_AGENT_DIR:-$(dirname "$SCRIPTS_DIR")/platform_agent}"
 PLATFORM_PLANNING_DIR="${AIRFLOW_PLATFORM_PLANNING_DIR:-$(dirname "$SCRIPTS_DIR")/platform_planning}"
@@ -64,6 +65,7 @@ mkdir -p "$TEMPLATE_DAGS_DIR"
 mkdir -p "$SCRIPTS_DIR"
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$PLATFORM_CORE_DIR"
+mkdir -p "$PLATFORM_INTEGRATIONS_DIR"
 mkdir -p "$PLATFORM_MCP_DIR"
 mkdir -p "$PLATFORM_AGENT_DIR"
 mkdir -p "$PLATFORM_PLANNING_DIR"
@@ -106,6 +108,11 @@ mkdir -p "$PLATFORM_CORE_DIR"
 mkdir -p "$PLATFORM_MCP_DIR"
 cp -R "$PROJECT_DIR/platform_core/." "$PLATFORM_CORE_DIR/" || error "Failed to copy platform_core"
 find "$PLATFORM_CORE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+info "Copying platform_integrations package..."
+rm -rf "$PLATFORM_INTEGRATIONS_DIR"
+mkdir -p "$PLATFORM_INTEGRATIONS_DIR"
+cp -R "$PROJECT_DIR/platform_integrations/." "$PLATFORM_INTEGRATIONS_DIR/" || error "Failed to copy platform_integrations"
+find "$PLATFORM_INTEGRATIONS_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 info "Copying platform_mcp package..."
 rm -rf "$PLATFORM_MCP_DIR"
 mkdir -p "$PLATFORM_MCP_DIR"
@@ -167,7 +174,7 @@ cp -R "$PROJECT_DIR/eval/." "$AGENT_EVAL_DIR/" || error "Failed to copy Agent ev
 if [ -f "$PROJECT_DIR/requirements-eval.txt" ]; then
     cp -f "$PROJECT_DIR/requirements-eval.txt" "$(dirname "$SCRIPTS_DIR")/requirements-eval.txt" || error "Failed to copy requirements-eval.txt"
 fi
-success "Scripts, platform_core, platform_mcp, platform_agent, platform_planning, platform_rag, platform_observability, platform_eval, platform_hardening, knowledge, eval fixtures and optional eval requirements copied"
+success "Scripts, platform_core, platform_integrations, platform_mcp, platform_agent, platform_planning, platform_rag, platform_observability, platform_eval, platform_hardening, knowledge, eval fixtures and optional eval requirements copied"
 
 # Step 4: Copy config
 info "Copying configuration files..."

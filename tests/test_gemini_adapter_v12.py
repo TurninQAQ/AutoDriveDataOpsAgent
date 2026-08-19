@@ -88,7 +88,9 @@ def test_dense_embedding_index_cache_avoids_reembedding(tmp_path: Path):
     assert first == second
     assert len(client.models.calls) == calls_after_first
     store.ensure("fp-2", chunks)
-    assert len(client.models.calls) > calls_after_first
+    # V1.3 reuses dense vectors by chunk content hash even when the lexical
+    # source fingerprint changes.
+    assert len(client.models.calls) == calls_after_first
 
 
 def test_knowledge_service_uses_dense_embedding_sidecar(tmp_path: Path):

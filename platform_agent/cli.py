@@ -140,7 +140,7 @@ def _knowledge_status(args) -> int:
 
 
 def _knowledge_build(args) -> int:
-    stats = _knowledge_service().build(force=args.force)
+    stats = _knowledge_service().build(force=args.force, reset_embeddings=args.reset_embeddings)
     if args.json:
         print(stats.model_dump_json(indent=2))
     else:
@@ -611,6 +611,7 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--json", action="store_true")
     build = ksub.add_parser("build", help="Build or refresh the knowledge index")
     build.add_argument("--force", action="store_true")
+    build.add_argument("--reset-embeddings", action="store_true", help="Discard the dense sidecar and rebuild all vectors")
     build.add_argument("--json", action="store_true")
     search = ksub.add_parser("search", help="Search platform knowledge without running the Agent")
     search.add_argument("query")

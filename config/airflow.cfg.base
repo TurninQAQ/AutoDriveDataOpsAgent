@@ -16,7 +16,7 @@ max_consecutive_failed_dag_runs_per_dag = 0
 load_examples = False
 plugins_folder = /home/cidi/airflow/plugins
 execute_tasks_new_python_interpreter = False
-fernet_key = EJqZwZ6NxiH1Ixx3jL__CBhW2gwsq0lSsJy03TkEPGg=
+fernet_key =
 dagbag_import_timeout = 30.0
 dagbag_import_error_tracebacks = True
 dagbag_import_error_traceback_depth = 2
@@ -52,7 +52,7 @@ multi_team = False
 
 [database]
 alembic_ini_file_path = alembic.ini
-sql_alchemy_conn = postgresql+psycopg2://airflow:airflow_pg_ChangeMe_20260709@127.0.0.1:5432/airflow
+sql_alchemy_conn =
 sql_engine_encoding = utf-8
 sql_alchemy_pool_enabled = True
 sql_alchemy_pool_size = 10
@@ -132,7 +132,7 @@ cache_ttl_seconds = 900
 
 [api]
 enable_swagger_ui = True
-secret_key = 2Oby+irwTz/MpL4MzosoBg==
+secret_key =
 expose_config = False
 expose_stacktrace = False
 dag_cache_size = 64
@@ -176,7 +176,7 @@ missing_dag_retry_delay = 60
 [api_auth]
 jwt_expiration_time = 86400
 jwt_cli_expiration_time = 3600
-jwt_secret = Jk7yUG+cRU/SHeCEZsD1uQ==
+jwt_secret =
 jwt_leeway = 10
 
 [execution_api]

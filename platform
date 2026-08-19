@@ -108,6 +108,7 @@ read_runtime_dir() {
     AIRFLOW_BIN="$RUNTIME_DIR/venv/bin/airflow"
     AIRFLOW_PYTHON="$RUNTIME_DIR/venv/bin/python"
     AIRFLOW_PASSWORD_FILE="$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated"
+    RUNTIME_SECRETS_FILE="$RUNTIME_DIR/config/runtime_secrets.env"
     PLATFORM_HOME="$RUNTIME_DIR"
     AIRFLOW_STATE_DIR="$RUNTIME_DIR/state"
     AIRFLOW_TASK_QUEUE_DIR="$AIRFLOW_STATE_DIR/task_queue"
@@ -201,6 +202,21 @@ load_platform_env() {
     [ -f "$platform_env" ] || error "runtime config not found: $platform_env. Run ./platform install first."
     # shellcheck disable=SC1090
     source "$platform_env"
+}
+
+load_runtime_secrets() {
+    [ -f "$RUNTIME_SECRETS_FILE" ] || error "runtime secrets not found: $RUNTIME_SECRETS_FILE"
+    # shellcheck disable=SC1090
+    source "$RUNTIME_SECRETS_FILE"
+    [ -n "${AIRFLOW_FERNET_KEY:-}" ] || error "AIRFLOW_FERNET_KEY is missing from $RUNTIME_SECRETS_FILE"
+    [ -n "${AIRFLOW_API_SECRET_KEY:-}" ] || error "AIRFLOW_API_SECRET_KEY is missing from $RUNTIME_SECRETS_FILE"
+    [ -n "${AIRFLOW_JWT_SECRET:-}" ] || error "AIRFLOW_JWT_SECRET is missing from $RUNTIME_SECRETS_FILE"
+}
+
+ensure_runtime_secrets() {
+    mkdir -p "$(dirname "$RUNTIME_SECRETS_FILE")"
+    "$AIRFLOW_PYTHON" "$SOURCE_DIR/scripts/runtime_secrets.py" ensure --path "$RUNTIME_SECRETS_FILE"
+    load_runtime_secrets
 }
 
 export_runtime_env() {
@@ -384,8 +400,8 @@ PY
 
 render_airflow_cfg() {
     local base_cfg="$SOURCE_DIR/config/airflow.cfg.base"
-    [ -f "$base_cfg" ] || base_cfg="$SOURCE_DIR/recover/airflow.cfg"
-    [ -f "$base_cfg" ] || error "airflow cfg base not found: config/airflow.cfg.base or recover/airflow.cfg"
+    [ -f "$base_cfg" ] || error "airflow cfg base not found: $base_cfg"
+    load_runtime_secrets
     set_airflow_api_defaults
     mkdir -p "$AIRFLOW_HOME"
     cp -f "$base_cfg" "$AIRFLOW_HOME/airflow.cfg"
@@ -402,7 +418,10 @@ render_airflow_cfg() {
         "$AIRFLOW__CORE__EXECUTION_API_SERVER_URL" \
         "$AIRFLOW_WORKER_LOG_SERVER_PORT" \
         "$AIRFLOW_TRIGGER_LOG_SERVER_PORT" \
-        "$AIRFLOW_SCHEDULER_HEALTH_CHECK_SERVER_PORT" <<'PY'
+        "$AIRFLOW_SCHEDULER_HEALTH_CHECK_SERVER_PORT" \
+        "$AIRFLOW_FERNET_KEY" \
+        "$AIRFLOW_API_SECRET_KEY" \
+        "$AIRFLOW_JWT_SECRET" <<'PY'
 import sys
 from pathlib import Path
 
@@ -422,6 +441,9 @@ values = {
     ("api", "base_url"): sys.argv[10],
     ("api_server", "port"): sys.argv[7],
     ("scheduler", "scheduler_health_check_server_port"): sys.argv[14],
+    ("core", "fernet_key"): sys.argv[15],
+    ("api", "secret_key"): sys.argv[16],
+    ("api_auth", "jwt_secret"): sys.argv[17],
     ("webserver", "config_file"): str(Path(sys.argv[1]).parent / "webserver_config.py"),
 }
 
@@ -429,6 +451,9 @@ required_existing = {
     ("core", "execution_api_server_url"),
     ("api", "port"),
     ("api", "base_url"),
+    ("core", "fernet_key"),
+    ("api", "secret_key"),
+    ("api_auth", "jwt_secret"),
 }
 section = None
 seen = set()
@@ -469,8 +494,9 @@ if missing:
     detail = ", ".join(f"[{section}] {key}" for section, key in missing)
     raise SystemExit(f"required airflow config key(s) missing: {detail}")
 
-cfg.write_text("\n".join(out) + "\n", encoding="utf-8")
+    cfg.write_text("\n".join(out) + "\n", encoding="utf-8")
 PY
+    chmod 600 "$AIRFLOW_HOME/airflow.cfg"
 }
 
 apply_airflow_patches() {
@@ -480,7 +506,7 @@ apply_airflow_patches() {
 }
 
 deploy_runtime_files() {
-    info "Deploying DAGs/scripts/platform_core/platform_mcp/platform_agent/platform_planning/platform_rag/platform_observability/platform_eval/platform_hardening/knowledge/config into runtime"
+    info "Deploying DAGs/scripts/platform_core/platform_integrations/platform_mcp/platform_agent/platform_planning/platform_rag/platform_observability/platform_eval/platform_hardening/knowledge/config into runtime"
     DEPLOY_SKIP_VERIFY=1 \
     PLATFORM_HOME="$PLATFORM_HOME" \
     AIRFLOW_HOME="$AIRFLOW_HOME" \
@@ -489,6 +515,7 @@ deploy_runtime_files() {
     AIRFLOW_DAGS_DIR="$AIRFLOW_DAGS_DIR" \
     AIRFLOW_SCRIPTS_DIR="$AIRFLOW_SCRIPTS_DIR" \
     AIRFLOW_PLATFORM_MCP_DIR="$RUNTIME_DIR/opt_airflow/platform_mcp" \
+    AIRFLOW_PLATFORM_INTEGRATIONS_DIR="$RUNTIME_DIR/opt_airflow/platform_integrations" \
     AIRFLOW_PLATFORM_AGENT_DIR="$RUNTIME_DIR/opt_airflow/platform_agent" \
     AIRFLOW_PLATFORM_PLANNING_DIR="$RUNTIME_DIR/opt_airflow/platform_planning" \
     AIRFLOW_PLATFORM_RAG_DIR="$RUNTIME_DIR/opt_airflow/platform_rag" \
@@ -744,6 +771,7 @@ cmd_install() {
     require_airflow_database
     create_runtime_dirs
     install_venv
+    ensure_runtime_secrets
     apply_airflow_patches
     render_airflow_cfg
     write_password_file
@@ -762,6 +790,7 @@ cmd_deploy() {
     read_runtime_dir
     require_runtime_marker
     load_platform_env
+    load_runtime_secrets
     require_writable_runtime
     mkdir -p "$AIRFLOW_STATE_DIR" "$AIRFLOW_TASK_QUEUE_DIR" "$AIRFLOW_TASK_LOCK_DIR" "$AIRFLOW_GPU_LOCK_DIR"
     write_platform_env
