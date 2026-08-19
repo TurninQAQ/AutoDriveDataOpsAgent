@@ -147,9 +147,12 @@ rm -rf "$KNOWLEDGE_DIR"
 mkdir -p "$KNOWLEDGE_DIR"
 cp -R "$PROJECT_DIR/knowledge/." "$KNOWLEDGE_DIR/" || error "Failed to copy knowledge sources"
 mkdir -p "$KNOWLEDGE_DIR/repository"
-for doc in README.md skill.md usage_guide.md deploy_guide.md version.md V0.1_REFACTOR.md V0.2_GPU_SIMULATION.md V0.3_PLATFORM_MCP.md V0.4_READ_ONLY_AGENT.md V0.5_RAG_RUNBOOK.md V0.6_TASK_PLANNING.md V0.7_WRITE_AGENT_HITL.md V0.8_ACTION_VERIFICATION.md V0.9_EVALUATION_OBSERVABILITY.md V1.0_HARDENING_E2E.md V1.1_EVALUATION_ALIGNMENT.md V1.2_GEMINI_PROVIDER.md; do
-    if [ -f "$PROJECT_DIR/$doc" ]; then
-        cp -f "$PROJECT_DIR/$doc" "$KNOWLEDGE_DIR/repository/$doc" || error "Failed to copy knowledge document: $doc"
+if [ -f "$PROJECT_DIR/README.md" ]; then
+    cp -f "$PROJECT_DIR/README.md" "$KNOWLEDGE_DIR/repository/README.md" || error "Failed to copy knowledge document: README.md"
+fi
+for doc in skill.md usage_guide.md deploy_guide.md version.md V0.1_REFACTOR.md V0.2_GPU_SIMULATION.md V0.2_TEST_REPORT.md V0.3_PLATFORM_MCP.md V0.3_TEST_REPORT.md V0.4_READ_ONLY_AGENT.md V0.4_TEST_REPORT.md V0.5_RAG_RUNBOOK.md V0.5_TEST_REPORT.md V0.6_TASK_PLANNING.md V0.6_TEST_REPORT.md V0.7_WRITE_AGENT_HITL.md V0.7_TEST_REPORT.md V0.8_ACTION_VERIFICATION.md V0.8_TEST_REPORT.md V0.9_EVALUATION_OBSERVABILITY.md V0.9_TEST_REPORT.md V1.0_HARDENING_E2E.md V1.0_TEST_REPORT.md V1.1_EVALUATION_ALIGNMENT.md V1.1_TEST_REPORT.md V1.2_GEMINI_PROVIDER.md V1.2_TEST_REPORT.md; do
+    if [ -f "$PROJECT_DIR/docs/$doc" ]; then
+        cp -f "$PROJECT_DIR/docs/$doc" "$KNOWLEDGE_DIR/repository/$doc" || error "Failed to copy knowledge document: $doc"
     fi
 done
 for cfg in task_submit_template.yaml task_types.yaml task_planning_defaults.yaml; do

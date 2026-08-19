@@ -15,33 +15,34 @@
 - V1.1：Evaluation Alignment，新增 chunk-level RAG Golden、Agent tool/task eval、Promptfoo 风格安全集、可选 Ragas/DeepEval/Promptfoo 集成与统一质量门禁。
 - V1.2：Gemini Provider，新增原生 google-genai Structured Output Agent Provider，并可选使用 gemini-embedding-2 + BM25 做真正语义 Hybrid RAG。
 
-无真实 GPU 的本地开发方式见：`V0.2_GPU_SIMULATION.md`。
+无真实 GPU 的本地开发方式见：[docs/V0.2_GPU_SIMULATION.md](docs/V0.2_GPU_SIMULATION.md)。
 
-MCP Tool 设计和运行方式见：`V0.3_PLATFORM_MCP.md`。
+MCP Tool 设计和运行方式见：[docs/V0.3_PLATFORM_MCP.md](docs/V0.3_PLATFORM_MCP.md)。
 
-Read-only Agent 设计和运行方式见：`V0.4_READ_ONLY_AGENT.md`。
+Read-only Agent 设计和运行方式见：[docs/V0.4_READ_ONLY_AGENT.md](docs/V0.4_READ_ONLY_AGENT.md)。
 
-RAG / Runbook 设计和运行方式见：`V0.5_RAG_RUNBOOK.md`。
+RAG / Runbook 设计和运行方式见：[docs/V0.5_RAG_RUNBOOK.md](docs/V0.5_RAG_RUNBOOK.md)。
 
-Task Planning 设计和运行方式见：`V0.6_TASK_PLANNING.md`。
+Task Planning 设计和运行方式见：[docs/V0.6_TASK_PLANNING.md](docs/V0.6_TASK_PLANNING.md)。
 
-Write Agent/HITL 设计见：`V0.7_WRITE_AGENT_HITL.md`。
+Write Agent/HITL 设计见：[docs/V0.7_WRITE_AGENT_HITL.md](docs/V0.7_WRITE_AGENT_HITL.md)。
 
-Action Verification 设计见：`V0.8_ACTION_VERIFICATION.md`。
+Action Verification 设计见：[docs/V0.8_ACTION_VERIFICATION.md](docs/V0.8_ACTION_VERIFICATION.md)。
 
-V1.0 硬化/E2E 设计见：`V1.0_HARDENING_E2E.md`。
+V1.0 硬化/E2E 设计见：[docs/V1.0_HARDENING_E2E.md](docs/V1.0_HARDENING_E2E.md)。
 
-V1.1 评测体系见：`V1.1_EVALUATION_ALIGNMENT.md`。
+V1.1 评测体系见：[docs/V1.1_EVALUATION_ALIGNMENT.md](docs/V1.1_EVALUATION_ALIGNMENT.md)。
 
-Gemini 模型/RAG 适配见：`V1.2_GEMINI_PROVIDER.md`。
+Gemini 模型/RAG 适配见：[docs/V1.2_GEMINI_PROVIDER.md](docs/V1.2_GEMINI_PROVIDER.md)。
 
 
 本项目用于把数据处理 pipeline 部署到 Airflow，并通过任务 YAML 提交和管理多任务动态 DAG。
 
 主要文档：
 
-- 从 0 部署平台：[deploy_guide.md](deploy_guide.md)
-- 日常使用平台：[usage_guide.md](usage_guide.md)
+- 文档总览：[docs/README.md](docs/README.md)
+- 从 0 部署平台：[docs/deploy_guide.md](docs/deploy_guide.md)
+- 日常使用平台：[docs/usage_guide.md](docs/usage_guide.md)
 
 实验材料位于源码外的 `/home/cfy/project/two/test`。其中全量数据、定时提交和
 手动提权的回归实验见：
