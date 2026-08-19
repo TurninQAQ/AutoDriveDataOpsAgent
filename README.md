@@ -41,6 +41,7 @@ Gemini 模型/RAG 适配见：[docs/V1.2_GEMINI_PROVIDER.md](docs/V1.2_GEMINI_PR
 主要文档：
 
 - 文档总览：[docs/README.md](docs/README.md)
+- 本次部署报告：[docs/deployment/DEPLOYMENT_REPORT_2026-08-19.md](docs/deployment/DEPLOYMENT_REPORT_2026-08-19.md)
 - 从 0 部署平台：[docs/deploy_guide.md](docs/deploy_guide.md)
 - 日常使用平台：[docs/usage_guide.md](docs/usage_guide.md)
 

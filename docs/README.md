@@ -7,6 +7,7 @@
 - [部署指南](deploy_guide.md)
 - [使用指南](usage_guide.md)
 - [运行维护 Skill](skill.md)
+- [本次本地部署报告](deployment/DEPLOYMENT_REPORT_2026-08-19.md)
 
 ## 版本设计
 
