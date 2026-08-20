@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from platform_mcp.facade import PlatformMCPFacade
+from platform_mcp.facade import PlatformMCPFacade, build_default_facade
 from platform_mcp.server import READ_ONLY_TOOL_NAMES, build_mcp_server
 
 from .models import ToolCallSpec, ToolObservation
@@ -27,8 +27,25 @@ class InMemoryMCPToolClient:
     def __init__(self, facade: PlatformMCPFacade | None = None):
         self.facade = facade
 
+    @staticmethod
+    def _configured_facade() -> PlatformMCPFacade:
+        """Build the default facade with the configured Agent capabilities."""
+        from platform_agent.runtime import build_agent_knowledge_service
+        from platform_agent.settings import AgentSettings
+        from platform_core.settings import PlatformSettings
+
+        platform_settings = PlatformSettings.from_env()
+        agent_settings = AgentSettings.from_env(platform_settings)
+        return build_default_facade(
+            platform_settings,
+            knowledge_service=build_agent_knowledge_service(agent_settings),
+        )
+
     def _server(self):
-        return build_mcp_server(self.facade, include_write_tools=True)
+        return build_mcp_server(
+            self.facade if self.facade is not None else self._configured_facade(),
+            include_write_tools=True,
+        )
 
     @staticmethod
     def _import_client():
@@ -114,6 +131,8 @@ class FacadeToolClient:
     async def describe_tools(self) -> list[dict[str, Any]]:
         tools = []
         for name in READ_ONLY_TOOL_NAMES:
+            if name == "search_knowledge" and getattr(self.facade, "knowledge_service", None) is None:
+                continue
             schema: dict[str, Any] = {}
             description = name
             if name == "search_knowledge":

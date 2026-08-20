@@ -21,6 +21,76 @@ from .policy import AgentPolicyEngine
 WRITE_INTENTS = frozenset(WRITE_INTENT_TO_TOOL)
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_search_knowledge(observation: ToolObservation) -> list[KnowledgeObservation]:
+    """Normalize a successful MCP knowledge result into shared evidence."""
+    if observation.tool_name != "search_knowledge" or not observation.ok:
+        return []
+    payload = observation.data if isinstance(observation.data, dict) else {}
+    rows = payload.get("results")
+    if not isinstance(rows, list):
+        return []
+
+    normalized: list[KnowledgeObservation] = []
+    for index, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            continue
+        source = str(raw.get("source") or raw.get("source_path") or "").strip()
+        source_path = str(raw.get("source_path") or "").strip()
+        section = str(raw.get("section") or "").strip()
+        if not source_path and source:
+            source_path, separator, source_section = source.partition("#")
+            if separator and not section:
+                section = source_section
+        source_path = source_path.strip()
+        content = str(raw.get("content") or "")
+        if not source_path and not content:
+            continue
+
+        metadata = dict(raw.get("metadata") or {}) if isinstance(raw.get("metadata"), dict) else {}
+        if raw.get("rank") is not None:
+            metadata.setdefault("rank", raw.get("rank"))
+        chunk_id = str(raw.get("chunk_id") or "").strip()
+        if not chunk_id:
+            chunk_id = f"{source_path}#{section}" if section else f"{source_path}:{index}"
+        normalized.append(
+            KnowledgeObservation(
+                chunk_id=chunk_id,
+                source_path=source_path or "__knowledge__",
+                title=str(raw.get("title") or source_path or "platform knowledge"),
+                section=section,
+                content=content,
+                score=_as_float(raw.get("score")),
+                lexical_score=_as_float(raw.get("lexical_score")),
+                vector_score=_as_float(raw.get("vector_score")),
+                metadata=metadata,
+            )
+        )
+    return normalized
+
+
+def merge_knowledge_observations(
+    *groups: list[KnowledgeObservation],
+) -> list[KnowledgeObservation]:
+    """Merge legacy and MCP knowledge evidence without duplicate chunks."""
+    merged: list[KnowledgeObservation] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            key = item.chunk_id or f"{item.citation}\n{item.content}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
 class AgentGraphState(TypedDict, total=False):
     user_text: str
     thread_id: str
@@ -346,7 +416,13 @@ class ReadOnlyAgentNodes:
         retrieval_errors = [
             item for item in raw_knowledge if item.metadata.get("error") or item.source_path == "__retrieval__"
         ]
-        knowledge = [item for item in raw_knowledge if item not in retrieval_errors]
+        legacy_knowledge = [item for item in raw_knowledge if item not in retrieval_errors]
+        tool_knowledge = [
+            item
+            for observation in observations
+            for item in normalize_search_knowledge(observation)
+        ]
+        knowledge = merge_knowledge_observations(legacy_knowledge, tool_knowledge)
 
         if plan.intent in WRITE_INTENTS:
             response = await self._write_answer(state, plan, observations)
@@ -406,6 +482,21 @@ class ReadOnlyAgentNodes:
             knowledge,
         )
         response.intent = plan.intent
+        response.tool_trace = self._trace(observations)
+        response.knowledge_sources = list(dict.fromkeys(item.citation for item in knowledge))
+        response.retrieval_trace = [
+            {
+                "chunk_id": item.chunk_id,
+                "source": item.citation,
+                "score": item.score,
+                **(
+                    {"rank": item.metadata["rank"]}
+                    if item.metadata.get("rank") is not None
+                    else {}
+                ),
+            }
+            for item in knowledge
+        ]
         if plan.intent == AgentIntent.UNSUPPORTED_WRITE:
             response.blocked = True
         for item in retrieval_errors:

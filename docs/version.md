@@ -1,4 +1,11 @@
 ## 版本发布说明
+v1.4.2 2026-08-20：RAG Agent Tool Contract Alignment
+1. 修正 Qwen、Gemini 和 OpenAI-compatible Planner 的 RAG 语义：静态平台知识在 `search_knowledge` 可见时应通过该只读 Tool 获取，不再声称 workflow 会在 planning 后自动执行 RAG；实时状态仍优先使用 operational MCP Tools。
+2. 在公共 workflow 层将成功的 `search_knowledge` `ToolObservation` 确定性规范化为 `KnowledgeObservation`，与 legacy retriever evidence 去重合并，并统一进入 synthesis、`knowledge_sources`、`retrieval_trace`；`tool_trace` 保留原始 MCP provenance。
+3. 恢复 `PLATFORM_AGENT_KNOWLEDGE_ENABLED` 的运行时语义：启用时提供 KnowledgeService 和 `search_knowledge` catalog capability，禁用时不暴露不可执行的 Tool；legacy `knowledge_retriever` compatibility seam 保留。
+4. 修复 heuristic fallback 的静态知识、greeting 和 write-planning contract；新增独立 `eval/v1_4_2/rag_as_tool_cases.jsonl`，修正 V1.4.1 write case 中 `search_knowledge` 同时 optional/forbidden 的矛盾，不修改 V1.4.1 历史文件。
+5. 真实 qwen-plus 五 Case collection 为 5/5 valid；knowledge-only 仍选择 `get_gpu_pool` 而非 `search_knowledge`，因此 V1.4.2 RAG Tool alignment 结果为 `PARTIAL`，未使用 forced retrieval、Prompt tuning 或 Golden Case tuning。
+
 v1.4.1 2026-08-20：RAG as Read-only Agent Tool
 1. 将现有 `KnowledgeService.search()` 以只读 MCP Tool `search_knowledge` 暴露给 Agent，复用原有 Embedding、Chunk、Dense sidecar、Vector Store 和 Hybrid Retrieval，不改变检索算法。
 2. `search_knowledge(query, top_k)` 正式进入 `READ_ONLY_TOOL_NAMES`、MCP schema、InMemoryMCPToolClient 和 Agent policy allowlist；Tool 返回 rank、source、chunk、content、score 及既有 metadata。

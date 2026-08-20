@@ -26,6 +26,7 @@ class FakeToolClient:
         return [
             {"name": name, "description": name, "input_schema": {"type": "object"}}
             for name in READ_ONLY_TOOL_NAMES
+            if name != "search_knowledge"
         ]
 
     async def execute(self, calls):

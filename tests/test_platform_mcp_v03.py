@@ -355,6 +355,9 @@ def test_mcp_registration_layer_registers_all_read_only_tools(tmp_path, monkeypa
     from platform_mcp.server import build_mcp_server
 
     _, facade = make_facade(tmp_path)
+    # This test exercises the enabled read-only surface; the V1.4.2 disabled
+    # capability contract is covered by test_rag_agent_tool_v142.py.
+    facade.knowledge_service = object()
 
     class FakeMCPServer:
         def __init__(self, name, instructions=""):

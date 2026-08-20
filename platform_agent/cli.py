@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from .models import AgentResponse
-from .runtime import build_default_agent, build_knowledge_service
+from .runtime import build_agent_knowledge_service, build_default_agent, build_knowledge_service
 from .settings import AgentSettings
 from .tool_client import InMemoryMCPToolClient
 from platform_core.settings import PlatformSettings
@@ -103,7 +103,7 @@ async def _tools(args) -> int:
     client = InMemoryMCPToolClient(
         build_default_facade(
             platform_settings,
-            knowledge_service=build_knowledge_service(agent_settings),
+            knowledge_service=build_agent_knowledge_service(agent_settings),
         )
     )
     tools = await client.describe_tools()

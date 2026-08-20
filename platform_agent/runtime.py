@@ -46,6 +46,13 @@ def build_knowledge_service(agent_settings: AgentSettings) -> KnowledgeService:
     )
 
 
+def build_agent_knowledge_service(agent_settings: AgentSettings) -> KnowledgeService | None:
+    """Return the knowledge capability only when it is enabled for the Agent."""
+    if not agent_settings.knowledge_enabled:
+        return None
+    return build_knowledge_service(agent_settings)
+
+
 
 def build_trace_recorder(agent_settings: AgentSettings) -> TraceRecorder:
     store = TraceStore(agent_settings.trace_dir, agent_settings.audit_file)
@@ -71,7 +78,7 @@ def build_trace_recorder(agent_settings: AgentSettings) -> TraceRecorder:
 def build_default_agent():
     platform_settings = PlatformSettings.from_env()
     agent_settings = AgentSettings.from_env(platform_settings)
-    knowledge_service = build_knowledge_service(agent_settings)
+    knowledge_service = build_agent_knowledge_service(agent_settings)
     facade = build_default_facade(
         platform_settings,
         knowledge_service=knowledge_service,
