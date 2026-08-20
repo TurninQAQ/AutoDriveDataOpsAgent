@@ -410,7 +410,17 @@ def _eval_deepeval(args) -> int:
     result = run_deepeval_on_agent(cases, settings)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        if result.get("status") == "COLLECTION_INVALID":
+            return 2
     else:
+        if result.get("status") == "COLLECTION_INVALID":
+            print("DeepEval tool evaluation: status=COLLECTION_INVALID")
+            for item in result.get("invalid_cases") or []:
+                print(
+                    f"- case={item.get('case_id')} required_tools={item.get('required_tools')} "
+                    f"actual_tools={item.get('actual_tools')} reason={item.get('reason')}"
+                )
+            return 2
         print(f"DeepEval tool evaluation: cases={result.get('case_count', 0)}")
         print(f"- tool_correctness={float(result.get('tool_correctness', 0.0)):.3f}")
         print(f"- argument_correctness={float(result.get('argument_correctness', 0.0)):.3f}")
