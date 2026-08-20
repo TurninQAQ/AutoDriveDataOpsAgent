@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from platform_integrations.model_retry import retry_async
 
 from .models import AgentPlan, AgentResponse, ConversationTurn, KnowledgeObservation, ToolObservation
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -116,9 +117,7 @@ Hard constraints:
 - submit_task, resume_task, set_task_priority, stop_task and delete_task are write intents and are executed only through HITL.
 - Local task planning is intent=task_planning with tool_calls=[] and task_draft containing only values explicitly present in the user request.
 - restart and other mutations remain unsupported_write.
-- Static platform mechanism, architecture, rule, runbook and recovery questions use intent=platform_knowledge. When search_knowledge is present in AVAILABLE_TOOLS, call it with the user's knowledge question; do not leave tool_calls empty expecting the workflow to retrieve RAG after planning.
-- Current/live state questions (当前/现在/状态/占用/剩余/current/status/usage) must prefer operational tools such as get_task_detail, get_queue_state, get_gpu_pool or diagnose_task. search_knowledge may only supplement platform rules and never replace live evidence.
-- Diagnosis should use real operational evidence first and may add search_knowledge only when static rule or runbook context is useful. Greetings and ordinary questions without a platform fact may use tool_calls=[]
+{EVIDENCE_ROUTING_CONTRACT}
 - Prefer diagnose_task for task-wide failures or stuck tasks; prefer get_stage_logs only when log evidence is useful.
 - Keep the read-only impact-analysis plan small, normally 1-3 calls.
 - For set_task_priority never invent a numeric priority. If absent, write_action.priority must be null.

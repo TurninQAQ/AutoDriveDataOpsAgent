@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from platform_integrations.gemini_retry import retry_async
 
 from .models import AgentPlan, AgentResponse, ConversationTurn, KnowledgeObservation, ToolObservation
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -98,9 +99,7 @@ Hard constraints:
 - For submit_task, also produce task_draft containing only explicit user values; the workflow will run deterministic TaskPlanningService and validate_task_spec.
 - restart and any other mutation remain unsupported_write.
 - Current system facts must come from tools, never from memory or guesswork.
-- Static platform mechanism, architecture, rule, runbook and recovery questions use intent=platform_knowledge. When search_knowledge is present in AVAILABLE_TOOLS, call it with the user's knowledge question; do not leave tool_calls empty expecting the workflow to retrieve RAG after planning.
-- Current/live state questions (当前/现在/状态/占用/剩余/current/status/usage) must prefer operational tools such as get_task_detail, get_queue_state, get_gpu_pool or diagnose_task. search_knowledge may only supplement platform rules and never replace live evidence.
-- Diagnosis should use real operational evidence first and may add search_knowledge only when static rule or runbook context is useful. Greetings and ordinary questions without a platform fact may use tool_calls=[]
+{EVIDENCE_ROUTING_CONTRACT}
 - For task_planning, task_draft may use these keys: task_prefix, task_type, priority, pipeline_stages, max_active_runs, timeout_min, gpu_ids, gpu_stage_memory_mb, exclusive_gpu_stages, shared_gpu_stages, images, dataset_paths, dataset_names, explicit_fields.
 - Prefer diagnose_task for task-wide failures or stuck tasks.
 - Prefer get_stage_logs only when log evidence is useful.

@@ -33,6 +33,21 @@ WRITE_TOOL_NAMES = (
 
 ALL_TOOL_NAMES = READ_ONLY_TOOL_NAMES + WRITE_PREP_TOOL_NAMES + WRITE_TOOL_NAMES
 
+MCP_TOOL_DESCRIPTIONS = {
+    "get_gpu_pool": (
+        "Inspect current/live GPU runtime state, including device memory, "
+        "availability and active reservations. Use for what GPU resources or "
+        "reservations exist now, or current GPU allocation problems. Do not use "
+        "it to explain platform concepts, architecture or reservation rules."
+    ),
+    "search_knowledge": (
+        "Search static platform documentation and runbooks for definitions, "
+        "architecture, mechanisms, policies and operating rules such as GPU "
+        "Reservation, soft preemption and recovery. Use for what-is, how-it-works "
+        "and platform-rule questions. It does not return current runtime state."
+    ),
+}
+
 
 def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tools: bool = False):
     """Build the official MCP Python SDK v2 server.
@@ -80,10 +95,11 @@ def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tool
         """Get the global priority queue or one task's queue position."""
         return facade.get_queue_state(task_name)
 
-    @mcp.tool()
     def get_gpu_pool(cleanup_dead: bool = True) -> dict[str, Any]:
-        """Get GPU memory and active GPU Reservations."""
         return facade.get_gpu_pool(cleanup_dead=cleanup_dead)
+
+    get_gpu_pool.__doc__ = MCP_TOOL_DESCRIPTIONS["get_gpu_pool"]
+    get_gpu_pool = mcp.tool()(get_gpu_pool)
 
     @mcp.tool()
     def inspect_task_containers(
@@ -108,10 +124,11 @@ def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tool
         return facade.diagnose_task(task_name, dataset_name)
 
     if getattr(facade, "knowledge_service", None) is not None:
-        @mcp.tool()
         def search_knowledge(query: str, top_k: int = 5) -> dict[str, Any]:
-            """Search the static platform knowledge base and return ranked evidence."""
             return facade.search_knowledge(query, top_k)
+
+        search_knowledge.__doc__ = MCP_TOOL_DESCRIPTIONS["search_knowledge"]
+        search_knowledge = mcp.tool()(search_knowledge)
 
     if include_write_tools:
         @mcp.tool()

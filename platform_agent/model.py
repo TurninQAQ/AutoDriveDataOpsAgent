@@ -16,6 +16,7 @@ from .models import (
     ToolObservation,
     KnowledgeObservation,
 )
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
 
 
 STAGES = ("precheck", "parser", "segment", "map", "od", "coloration", "occ")
@@ -290,6 +291,12 @@ class HeuristicReadOnlyModel:
                 if dataset:
                     diag_args["dataset_name"] = dataset
                 calls.insert(1, ToolCallSpec(name="diagnose_task", arguments=diag_args))
+            explicitly_requests_rule_context = any(
+                term in lower
+                for term in ("规则", "机制", "原理", "怎么工作", "如何工作", "架构", "策略", "rule", "mechanism", "architecture", "policy")
+            )
+            if explicitly_requests_rule_context and "search_knowledge" in available_tools:
+                calls.append(ToolCallSpec(name="search_knowledge", arguments={"query": text}))
             return AgentPlan(
                 intent=AgentIntent.GPU_DIAGNOSIS,
                 task_name=task_name,
@@ -615,9 +622,7 @@ Hard constraints:
 - For submit_task, also produce task_draft containing only explicit user values; the workflow will run V0.6 deterministic TaskPlanningService and validate_task_spec.
 - restart and any other mutation remain unsupported_write.
 - Current system facts must come from tools, never from memory or guesswork.
-- Static platform mechanism, architecture, rule, runbook and recovery questions use intent=platform_knowledge. When search_knowledge is present in AVAILABLE_TOOLS, call it with the user's knowledge question; do not leave tool_calls empty expecting the workflow to retrieve RAG after planning.
-- Current/live state questions (当前/现在/状态/占用/剩余/current/status/usage) must prefer operational tools such as get_task_detail, get_queue_state, get_gpu_pool or diagnose_task. search_knowledge may only supplement platform rules and never replace live evidence.
-- Diagnosis should use real operational evidence first and may add search_knowledge only when static rule or runbook context is useful. Greetings and ordinary questions without a platform fact may use tool_calls=[]
+{EVIDENCE_ROUTING_CONTRACT}
 - For task_planning, task_draft may use these keys: task_prefix, task_type, priority, pipeline_stages, max_active_runs, timeout_min, gpu_ids, gpu_stage_memory_mb, exclusive_gpu_stages, shared_gpu_stages, images, dataset_paths, dataset_names, explicit_fields.
 - Prefer diagnose_task for task-wide failures or stuck tasks.
 - Prefer get_stage_logs only when log evidence is useful.

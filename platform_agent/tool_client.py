@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from platform_mcp.facade import PlatformMCPFacade, build_default_facade
-from platform_mcp.server import READ_ONLY_TOOL_NAMES, build_mcp_server
+from platform_mcp.server import MCP_TOOL_DESCRIPTIONS, READ_ONLY_TOOL_NAMES, build_mcp_server
 
 from .models import ToolCallSpec, ToolObservation
 
@@ -135,8 +135,9 @@ class FacadeToolClient:
                 continue
             schema: dict[str, Any] = {}
             description = name
+            if name in MCP_TOOL_DESCRIPTIONS:
+                description = MCP_TOOL_DESCRIPTIONS[name]
             if name == "search_knowledge":
-                description = "Search the static platform knowledge base and return ranked evidence."
                 schema = {
                     "type": "object",
                     "properties": {

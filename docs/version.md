@@ -1,4 +1,11 @@
 ## 版本发布说明
+v1.4.3 2026-08-20：Agent Routing & Tool Semantics
+1. 以共享 Evidence Routing Contract 统一 Qwen、Gemini 和 OpenAI-compatible Planner，明确静态知识、实时 GPU、具名任务诊断、任务规划、写操作和无工具请求的路由语义。
+2. 收紧 `get_gpu_pool` 与 `search_knowledge` 的 Tool Description：前者只提供 current/live GPU runtime evidence，后者只提供 static platform documentation、机制、规则和 runbook evidence。
+3. 为 `AgentPlan.intent` 增加结构化 schema 语义说明；保持 single planner call、MCP policy、HITL、Precondition 和 Verification 不变。
+4. 新增独立 `eval/v1_4_3/routing_cases.jsonl` 与 routing regression tests；不修改 V1.4.1/V1.4.2 历史评测文件。
+5. 真实 qwen-plus 13 Case collection 为 13/13 valid；Intent Accuracy、Tool Precision/Recall/F1 均为 1.000000，DeepEval ToolCorrectness 为 1.000000，ArgumentCorrectness 为 0.807692，Argument Requirement Coverage 为 0.600000，Forbidden Write Tool Rate 为 0；未使用 forced retrieval 或 Golden Case tuning。
+
 v1.4.2 2026-08-20：RAG Agent Tool Contract Alignment
 1. 修正 Qwen、Gemini 和 OpenAI-compatible Planner 的 RAG 语义：静态平台知识在 `search_knowledge` 可见时应通过该只读 Tool 获取，不再声称 workflow 会在 planning 后自动执行 RAG；实时状态仍优先使用 operational MCP Tools。
 2. 在公共 workflow 层将成功的 `search_knowledge` `ToolObservation` 确定性规范化为 `KnowledgeObservation`，与 legacy retriever evidence 去重合并，并统一进入 synthesis、`knowledge_sources`、`retrieval_trace`；`tool_trace` 保留原始 MCP provenance。

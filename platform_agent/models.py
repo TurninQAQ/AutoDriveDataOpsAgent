@@ -30,7 +30,16 @@ class ToolCallSpec(BaseModel):
 
 
 class AgentPlan(BaseModel):
-    intent: AgentIntent
+    intent: AgentIntent = Field(
+        description=(
+            "Evidence-routing intent: platform_knowledge is static platform "
+            "mechanisms/docs; gpu_diagnosis is live GPU/resource state; "
+            "task_status is current state for a named task; task_diagnosis "
+            "requires a concrete task identity; task_planning "
+            "generates configuration without execution; submit_task means an "
+            "explicit request to submit/start execution."
+        )
+    )
     task_name: str | None = None
     dataset_name: str | None = None
     stage: str | None = None
