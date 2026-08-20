@@ -17,7 +17,7 @@ from platform_rag.service import AsyncKnowledgeRetriever, KnowledgeService
 
 from .aligned import FixtureToolClient, load_jsonl
 from .deepeval_adapter import PRE_CONTRACT_AUDIT_BASELINE, run_deepeval_tool_metrics
-from .ragas_adapter import run_ragas_judge
+from .ragas_adapter import GENERATION_METRIC_NAMES, run_ragas_judge
 
 
 async def _collect_rag_samples_async(
@@ -71,7 +71,11 @@ def run_ragas_on_agent(
     settings: AgentSettings,
 ) -> dict[str, Any]:
     samples = collect_rag_judge_samples(service, cases_path, settings)
-    result = run_ragas_judge(samples)
+    # Retrieval quality is reported by the deterministic aligned evaluator.
+    # The formal Ragas generation evaluation is limited to semantic metrics;
+    # LLM-judged context metrics remain available through run_ragas_judge(...)
+    # for explicitly requested diagnostics.
+    result = run_ragas_judge(samples, metric_names=GENERATION_METRIC_NAMES)
     result["sample_count"] = len(samples)
     return result
 
