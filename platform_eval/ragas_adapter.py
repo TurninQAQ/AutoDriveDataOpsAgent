@@ -83,7 +83,7 @@ def _judge_config() -> tuple[str, str, str | None, str, str]:
             raise RuntimeError(
                 "DASHSCOPE_OPENAI_BASE_URL (or PLATFORM_EVAL_JUDGE_BASE_URL) is required for Qwen Ragas evaluation"
             )
-        model = os.getenv("PLATFORM_EVAL_JUDGE_MODEL", "").strip() or "qwen3.7-flash"
+        model = os.getenv("PLATFORM_EVAL_JUDGE_MODEL", "").strip() or "qwen-plus"
         embedding_model = os.getenv("PLATFORM_EVAL_EMBED_MODEL", "").strip() or "qwen3.7-text-embedding"
         return provider, api_key, base_url, model, embedding_model
     if provider in {"openai", "openai-compatible", "openai_compatible"}:
@@ -143,6 +143,14 @@ def _metric_timeout() -> float:
     # The measured Qwen single-case fan-out is below 80 seconds for the
     # slowest diagnostic metric; keep a finite headroom without masking hangs.
     return _env_float("PLATFORM_EVAL_METRIC_TIMEOUT_SEC", 90.0)
+
+
+def _ragas_llm_max_retries() -> int:
+    # Ragas 0.4.x wraps structured Judge calls in its own Instructor retry
+    # loop. Keep one bounded attempt here so the outer metric timeout can
+    # actually cancel a stalled proxy request; provider retry policy remains
+    # owned by platform_integrations for Agent calls.
+    return _env_int("PLATFORM_EVAL_RAGAS_MAX_RETRIES", 1)
 
 
 def _utc_now() -> str:
@@ -362,7 +370,11 @@ async def _run(samples: list[dict[str, Any]], metric_names: list[str] | tuple[st
             max_retries=0,
         )
         client_calls = _instrument_client(client)
-        llm = deps["llm_factory"](model, client=client)
+        llm = deps["llm_factory"](
+            model,
+            client=client,
+            max_retries=_ragas_llm_max_retries(),
+        )
         embeddings = deps["embedding_factory"]("openai", model=embedding_model, client=client)
         metric_classes = deps["metrics"]
         metrics = {
@@ -444,6 +456,23 @@ async def _run(samples: list[dict[str, Any]], metric_names: list[str] | tuple[st
             rows.append({
                 "id": sample.get("id", case_id),
                 "case_id": case_id,
+                "query": sample.get("query", sample.get("user_input", "")),
+                "retrieved_contexts": list(sample.get("retrieved_contexts") or []),
+                "retrieved_sources": list(
+                    sample.get("retrieved_sources")
+                    or sample.get("retrieved_context_ids")
+                    or []
+                ),
+                "agent_model": sample.get("agent_model"),
+                "judge_model": sample.get("judge_model"),
+                "embedding_model": sample.get("embedding_model"),
+                "final_answer": sample.get("final_answer", sample.get("response", "")),
+                "reference_answer": sample.get("reference_answer", sample.get("reference", "")),
+                "token_usage": sample.get("token_usage"),
+                "agent_api_request_count": sample.get("agent_api_request_count"),
+                "judge_api_request_count": sum(
+                    len(item.get("api_calls") or []) for item in case_timings
+                ),
                 "scores": scores,
                 "latency_sec": time.perf_counter() - case_started,
                 "status": "PASS" if len(scores) == len(selected_metrics) else ("PARTIAL" if scores else "BLOCKED_NOT_VALIDATED"),

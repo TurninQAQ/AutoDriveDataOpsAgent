@@ -14,6 +14,7 @@
 - V1.0：Hardening + E2E，dependency-light 完整控制链回归、doctor、Trace/Audit retention/rotation 和并发审批硬化。
 - V1.1：Evaluation Alignment，新增 chunk-level RAG Golden、Agent tool/task eval、Promptfoo 风格安全集、可选 Ragas/DeepEval/Promptfoo 集成与统一质量门禁。
 - V1.2：Gemini Provider，新增原生 google-genai Structured Output Agent Provider，并可选使用 gemini-embedding-2 + BM25 做真正语义 Hybrid RAG。
+- V1.3.3：Qwen Plus Primary Agent，保留 qwen3.7-flash 为 legacy/fallback，继续使用 qwen3.7-text-embedding。
 
 无真实 GPU 的本地开发方式见：[docs/V0.2_GPU_SIMULATION.md](docs/V0.2_GPU_SIMULATION.md)。
 
@@ -36,6 +37,8 @@ V1.1 评测体系见：[docs/V1.1_EVALUATION_ALIGNMENT.md](docs/V1.1_EVALUATION_
 Gemini 模型/RAG 适配见：[docs/V1.2_GEMINI_PROVIDER.md](docs/V1.2_GEMINI_PROVIDER.md)。
 
 Qwen V1.3.1 迁移与验收见：[docs/V1.3.1_QWEN_RUNTIME_MIGRATION.md](docs/V1.3.1_QWEN_RUNTIME_MIGRATION.md)、[docs/V1.3.1_TEST_REPORT.md](docs/V1.3.1_TEST_REPORT.md) 和 [部署报告](docs/deployment/CODEX_LUNA_V1.3.1_QWEN_DEPLOYMENT_REPORT_2026-08-20.md)。
+
+V1.3.3 qwen-plus Primary Agent 评测见：[主评测报告](docs/evaluation/V1.3.3_QWEN_PLUS_PRIMARY_EVALUATION.md)、[当前状态](docs/evaluation/V1.3.3_CURRENT_STATE.md)。
 
 
 本项目用于把数据处理 pipeline 部署到 Airflow，并通过任务 YAML 提交和管理多任务动态 DAG。
@@ -110,7 +113,7 @@ dataops-agent ask "当前 GPU Reservation 和显存情况怎么样？" --json
 
 若 `PLATFORM_RAG_EMBED_PROVIDER=hash`，则继续使用 V1.1 的 BM25 + feature-hashing baseline，不调用 embedding API。
 
-## Qwen 本地 Runtime（V1.3.1）
+## Qwen 本地 Runtime（V1.3.3）
 
 正式 runtime 默认使用 Qwen；密钥只通过环境变量或本机 secure env 注入，不要提交仓库，也不要把 `/home/ubuntu/project/auth/ali.api` 内容复制到源码或报告。
 
@@ -119,7 +122,7 @@ export DASHSCOPE_API_KEY='YOUR_KEY'
 export DASHSCOPE_OPENAI_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
 export DASHSCOPE_API_BASE_URL='https://dashscope.aliyuncs.com/api/v1'
 export PLATFORM_AGENT_PROVIDER=qwen
-export PLATFORM_AGENT_MODEL=qwen3.7-flash
+export PLATFORM_AGENT_MODEL=qwen-plus
 export PLATFORM_RAG_EMBED_PROVIDER=qwen
 export PLATFORM_RAG_EMBED_MODEL=qwen3.7-text-embedding
 export PLATFORM_RAG_EMBED_DIM=1024

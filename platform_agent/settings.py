@@ -65,7 +65,7 @@ class AgentSettings:
             )
             gemini_provider = provider in {"gemini", "google", "google-genai", "google_genai"}
             model = (
-                "qwen3.7-flash"
+                "qwen-plus"
                 if (provider == "auto" and qwen_configured) or qwen_provider
                 else "gemini-3.7-flash"
                 if (gemini_provider or (provider == "auto" and gemini_configured))

@@ -337,7 +337,7 @@ write_platform_env() {
             printf 'export %s=%q\n' "$mock_var" "${!mock_var}"
         done < <(compgen -A variable | grep '^MOCK_STAGE_')
         printf 'export PLATFORM_AGENT_PROVIDER=%q\n' "${PLATFORM_AGENT_PROVIDER:-qwen}"
-        printf 'export PLATFORM_AGENT_MODEL=%q\n' "${PLATFORM_AGENT_MODEL:-qwen3.7-flash}"
+        printf 'export PLATFORM_AGENT_MODEL=%q\n' "${PLATFORM_AGENT_MODEL:-qwen-plus}"
         printf 'export PLATFORM_AGENT_TEMPERATURE=%q\n' "${PLATFORM_AGENT_TEMPERATURE:-0}"
         printf 'export PLATFORM_AGENT_RUNTIME=%q\n' "${PLATFORM_AGENT_RUNTIME:-langgraph}"
         printf 'export PLATFORM_AGENT_MAX_TOOL_CALLS=%q\n' "${PLATFORM_AGENT_MAX_TOOL_CALLS:-6}"

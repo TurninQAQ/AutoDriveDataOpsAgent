@@ -31,7 +31,7 @@ class QwenReadOnlyModel:
 
     requires_tool_descriptions = True
 
-    def __init__(self, model: str = "qwen3.7-flash", temperature: float = 0.0, base_url: str | None = None, client=None):
+    def __init__(self, model: str = "qwen-plus", temperature: float = 0.0, base_url: str | None = None, client=None):
         if client is not None:
             self.client = client
         else:

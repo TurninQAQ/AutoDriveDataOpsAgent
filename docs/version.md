@@ -1,4 +1,10 @@
 ## 版本发布说明
+v1.3.3 2026-08-20：Qwen Plus Primary Agent
+1. Runtime 默认 Agent Model 切换为 `qwen-plus`；`qwen3.7-flash` 保留为 legacy/fallback，可通过显式 `PLATFORM_AGENT_MODEL` 使用。
+2. 保持 `qwen3.7-text-embedding`、1024 维 Embedding、Qwen DashScope Base URL、Tool Contract、Prompt、Golden Set、HITL、Precondition、Verification、Retry 和 GPU 逻辑不变。
+3. 复用 qwen-plus Tool Evaluation 与 deterministic Retrieval Evidence；对现有12个 RAG Cases 发起 qwen-plus Agent + qwen-plus Judge 评测，但 Judge 在 `answer_correctness` 代理等待阶段超时，记录为 `BLOCKED_NOT_VALIDATED`，不伪造语义分数。
+4. 增加 RAG case metadata、Provider-neutral failure classification 和可选 collection checkpoint，避免后续 Judge 阻塞丢失 Agent/Retrieval 样本。
+
 v1.3.1 2026-08-20：Qwen Runtime Migration & Evaluation Closure
 1. 正式 Runtime Provider 切换到阿里云百炼 Qwen：Agent 使用 `qwen3.7-flash`，RAG 使用 `qwen3.7-text-embedding`。
 2. 新增 provider-neutral model retry facade，保留 Gemini compatibility API；Qwen Agent 采用 JSON Object + Pydantic structured output，并保持 MCP / Policy / HITL / Verification 边界不变。
@@ -6,6 +12,42 @@ v1.3.1 2026-08-20：Qwen Runtime Migration & Evaluation Closure
 4. Qwen sidecar 独立于旧 Gemini 768 维 sidecar，最终完成 503/503 vectors；同一 V1.1 Golden Set 上完成 Hash/Qwen A/B、Tool Grounding 和 HITL acceptance。
 5. 保留 Gemini 历史报告与代码；未修改 Golden Set/thresholds，未再次轮换 Airflow secrets，未执行 history rewrite 或 force push。
 6. Ragas 记录为 `BLOCKED_NOT_VALIDATED`；DeepEval 使用 custom Qwen model 完成 21-case 真实 judge；Promptfoo 因 npm 镜像网络 `ECONNRESET` 记录为未验证。
+
+### V1.3.3 Qwen Plus Primary Agent — 2026-08-20
+
+#### Goal
+
+将 `qwen-plus` 正式设为 Runtime Primary Agent Model，同时保留
+`qwen3.7-flash` 为 legacy/fallback。该版本不扩展 Agent Framework，不改变
+业务执行面安全边界。
+
+#### Changes
+
+- `AgentSettings`、Qwen adapter、部署生成的 `platform.env` 默认选择 `qwen-plus`。
+- Qwen 仍使用 `DASHSCOPE_OPENAI_BASE_URL`；API Key 继续只从环境变量读取。
+- Ragas Qwen Judge 默认改为 `qwen-plus`，并限制 Ragas 0.4.x Instructor 内层 retry，保证 metric timeout 能生效。
+- RAG collection 保存 Agent model、Judge model、Embedding、retrieved contexts/sources、final answer、latency 和 failure status；支持通过 `PLATFORM_EVAL_COLLECTION_ARTIFACT` 写入 checkpoint。
+- 新增 qwen-plus Runtime smoke 和 RAG metadata/default-model 回归测试。
+
+#### Unchanged
+
+- Tool Contract、Golden Set、Prompt、Evaluation Threshold。
+- `qwen3.7-text-embedding`、1024 dimensions、Chunking、Retrieval Pipeline 和 Vector sidecar。
+- HITL、Precondition、Verification、WriteActionCoordinator、Retry API、GPU Reservation 和 Simulator。
+- Gemini compatibility code。
+
+#### Evaluation
+
+- Tool Evaluation：复用 qwen-plus 21-case evidence；ToolCorrectness `0.888889`，ArgumentCorrectness `0.761905`，Tool F1 `0.777778`。
+- Retrieval：`VALID_REUSABLE`；Context Recall `0.833333`、Context Precision `0.780556`、MRR `0.788889`、nDCG `0.790052`。
+- RAG：目标为 qwen-plus Agent + qwen-plus Judge；本轮真实运行在 `answer_correctness` Judge proxy wait 阶段阻塞，12 cases 记为 `BLOCKED_NOT_VALIDATED`，不报告 Faithfulness/Answer Relevancy/Answer Correctness 分数。
+
+#### Known Limitations
+
+- Agent 与 Judge 使用同一 `qwen-plus`，属于 `SELF_MODEL_EVALUATION`，存在 self-evaluation bias。
+- Ragas 0.4.x 与当前 DashScope proxy 的 structured Judge retry/timeout 兼容性仍需后续受控验证。
+- 当前无真实 GPU；Runtime smoke 使用 simulated GPU。
+- Write smoke 的 TaskSpec 因 `datasets.dataset_path` 未解析而在 approval 前阻断；没有真实生产写执行，Hard Task Success 未评估。
 
 v1.2.1 2026-08-19:(new:local_runtime_integration_fix base:agent-v1.2.0)
 1. 修复空的 RAG hybrid 权重配置在 runtime 环境中触发 `float('')` 的问题。

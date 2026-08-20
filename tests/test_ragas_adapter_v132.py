@@ -57,9 +57,10 @@ def _fake_dependencies(monkeypatch, *, values=None, delays=None, errors=None):
         capture["embedding_client"] = client
         return _FakeEmbeddings(capture)
 
-    def llm_factory(model, client):
+    def llm_factory(model, client, **kwargs):
         capture["judge_model"] = model
         capture["judge_client"] = client
+        capture["judge_kwargs"] = kwargs
         return object()
 
     class _Metric:
@@ -123,7 +124,7 @@ def test_qwen_judge_and_embedding_config_are_provider_specific(monkeypatch):
 
     assert provider == "qwen"
     assert base_url == "https://correct.example/v1"
-    assert model == "qwen3.7-flash"
+    assert model == "qwen-plus"
     assert embedding_model == "qwen3.7-text-embedding"
 
 
@@ -174,9 +175,10 @@ def test_provider_smoke_uses_ragas_compatible_embedding_path(monkeypatch):
 
 
 def test_metric_instrumentation_and_single_metric_success(monkeypatch):
-    _fake_dependencies(monkeypatch, values={"faithfulness": 0.8})
+    capture = _fake_dependencies(monkeypatch, values={"faithfulness": 0.8})
     result = adapter.run_ragas_judge([_sample()], metric_names=["faithfulness"])
 
+    assert capture["judge_kwargs"]["max_retries"] == 1
     assert result["status"] == "PASS"
     assert result["metrics"] == {"faithfulness": 0.8}
     timing = result["timings"][0]
@@ -186,6 +188,32 @@ def test_metric_instrumentation_and_single_metric_success(monkeypatch):
     assert timing["started_at"] and timing["finished_at"]
     assert timing["latency_sec"] >= 0
     assert result["metric_summary"]["faithfulness"]["status"] == "COMPLETE"
+
+
+def test_metric_result_preserves_rag_case_metadata(monkeypatch):
+    _fake_dependencies(monkeypatch, values={"faithfulness": 0.8})
+    sample = _sample()
+    sample.update({
+        "query": sample["user_input"],
+        "final_answer": sample["response"],
+        "reference_answer": sample["reference"],
+        "retrieved_sources": ["runbook/gpu.md#reservation"],
+        "agent_model": "qwen-plus",
+        "judge_model": "qwen-plus",
+        "embedding_model": "qwen3.7-text-embedding",
+        "agent_api_request_count": None,
+        "token_usage": None,
+    })
+
+    result = adapter.run_ragas_judge([sample], metric_names=["faithfulness"])
+
+    row = result["cases"][0]
+    assert row["query"] == sample["query"]
+    assert row["retrieved_sources"] == ["runbook/gpu.md#reservation"]
+    assert row["agent_model"] == "qwen-plus"
+    assert row["judge_model"] == "qwen-plus"
+    assert row["embedding_model"] == "qwen3.7-text-embedding"
+    assert row["judge_api_request_count"] == 0
 
 
 def test_metric_instrumentation_counts_safe_api_operations(monkeypatch):
