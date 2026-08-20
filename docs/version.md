@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.6.0 Goal-Oriented Diagnosis & Completion — 2026-08-21
+
+1. 新增 request-level `AgentGoal`、deterministic `GoalEvaluator` 和 `NOT_STARTED/IN_PROGRESS/SATISFIED/BLOCKED` progress states。
+2. Adaptive Read-only Loop 现在同时观察 Goal、Goal Progress、Satisfied/Missing Conditions，并区分 `goal_satisfied` 与 `goal_incomplete`；legacy model 未提供 Goal 时保持兼容 fallback。
+3. Goal Layer 只治理 completion evidence，不强制具体 Tool；Task Planning、HITL、Precondition、Mutation、Verification 和 Adaptive Write boundary 保持不变。
+4. 使用 qwen3.7-plus 完成非正式 10-case Goal smoke：9/10 smoke-valid，安全违规 0；qwen-plus formal benchmark deferred，历史 V1.5 frozen cases 未修改。
+
 ### V1.5.x Adaptive Agent Capability Completion Phase — 2026-08-21
 
 1. 在不改变 MCP Tool、RAG、Frozen Golden 或 Write Safety 的前提下，新增 bounded Evidence Tracking：将成功的只读 Tool Observation 映射为 `LIVE_TASK`、`LIVE_GPU`、`STATIC_KNOWLEDGE` 等 Evidence Type。

@@ -18,16 +18,20 @@ from typing import Any, Awaitable, Callable
 from platform_mcp.server import READ_ONLY_TOOL_NAMES
 
 from .models import (
+    AgentGoal,
     AgentIntent,
     AgentPlan,
     AgentStepAction,
     AgentStepDecision,
     ConversationTurn,
+    GoalEvaluation,
+    GoalProgress,
     KnowledgeObservation,
     ToolCallSpec,
     ToolObservation,
 )
 from .evidence import EvidenceRecord, EvidenceTracker
+from .goal import evaluate_goal_progress, normalize_goal
 
 
 READ_ONLY_INTENTS = frozenset(
@@ -70,6 +74,8 @@ class AdaptiveLoopResult:
     tool_call_count: int = 0
     errors: list[str] = field(default_factory=list)
     repetition_warnings: list[str] = field(default_factory=list)
+    goal: AgentGoal | None = None
+    goal_evaluation: GoalEvaluation | None = None
 
 
 def canonical_tool_signature(call: ToolCallSpec) -> str:
@@ -182,8 +188,10 @@ class AdaptiveLoopController:
                 item.kind == inspect.Parameter.VAR_KEYWORD
                 for item in parameters.values()
             )
-            if not accepts_kwargs and "evidence_records" not in parameters:
-                kwargs.pop("evidence_records", None)
+            if not accepts_kwargs:
+                for key in tuple(kwargs):
+                    if key not in parameters:
+                        kwargs.pop(key, None)
         except (TypeError, ValueError):
             # Dynamic provider adapters are expected to accept the current contract.
             pass
@@ -202,17 +210,37 @@ class AdaptiveLoopController:
         normalize_observation: Callable[[ToolObservation], list[KnowledgeObservation]],
         initial_intent: AgentIntent | None = None,
         evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
+        goal: AgentGoal | dict[str, Any] | None = None,
+        goal_aware: bool | None = None,
     ) -> AdaptiveLoopResult:
         tracker = (
             EvidenceTracker.from_records(evidence_records)
             if evidence_records
             else EvidenceTracker.from_observations(observations)
         )
+        goal_aware = (
+            bool(goal_aware)
+            if goal_aware is not None
+            else goal is not None or initial_plan.goal is not None
+        )
+        request_goal = normalize_goal(
+            goal or initial_plan.goal,
+            initial_plan.intent,
+            target=initial_plan.task_name,
+        )
+        goal_evaluation = evaluate_goal_progress(
+            request_goal,
+            tracker.records,
+            observations,
+            knowledge,
+        )
         result = AdaptiveLoopResult(
             observations=list(observations),
             knowledge=list(knowledge),
             evidence_records=list(tracker.records),
             current_intent=initial_intent or initial_plan.intent,
+            goal=request_goal,
+            goal_evaluation=goal_evaluation,
         )
         available_tools = {
             str(item.get("name"))
@@ -243,6 +271,8 @@ class AdaptiveLoopController:
                     current_intent=result.current_intent,
                     adaptive_steps=list(result.steps[-8:]),
                     evidence_records=tracker.summary(),
+                    goal=request_goal.model_dump(mode="json"),
+                    goal_evaluation=goal_evaluation.model_dump(mode="json"),
                 )
                 if not isinstance(decision, AgentStepDecision):
                     decision = AgentStepDecision.model_validate(decision)
@@ -267,6 +297,10 @@ class AdaptiveLoopController:
                 "evidence_before": tracker.coverage(),
                 "evidence_after": tracker.coverage(),
                 "termination_reason": None,
+                "goal_type": request_goal.goal_type.value,
+                "goal_state_before": goal_evaluation.state.value,
+                "goal_satisfied_conditions": list(goal_evaluation.satisfied_conditions),
+                "goal_missing_conditions": list(goal_evaluation.missing_conditions),
                 "remaining_steps": remaining_steps,
                 "remaining_tool_calls": remaining_tools,
             }
@@ -296,10 +330,31 @@ class AdaptiveLoopController:
                 result.steps[-1]["current_intent_after"] = result.current_intent.value
 
             if decision.action == AgentStepAction.FINISH:
-                result.evidence_sufficient = bool(decision.evidence_sufficient)
-                result.termination_reason = "agent_finished"
+                goal_evaluation = evaluate_goal_progress(
+                    request_goal,
+                    tracker.records,
+                    result.observations,
+                    result.knowledge,
+                )
+                result.goal_evaluation = goal_evaluation
+                result.evidence_sufficient = goal_evaluation.state == GoalProgress.SATISFIED
+                result.termination_reason = (
+                    ("goal_satisfied" if result.evidence_sufficient else "goal_incomplete")
+                    if goal_aware
+                    else "agent_finished"
+                )
                 decision_data["termination_reason"] = result.termination_reason
+                decision_data["goal_state_after"] = goal_evaluation.state.value
+                decision_data["goal_satisfied_conditions"] = list(goal_evaluation.satisfied_conditions)
+                decision_data["goal_missing_conditions"] = list(goal_evaluation.missing_conditions)
                 result.steps[-1]["termination_reason"] = result.termination_reason
+                result.steps[-1].update(
+                    {
+                        "goal_state_after": goal_evaluation.state.value,
+                        "goal_satisfied_conditions": list(goal_evaluation.satisfied_conditions),
+                        "goal_missing_conditions": list(goal_evaluation.missing_conditions),
+                    }
+                )
                 break
 
             call = decision.tool_call
@@ -373,10 +428,23 @@ class AdaptiveLoopController:
             for observation in new_observations:
                 tracker.record_tool_observation(observation)
             result.evidence_records = list(tracker.records)
+            goal_evaluation = evaluate_goal_progress(
+                request_goal,
+                tracker.records,
+                result.observations,
+                result.knowledge,
+            )
+            result.goal_evaluation = goal_evaluation
             decision_data["evidence_after"] = tracker.coverage()
+            decision_data["goal_state_after"] = goal_evaluation.state.value
+            decision_data["goal_satisfied_conditions"] = list(goal_evaluation.satisfied_conditions)
+            decision_data["goal_missing_conditions"] = list(goal_evaluation.missing_conditions)
             result.steps[-1].update(
                 {
                     "evidence_after": decision_data["evidence_after"],
+                    "goal_state_after": goal_evaluation.state.value,
+                    "goal_satisfied_conditions": list(goal_evaluation.satisfied_conditions),
+                    "goal_missing_conditions": list(goal_evaluation.missing_conditions),
                     **({"repetition_warning": repetition_warning} if repetition_warning else {}),
                 }
             )
@@ -419,6 +487,26 @@ class AdaptiveLoopController:
 
         if result.termination_reason == "unknown":
             result.termination_reason = "step_budget_exhausted"
+        if result.goal_evaluation is None:
+            result.goal_evaluation = goal_evaluation
+        if (
+            result.goal_evaluation.state != GoalProgress.SATISFIED
+            and result.termination_reason
+            in {
+                "tool_budget_exhausted",
+                "step_budget_exhausted",
+                "duplicate_tool_limit",
+                "consecutive_tool_failures",
+                "decision_error",
+                "unsafe_adaptive_decision",
+            }
+        ):
+            result.goal_evaluation = result.goal_evaluation.model_copy(
+                update={
+                    "state": GoalProgress.BLOCKED,
+                    "summary": f"Goal blocked by adaptive termination: {result.termination_reason}.",
+                }
+            )
         self._trace(
             "adaptive_termination",
             status="ok" if result.evidence_sufficient else "incomplete",
@@ -429,6 +517,10 @@ class AdaptiveLoopController:
                 "evidence_sufficient": result.evidence_sufficient,
                 "evidence_coverage": tracker.coverage(),
                 "repetition_warning_count": len(result.repetition_warnings),
+                "goal_type": request_goal.goal_type.value,
+                "goal_state": result.goal_evaluation.state.value if result.goal_evaluation else None,
+                "goal_missing_conditions": result.goal_evaluation.missing_conditions if result.goal_evaluation else [],
+                "termination_reason": result.termination_reason,
             },
         )
         return result

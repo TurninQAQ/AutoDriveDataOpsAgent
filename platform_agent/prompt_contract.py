@@ -11,6 +11,19 @@ EVIDENCE_ROUTING_CONTRACT = """Evidence routing taxonomy (classify the user's go
 Distinguish evidence goals even when words overlap: 'GPU Reservation 是什么？' is STATIC_KNOWLEDGE and uses search_knowledge; '现在 GPU0 上有哪些 Reservation？' is LIVE_GPU_STATE and uses get_gpu_pool."""
 
 
+GOAL_INTERPRETATION_CONTRACT = """Goal interpretation contract:
+- Intent describes the current platform/evidence routing class; Goal describes the user's final requested outcome.
+- Return one request-level goal using the GoalType enum. Do not use subsystem names such as GPU or Queue as a goal type.
+- ANSWER_KNOWLEDGE means the user wants a definition, mechanism, architecture, rule or runbook explanation without a current-state claim.
+- REPORT_LIVE_STATE means the user wants a current operational fact or status; DIAGNOSE_ROOT_CAUSE means a concrete task/stage failure or blockage must be explained from explicit diagnosis evidence.
+- EXPLAIN_WITH_PLATFORM_RULES means the same request explicitly asks for both current operational evidence and a static platform rule/mechanism explanation. It is not a synonym for any request containing a GPU or task word.
+- VERIFY_RECOVERY_STATE means the user asks whether a named task is currently recovered/healthy, requiring current task evidence plus recovery/checkpoint/execution evidence.
+- PREPARE_TASK_PLAN means configuration generation/validation without execution; PREPARE_WRITE_ACTION means preparing an explicit mutation for HITL approval; GENERAL_ASSISTANCE needs no platform fact.
+- Keep goal.target to a concrete user-provided task identity when one exists; never invent an identity.
+- Goal success criteria are derived deterministically by the workflow. Do not turn success_criteria into a tool list or a write instruction.
+- The request-level Goal is fixed during this request. Adaptive steps may revise read-only intent, but may not revise or replace the Goal."""
+
+
 ADAPTIVE_EVIDENCE_CONTRACT = """Adaptive evidence contract:
 - You are choosing the next evidence action after observing the current trajectory, not writing a hidden chain-of-thought or re-planning the whole request.
 - Return exactly one action: CALL_TOOL with one read-only ToolCallSpec, or FINISH with no tool_call.

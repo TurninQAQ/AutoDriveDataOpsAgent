@@ -10,7 +10,7 @@ from platform_integrations.gemini_retry import retry_async
 
 from .model import build_adaptive_evidence_prompt
 from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, KnowledgeObservation, ToolObservation
-from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -102,6 +102,7 @@ Hard constraints:
 - restart and any other mutation remain unsupported_write.
 - Current system facts must come from tools, never from memory or guesswork.
 {EVIDENCE_ROUTING_CONTRACT}
+{GOAL_INTERPRETATION_CONTRACT}
 - For task_planning, task_draft may use these keys: task_prefix, task_type, priority, pipeline_stages, max_active_runs, timeout_min, gpu_ids, gpu_stage_memory_mb, exclusive_gpu_stages, shared_gpu_stages, images, dataset_paths, dataset_names, explicit_fields.
 - Prefer diagnose_task for task-wide failures or stuck tasks.
 - Prefer get_stage_logs only when log evidence is useful.
@@ -132,6 +133,8 @@ USER_REQUEST:
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records=None,
+        goal=None,
+        goal_evaluation=None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -145,6 +148,8 @@ USER_REQUEST:
             current_intent=current_intent,
             adaptive_steps=adaptive_steps,
             evidence_records=evidence_records,
+            goal=goal,
+            goal_evaluation=goal_evaluation,
         )
         return await self._structured(prompt, AgentStepDecision)
 

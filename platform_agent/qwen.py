@@ -12,7 +12,7 @@ from platform_integrations.model_retry import ModelRequestError, ModelRetryPolic
 
 from .model import build_adaptive_evidence_prompt
 from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, KnowledgeObservation, ToolObservation
-from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -143,6 +143,7 @@ Hard constraints:
 - Local task planning is intent=task_planning with tool_calls=[] and task_draft containing only values explicitly present in the user request.
 - restart and other mutations remain unsupported_write.
 {EVIDENCE_ROUTING_CONTRACT}
+{GOAL_INTERPRETATION_CONTRACT}
 - Prefer diagnose_task for task-wide failures or stuck tasks; prefer get_stage_logs only when log evidence is useful.
 - Keep the read-only impact-analysis plan small, normally 1-3 calls.
 - For set_task_priority never invent a numeric priority. If absent, write_action.priority must be null.
@@ -173,6 +174,8 @@ Return JSON only.
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records=None,
+        goal=None,
+        goal_evaluation=None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -186,6 +189,8 @@ Return JSON only.
             current_intent=current_intent,
             adaptive_steps=adaptive_steps,
             evidence_records=evidence_records,
+            goal=goal,
+            goal_evaluation=goal_evaluation,
         )
         return await self._structured(prompt, AgentStepDecision)
 

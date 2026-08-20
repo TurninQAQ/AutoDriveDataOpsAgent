@@ -49,6 +49,16 @@ def _observation_summary(observation: ToolObservation) -> str:
     return f"{observation.tool_name} returned a successful observation."
 
 
+def _has_non_empty_key(data: Any, keys: set[str]) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return any(
+        value not in (None, "", [], {}, ())
+        for key, value in data.items()
+        if str(key).lower() in keys
+    )
+
+
 @dataclass
 class EvidenceTracker:
     """Accumulate abstract evidence coverage without routing policy."""
@@ -96,6 +106,45 @@ class EvidenceTracker:
                 source_tool=observation.tool_name,
                 timestamp=time.time(),
                 summary=_observation_summary(observation),
+            )
+            self.records.append(record)
+            created.append(record)
+        if observation.tool_name in {"diagnose_task", "get_stage_logs"} and _has_non_empty_key(
+            observation.data,
+            {"diagnosis", "root_cause", "rootcause", "reason", "failure_reason", "cause"},
+        ):
+            record = EvidenceRecord(
+                type=EvidenceType.DIAGNOSIS,
+                source_tool=observation.tool_name,
+                timestamp=time.time(),
+                summary=f"{observation.tool_name} returned explicit diagnosis evidence.",
+            )
+            self.records.append(record)
+            created.append(record)
+        if observation.tool_name in {
+            "diagnose_task",
+            "get_task_detail",
+            "get_queue_state",
+            "get_stage_logs",
+            "inspect_task_containers",
+        } and _has_non_empty_key(
+            observation.data,
+            {
+                "recovery",
+                "recovery_state",
+                "recovery_runs",
+                "checkpoint",
+                "checkpoint_state",
+                "resume",
+                "resumed",
+                "recovered",
+            },
+        ):
+            record = EvidenceRecord(
+                type=EvidenceType.RECOVERY_STATE,
+                source_tool=observation.tool_name,
+                timestamp=time.time(),
+                summary=f"{observation.tool_name} returned recovery/checkpoint evidence.",
             )
             self.records.append(record)
             created.append(record)

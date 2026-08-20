@@ -39,6 +39,8 @@ class EvidenceType(str, Enum):
     LIVE_LOG = "LIVE_LOG"
     LIVE_CONTAINER = "LIVE_CONTAINER"
     PLATFORM_HEALTH = "PLATFORM_HEALTH"
+    DIAGNOSIS = "DIAGNOSIS"
+    RECOVERY_STATE = "RECOVERY_STATE"
 
 
 class EvidenceRecord(BaseModel):
@@ -51,6 +53,42 @@ class EvidenceRecord(BaseModel):
 
     def as_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+class GoalType(str, Enum):
+    ANSWER_KNOWLEDGE = "ANSWER_KNOWLEDGE"
+    REPORT_LIVE_STATE = "REPORT_LIVE_STATE"
+    DIAGNOSE_ROOT_CAUSE = "DIAGNOSE_ROOT_CAUSE"
+    EXPLAIN_WITH_PLATFORM_RULES = "EXPLAIN_WITH_PLATFORM_RULES"
+    VERIFY_RECOVERY_STATE = "VERIFY_RECOVERY_STATE"
+    PREPARE_TASK_PLAN = "PREPARE_TASK_PLAN"
+    PREPARE_WRITE_ACTION = "PREPARE_WRITE_ACTION"
+    GENERAL_ASSISTANCE = "GENERAL_ASSISTANCE"
+
+
+class GoalProgress(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    SATISFIED = "SATISFIED"
+    BLOCKED = "BLOCKED"
+
+
+class AgentGoal(BaseModel):
+    """A request-level user outcome, not a tool-routing instruction."""
+
+    goal_type: GoalType
+    target: str | None = None
+    success_criteria: list[str] = Field(default_factory=list)
+    completion_state: GoalProgress = GoalProgress.NOT_STARTED
+
+
+class GoalEvaluation(BaseModel):
+    """Deterministic, bounded goal progress produced from observed evidence."""
+
+    state: GoalProgress
+    satisfied_conditions: list[str] = Field(default_factory=list)
+    missing_conditions: list[str] = Field(default_factory=list)
+    summary: str = Field(default="", max_length=500)
 
 
 class ToolCallSpec(BaseModel):
@@ -69,6 +107,7 @@ class AgentPlan(BaseModel):
             "explicit request to submit/start execution."
         )
     )
+    goal: AgentGoal | None = None
     task_name: str | None = None
     dataset_name: str | None = None
     stage: str | None = None
@@ -140,6 +179,8 @@ class AgentResponse(BaseModel):
     evidence_sufficient: bool | None = None
     initial_plan: dict[str, Any] | None = None
     adaptive_steps: list[dict[str, Any]] = Field(default_factory=list)
+    goal: AgentGoal | None = None
+    goal_progress: GoalProgress | None = None
 
 
 class ConversationTurn(BaseModel):

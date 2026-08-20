@@ -10,6 +10,7 @@ from platform_integrations.model_retry import ModelRetryPolicy
 
 from .models import (
     AgentIntent,
+    AgentGoal,
     AgentPlan,
     AgentResponse,
     AgentStepDecision,
@@ -18,8 +19,9 @@ from .models import (
     ToolObservation,
     KnowledgeObservation,
     EvidenceRecord,
+    GoalEvaluation,
 )
-from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
 from .prompt_contract import ADAPTIVE_EVIDENCE_CONTRACT
 
 
@@ -48,6 +50,8 @@ class ReadOnlyAgentModel(Protocol):
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
+        goal: AgentGoal | dict[str, Any] | None = None,
+        goal_evaluation: GoalEvaluation | dict[str, Any] | None = None,
     ) -> AgentStepDecision:
         ...
 
@@ -129,6 +133,8 @@ def build_adaptive_evidence_prompt(
     current_intent: AgentIntent | None = None,
     adaptive_steps: list[dict[str, Any]] | None = None,
     evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
+    goal: AgentGoal | dict[str, Any] | None = None,
+    goal_evaluation: GoalEvaluation | dict[str, Any] | None = None,
 ) -> str:
     """Build the provider-neutral next-evidence prompt.
 
@@ -180,10 +186,20 @@ def build_adaptive_evidence_prompt(
         for item in evidence_summary
         if item.get("type")
     ))
+    goal_payload = goal.model_dump(mode="json") if isinstance(goal, AgentGoal) else goal
+    if goal_payload is None:
+        goal_payload = initial_plan.goal.model_dump(mode="json") if initial_plan.goal else None
+    goal_evaluation_payload = (
+        goal_evaluation.model_dump(mode="json")
+        if isinstance(goal_evaluation, GoalEvaluation)
+        else goal_evaluation
+    )
 
     return f"""You are the adaptive evidence decision node of a guarded DataOps Agent.
 
 {ADAPTIVE_EVIDENCE_CONTRACT}
+
+{GOAL_INTERPRETATION_CONTRACT}
 
 At most one tool is allowed in this decision. Return only the requested
 AgentStepDecision JSON object.
@@ -196,6 +212,12 @@ INITIAL_INTENT:
 
 CURRENT_INTENT:
 {current_intent_value}
+
+REQUEST_GOAL (fixed for this request):
+{json.dumps(goal_payload, ensure_ascii=False, indent=2, default=str)}
+
+GOAL_PROGRESS:
+{json.dumps(goal_evaluation_payload, ensure_ascii=False, indent=2, default=str)}
 
 CURRENT_EVIDENCE_COVERAGE:
 {json.dumps(evidence_types, ensure_ascii=False)}
@@ -771,6 +793,7 @@ Hard constraints:
 - restart and any other mutation remain unsupported_write.
 - Current system facts must come from tools, never from memory or guesswork.
 {EVIDENCE_ROUTING_CONTRACT}
+{GOAL_INTERPRETATION_CONTRACT}
 - For task_planning, task_draft may use these keys: task_prefix, task_type, priority, pipeline_stages, max_active_runs, timeout_min, gpu_ids, gpu_stage_memory_mb, exclusive_gpu_stages, shared_gpu_stages, images, dataset_paths, dataset_names, explicit_fields.
 - Prefer diagnose_task for task-wide failures or stuck tasks.
 - Prefer get_stage_logs only when log evidence is useful.
@@ -802,6 +825,8 @@ USER_REQUEST:
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
+        goal: AgentGoal | dict[str, Any] | None = None,
+        goal_evaluation: GoalEvaluation | dict[str, Any] | None = None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -815,6 +840,8 @@ USER_REQUEST:
             current_intent=current_intent,
             adaptive_steps=adaptive_steps,
             evidence_records=evidence_records,
+            goal=goal,
+            goal_evaluation=goal_evaluation,
         )
         result = await self.step_llm.ainvoke(prompt)
         return result if isinstance(result, AgentStepDecision) else AgentStepDecision.model_validate(result)
