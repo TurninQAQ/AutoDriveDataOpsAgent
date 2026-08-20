@@ -109,6 +109,7 @@ class AgentGraphState(TypedDict, total=False):
     evidence_sufficient: bool
     termination_reason: str
     adaptive_errors: list[str]
+    evidence_records: list[dict[str, Any]]
 
 
 class ReadOnlyAgentNodes:
@@ -299,6 +300,7 @@ class ReadOnlyAgentNodes:
         plan = self.validate_plan(AgentPlan.model_validate(state["plan"]))
         observations = [ToolObservation.model_validate(item) for item in state.get("observations", [])]
         knowledge = [KnowledgeObservation.model_validate(item) for item in state.get("knowledge", [])]
+        evidence_records = list(state.get("evidence_records", []))
         trace_id = state.get("trace_id", "")
 
         def trace_event(name: str, *, status: str = "ok", data: dict[str, Any] | None = None) -> None:
@@ -325,6 +327,7 @@ class ReadOnlyAgentNodes:
             execute_tool=execute_one,
             normalize_observation=normalize_search_knowledge,
             initial_intent=plan.intent,
+            evidence_records=evidence_records,
         )
         return {
             "observations": [item.model_dump(mode="json") for item in result.observations],
@@ -336,6 +339,7 @@ class ReadOnlyAgentNodes:
             "evidence_sufficient": result.evidence_sufficient,
             "termination_reason": result.termination_reason,
             "adaptive_errors": result.errors,
+            "evidence_records": [item.as_dict() for item in result.evidence_records],
         }
 
     @staticmethod
@@ -643,6 +647,7 @@ class BaseReadOnlyAgent:
             "adaptive_step_count": 0,
             "tool_call_count": 0,
             "evidence_sufficient": False,
+            "evidence_records": [],
             "trace_id": trace_id,
         }
 

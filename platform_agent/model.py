@@ -17,6 +17,7 @@ from .models import (
     ToolCallSpec,
     ToolObservation,
     KnowledgeObservation,
+    EvidenceRecord,
 )
 from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
 from .prompt_contract import ADAPTIVE_EVIDENCE_CONTRACT
@@ -46,6 +47,7 @@ class ReadOnlyAgentModel(Protocol):
         remaining_tool_calls: int,
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
+        evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
     ) -> AgentStepDecision:
         ...
 
@@ -126,6 +128,7 @@ def build_adaptive_evidence_prompt(
     remaining_tool_calls: int,
     current_intent: AgentIntent | None = None,
     adaptive_steps: list[dict[str, Any]] | None = None,
+    evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
 ) -> str:
     """Build the provider-neutral next-evidence prompt.
 
@@ -149,10 +152,34 @@ def build_adaptive_evidence_prompt(
                     "revised_intent",
                     "evidence_sufficient",
                     "decision_summary",
+                    "evidence_before",
+                    "evidence_after",
+                    "repetition_warning",
+                    "termination_reason",
                 )
                 if key in item
             }
         )
+
+    evidence_summary = []
+    for item in evidence_records or []:
+        if isinstance(item, EvidenceRecord):
+            evidence_summary.append(item.as_dict())
+        elif isinstance(item, dict):
+            # Keep the prompt to the bounded EvidenceRecord contract even if a
+            # caller passes a richer internal mapping.
+            evidence_summary.append(
+                {
+                    key: item[key]
+                    for key in ("type", "source_tool", "timestamp", "summary")
+                    if key in item
+                }
+            )
+    evidence_types = list(dict.fromkeys(
+        str(item.get("type"))
+        for item in evidence_summary
+        if item.get("type")
+    ))
 
     return f"""You are the adaptive evidence decision node of a guarded DataOps Agent.
 
@@ -169,6 +196,12 @@ INITIAL_INTENT:
 
 CURRENT_INTENT:
 {current_intent_value}
+
+CURRENT_EVIDENCE_COVERAGE:
+{json.dumps(evidence_types, ensure_ascii=False)}
+
+EVIDENCE_RECORDS (bounded audit summaries, not full tool results):
+{json.dumps(evidence_summary[-8:], ensure_ascii=False, indent=2, default=str)}
 
 PREVIOUS_ADAPTIVE_DECISIONS (structured audit context, not hidden reasoning):
 {json.dumps(previous_steps, ensure_ascii=False, indent=2, default=str)}
@@ -768,6 +801,7 @@ USER_REQUEST:
         remaining_tool_calls: int,
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
+        evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -780,6 +814,7 @@ USER_REQUEST:
             remaining_tool_calls=remaining_tool_calls,
             current_intent=current_intent,
             adaptive_steps=adaptive_steps,
+            evidence_records=evidence_records,
         )
         result = await self.step_llm.ainvoke(prompt)
         return result if isinstance(result, AgentStepDecision) else AgentStepDecision.model_validate(result)

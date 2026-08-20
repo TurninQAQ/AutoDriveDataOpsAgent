@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.5.x Adaptive Agent Capability Completion Phase — 2026-08-21
+
+1. 在不改变 MCP Tool、RAG、Frozen Golden 或 Write Safety 的前提下，新增 bounded Evidence Tracking：将成功的只读 Tool Observation 映射为 `LIVE_TASK`、`LIVE_GPU`、`STATIC_KNOWLEDGE` 等 Evidence Type。
+2. Adaptive 下一步 Prompt 现在可观察当前 Evidence Coverage；缺失 Evidence 不会触发 workflow hard-code 或 forced routing。
+3. 增强 Adaptive trace 的 evidence-before/evidence-after、终止原因和 bounded semantic search repetition warning；不记录 hidden reasoning。
+4. 非正式 smoke 应使用 `qwen3.7-plus` 或 `qwen-max`，不得冒充冻结的 qwen-plus formal baseline；V1.5.2 的正式 qwen-plus 状态仍由 provider availability 单独决定。
+
 v1.5.2 2026-08-20：Resumable Adaptive Evaluation & Baseline Completion
 1. 新增 Case-level resumable Adaptive Evaluation runner；每个 Case 使用独立 runtime/thread/fixture，Provider/Agent failure 不阻断后续 Case。
 2. 新增原子 manifest、per-case COMPLETE checkpoint、failed attempt artifact、resume compatibility validation 和 full/partial finalize 语义。

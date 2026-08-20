@@ -8,7 +8,9 @@ rules without creating a second policy engine.
 
 from __future__ import annotations
 
+import inspect
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -25,6 +27,7 @@ from .models import (
     ToolCallSpec,
     ToolObservation,
 )
+from .evidence import EvidenceRecord, EvidenceTracker
 
 
 READ_ONLY_INTENTS = frozenset(
@@ -59,12 +62,14 @@ class AdaptiveLimits:
 class AdaptiveLoopResult:
     observations: list[ToolObservation] = field(default_factory=list)
     knowledge: list[KnowledgeObservation] = field(default_factory=list)
+    evidence_records: list[EvidenceRecord] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
     current_intent: AgentIntent | None = None
     evidence_sufficient: bool = False
     termination_reason: str = "unknown"
     tool_call_count: int = 0
     errors: list[str] = field(default_factory=list)
+    repetition_warnings: list[str] = field(default_factory=list)
 
 
 def canonical_tool_signature(call: ToolCallSpec) -> str:
@@ -82,6 +87,51 @@ def canonical_tool_signature(call: ToolCallSpec) -> str:
 def _decision_summary(value: str) -> str:
     # Tracing must stay auditable without turning the field into a reasoning dump.
     return " ".join(str(value or "").split())[:500]
+
+
+def _query_tokens(value: Any) -> set[str]:
+    """Normalize short retrieval queries without embedding/model calls."""
+
+    return set(re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", str(value or "").lower()))
+
+
+def _semantic_repetition_warning(
+    call: ToolCallSpec,
+    recent_calls: list[ToolCallSpec],
+    *,
+    minimum_repetitions: int = 2,
+    overlap_threshold: float = 0.8,
+) -> str | None:
+    """Warn on a third consecutive, highly overlapping search.
+
+    This is intentionally advisory.  The controller does not force a tool
+    switch or FINISH; the next model decision receives the warning in its
+    structured audit context.
+    """
+
+    if call.name != "search_knowledge":
+        return None
+    query = _query_tokens(call.arguments.get("query"))
+    if not query:
+        return None
+    same_tool: list[ToolCallSpec] = []
+    for previous in reversed(recent_calls):
+        if previous.name != call.name:
+            break
+        same_tool.append(previous)
+    if len(same_tool) < minimum_repetitions:
+        return None
+    for previous in same_tool[:minimum_repetitions]:
+        previous_query = _query_tokens(previous.arguments.get("query"))
+        if not previous_query:
+            return None
+        overlap = len(query & previous_query) / max(1, min(len(query), len(previous_query)))
+        if overlap < overlap_threshold:
+            return None
+    return (
+        "Recent search_knowledge calls are semantically repetitive; "
+        "consider another evidence type or FINISH."
+    )
 
 
 class AdaptiveLoopController:
@@ -122,6 +172,23 @@ class AdaptiveLoopController:
             raise PermissionError(f"Adaptive decision selected unavailable tool: {call.name}")
         self.policy.validate_tool_name(call.name)
 
+    async def _decide_next(self, **kwargs) -> AgentStepDecision:
+        """Call providers while keeping old explicit fake-model signatures usable."""
+
+        decide = self.model.decide_next
+        try:
+            parameters = inspect.signature(decide).parameters
+            accepts_kwargs = any(
+                item.kind == inspect.Parameter.VAR_KEYWORD
+                for item in parameters.values()
+            )
+            if not accepts_kwargs and "evidence_records" not in parameters:
+                kwargs.pop("evidence_records", None)
+        except (TypeError, ValueError):
+            # Dynamic provider adapters are expected to accept the current contract.
+            pass
+        return await decide(**kwargs)
+
     async def run(
         self,
         *,
@@ -134,10 +201,17 @@ class AdaptiveLoopController:
         execute_tool: Callable[[ToolCallSpec], Awaitable[list[ToolObservation]]],
         normalize_observation: Callable[[ToolObservation], list[KnowledgeObservation]],
         initial_intent: AgentIntent | None = None,
+        evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
     ) -> AdaptiveLoopResult:
+        tracker = (
+            EvidenceTracker.from_records(evidence_records)
+            if evidence_records
+            else EvidenceTracker.from_observations(observations)
+        )
         result = AdaptiveLoopResult(
             observations=list(observations),
             knowledge=list(knowledge),
+            evidence_records=list(tracker.records),
             current_intent=initial_intent or initial_plan.intent,
         )
         available_tools = {
@@ -146,6 +220,7 @@ class AdaptiveLoopController:
             if isinstance(item, dict) and item.get("name")
         }
         successful_signatures: Counter[str] = Counter()
+        executed_calls: list[ToolCallSpec] = []
         consecutive_failures = 0
 
         for step_index in range(self.limits.max_steps):
@@ -156,7 +231,7 @@ class AdaptiveLoopController:
             remaining_steps = self.limits.max_steps - step_index
             remaining_tools = self.limits.max_tool_calls - result.tool_call_count
             try:
-                decision = await self.model.decide_next(
+                decision = await self._decide_next(
                     user_text=user_text,
                     initial_plan=initial_plan,
                     tool_descriptions=tool_descriptions,
@@ -167,6 +242,7 @@ class AdaptiveLoopController:
                     remaining_tool_calls=remaining_tools,
                     current_intent=result.current_intent,
                     adaptive_steps=list(result.steps[-8:]),
+                    evidence_records=tracker.summary(),
                 )
                 if not isinstance(decision, AgentStepDecision):
                     decision = AgentStepDecision.model_validate(decision)
@@ -188,6 +264,9 @@ class AdaptiveLoopController:
                 "evidence_sufficient": decision.evidence_sufficient,
                 "revised_intent": decision.revised_intent.value if decision.revised_intent else None,
                 "decision_summary": summary,
+                "evidence_before": tracker.coverage(),
+                "evidence_after": tracker.coverage(),
+                "termination_reason": None,
                 "remaining_steps": remaining_steps,
                 "remaining_tool_calls": remaining_tools,
             }
@@ -203,6 +282,7 @@ class AdaptiveLoopController:
                 result.errors.append(str(exc))
                 result.evidence_sufficient = False
                 result.termination_reason = "unsafe_adaptive_decision"
+                result.steps[-1]["termination_reason"] = result.termination_reason
                 self._trace(
                     "adaptive_decision",
                     status="blocked",
@@ -212,14 +292,33 @@ class AdaptiveLoopController:
 
             if decision.revised_intent is not None:
                 result.current_intent = decision.revised_intent
+                decision_data["current_intent_after"] = result.current_intent.value
+                result.steps[-1]["current_intent_after"] = result.current_intent.value
 
             if decision.action == AgentStepAction.FINISH:
                 result.evidence_sufficient = bool(decision.evidence_sufficient)
                 result.termination_reason = "agent_finished"
+                decision_data["termination_reason"] = result.termination_reason
+                result.steps[-1]["termination_reason"] = result.termination_reason
                 break
 
             call = decision.tool_call
             assert call is not None  # validated above
+            repetition_warning = _semantic_repetition_warning(call, executed_calls)
+            if repetition_warning:
+                result.repetition_warnings.append(repetition_warning)
+                decision_data["repetition_warning"] = repetition_warning
+                self._trace(
+                    "adaptive_repetition_warning",
+                    status="warning",
+                    data={
+                        "step": step_index,
+                        "tool": call.name,
+                        "arguments": call.arguments,
+                        "warning": repetition_warning,
+                        "evidence_before": tracker.coverage(),
+                    },
+                )
             signature = canonical_tool_signature(call)
             if successful_signatures[signature] >= self.limits.max_identical_tool_calls:
                 result.errors.append(
@@ -227,6 +326,8 @@ class AdaptiveLoopController:
                 )
                 result.evidence_sufficient = False
                 result.termination_reason = "duplicate_tool_limit"
+                decision_data["termination_reason"] = result.termination_reason
+                result.steps[-1]["termination_reason"] = result.termination_reason
                 self._trace(
                     "adaptive_termination",
                     status="blocked",
@@ -239,6 +340,7 @@ class AdaptiveLoopController:
                 break
 
             result.tool_call_count += 1
+            executed_calls.append(call)
             try:
                 new_observations = await execute_tool(call)
             except Exception as exc:
@@ -268,6 +370,17 @@ class AdaptiveLoopController:
                 seen = {item.chunk_id for item in result.knowledge}
                 result.knowledge.extend(item for item in normalized if item.chunk_id not in seen)
 
+            for observation in new_observations:
+                tracker.record_tool_observation(observation)
+            result.evidence_records = list(tracker.records)
+            decision_data["evidence_after"] = tracker.coverage()
+            result.steps[-1].update(
+                {
+                    "evidence_after": decision_data["evidence_after"],
+                    **({"repetition_warning": repetition_warning} if repetition_warning else {}),
+                }
+            )
+
             successful = all(item.ok for item in new_observations)
             if successful:
                 successful_signatures[signature] += 1
@@ -288,6 +401,9 @@ class AdaptiveLoopController:
                     "tool": call.name,
                     "arguments": call.arguments,
                     "observation_status": ["ok" if item.ok else "error" for item in new_observations],
+                    "evidence_before": decision_data["evidence_before"],
+                    "evidence_after": tracker.coverage(),
+                    "repetition_warning": repetition_warning,
                     "remaining_steps": max(0, self.limits.max_steps - step_index - 1),
                     "remaining_tool_calls": self.limits.max_tool_calls - result.tool_call_count,
                 },
@@ -295,6 +411,8 @@ class AdaptiveLoopController:
             if consecutive_failures >= self.limits.max_consecutive_tool_failures:
                 result.evidence_sufficient = False
                 result.termination_reason = "consecutive_tool_failures"
+                decision_data["termination_reason"] = result.termination_reason
+                result.steps[-1]["termination_reason"] = result.termination_reason
                 break
         else:
             result.termination_reason = "step_budget_exhausted"
@@ -309,6 +427,8 @@ class AdaptiveLoopController:
                 "step_count": len(result.steps),
                 "tool_call_count": result.tool_call_count,
                 "evidence_sufficient": result.evidence_sufficient,
+                "evidence_coverage": tracker.coverage(),
+                "repetition_warning_count": len(result.repetition_warnings),
             },
         )
         return result

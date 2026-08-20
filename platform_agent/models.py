@@ -31,6 +31,28 @@ class AgentStepAction(str, Enum):
     FINISH = "FINISH"
 
 
+class EvidenceType(str, Enum):
+    LIVE_TASK = "LIVE_TASK"
+    LIVE_GPU = "LIVE_GPU"
+    STATIC_KNOWLEDGE = "STATIC_KNOWLEDGE"
+    LIVE_QUEUE = "LIVE_QUEUE"
+    LIVE_LOG = "LIVE_LOG"
+    LIVE_CONTAINER = "LIVE_CONTAINER"
+    PLATFORM_HEALTH = "PLATFORM_HEALTH"
+
+
+class EvidenceRecord(BaseModel):
+    """Bounded evidence coverage metadata; never a full tool result."""
+
+    type: EvidenceType
+    source_tool: str
+    timestamp: float
+    summary: str = Field(default="", max_length=500)
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
 class ToolCallSpec(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)

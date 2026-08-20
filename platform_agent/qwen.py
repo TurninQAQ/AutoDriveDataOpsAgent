@@ -172,6 +172,7 @@ Return JSON only.
         remaining_tool_calls: int,
         current_intent: AgentIntent | None = None,
         adaptive_steps: list[dict[str, Any]] | None = None,
+        evidence_records=None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -184,6 +185,7 @@ Return JSON only.
             remaining_tool_calls=remaining_tool_calls,
             current_intent=current_intent,
             adaptive_steps=adaptive_steps,
+            evidence_records=evidence_records,
         )
         return await self._structured(prompt, AgentStepDecision)
 
