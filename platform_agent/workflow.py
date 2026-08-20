@@ -6,6 +6,7 @@ from typing import Any, TypedDict
 from platform_mcp.server import READ_ONLY_TOOL_NAMES
 
 from .actions import WRITE_INTENT_TO_TOOL, WriteActionCoordinator
+from .adaptive import AdaptiveLimits, AdaptiveLoopController, READ_ONLY_INTENTS
 from .memory import ConversationStore
 from .models import (
     AgentIntent,
@@ -101,6 +102,13 @@ class AgentGraphState(TypedDict, total=False):
     response: dict[str, Any]
     task_planning: dict[str, Any]
     trace_id: str
+    adaptive_steps: list[dict[str, Any]]
+    adaptive_step_count: int
+    tool_call_count: int
+    current_intent: str
+    evidence_sufficient: bool
+    termination_reason: str
+    adaptive_errors: list[str]
 
 
 class ReadOnlyAgentNodes:
@@ -121,6 +129,9 @@ class ReadOnlyAgentNodes:
         task_planning_service=None,
         action_coordinator: WriteActionCoordinator | None = None,
         trace_recorder=None,
+        max_steps: int = 8,
+        max_identical_tool_calls: int = 2,
+        max_consecutive_tool_failures: int = 2,
     ):
         self.model = model
         self.tool_client = tool_client
@@ -130,6 +141,12 @@ class ReadOnlyAgentNodes:
         self.task_planning_service = task_planning_service
         self.action_coordinator = action_coordinator
         self.trace_recorder = trace_recorder
+        self.adaptive_limits = AdaptiveLimits(
+            max_steps=max_steps,
+            max_tool_calls=policy.max_tool_calls,
+            max_identical_tool_calls=max_identical_tool_calls,
+            max_consecutive_tool_failures=max_consecutive_tool_failures,
+        )
         self._tool_descriptions: list[dict[str, Any]] | None = None
 
     @staticmethod
@@ -273,6 +290,54 @@ class ReadOnlyAgentNodes:
         observations = await self.tool_client.execute(plan.tool_calls)
         return {"observations": [item.model_dump(mode="json") for item in observations]}
 
+    def adaptive_supported(self) -> bool:
+        return callable(getattr(self.model, "decide_next", None))
+
+    async def adaptive_read(self, state: AgentGraphState) -> dict[str, Any]:
+        """Run the shared one-read-tool-per-step controller."""
+
+        plan = self.validate_plan(AgentPlan.model_validate(state["plan"]))
+        observations = [ToolObservation.model_validate(item) for item in state.get("observations", [])]
+        knowledge = [KnowledgeObservation.model_validate(item) for item in state.get("knowledge", [])]
+        trace_id = state.get("trace_id", "")
+
+        def trace_event(name: str, *, status: str = "ok", data: dict[str, Any] | None = None) -> None:
+            if self.trace_recorder is not None:
+                self.trace_recorder.record(trace_id, "adaptive", name, status=status, data=data or {})
+
+        async def execute_one(call):
+            self.policy.validate_tool_name(call.name)
+            return await self.tool_client.execute([call])
+
+        controller = AdaptiveLoopController(
+            self.model,
+            self.policy,
+            self.adaptive_limits,
+            trace_event=trace_event,
+        )
+        result = await controller.run(
+            user_text=state.get("user_text", ""),
+            initial_plan=plan,
+            tool_descriptions=await self._tools(),
+            observations=observations,
+            knowledge=knowledge,
+            history=self._history(state),
+            execute_tool=execute_one,
+            normalize_observation=normalize_search_knowledge,
+            initial_intent=plan.intent,
+        )
+        return {
+            "observations": [item.model_dump(mode="json") for item in result.observations],
+            "knowledge": [item.model_dump(mode="json") for item in result.knowledge],
+            "adaptive_steps": result.steps,
+            "adaptive_step_count": len(result.steps),
+            "tool_call_count": result.tool_call_count,
+            "current_intent": result.current_intent.value if result.current_intent else plan.intent.value,
+            "evidence_sufficient": result.evidence_sufficient,
+            "termination_reason": result.termination_reason,
+            "adaptive_errors": result.errors,
+        }
+
     @staticmethod
     def _trace(observations: list[ToolObservation]) -> list[dict[str, Any]]:
         return [
@@ -284,6 +349,29 @@ class ReadOnlyAgentNodes:
             }
             for item in observations
         ]
+
+    @staticmethod
+    def _attach_response_metadata(
+        response: AgentResponse,
+        plan: AgentPlan,
+        state: AgentGraphState,
+    ) -> AgentResponse:
+        response.initial_plan = plan.model_dump(mode="json")
+        if state.get("adaptive_step_count", 0):
+            response.termination_reason = state.get("termination_reason")
+            response.adaptive_step_count = int(state.get("adaptive_step_count", 0))
+            response.evidence_sufficient = bool(state.get("evidence_sufficient", False))
+            response.adaptive_steps = list(state.get("adaptive_steps", []))
+            for error in list(state.get("adaptive_errors", [])):
+                if error not in response.errors:
+                    response.errors.append(error)
+            if not response.evidence_sufficient:
+                reason = response.termination_reason or "adaptive evidence incomplete"
+                message = f"Adaptive evidence was not sufficient ({reason})."
+                if message not in response.errors:
+                    response.errors.append(message)
+                response.confidence = "low"
+        return response
 
     async def _task_planning_result(self, state: AgentGraphState, plan: AgentPlan):
         if self.task_planning_service is None:
@@ -426,7 +514,7 @@ class ReadOnlyAgentNodes:
 
         if plan.intent in WRITE_INTENTS:
             response = await self._write_answer(state, plan, observations)
-            return {"response": response.model_dump(mode="json")}
+            return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
 
         if plan.intent == AgentIntent.TASK_PLANNING:
             planning = await self._task_planning_result(state, plan)
@@ -438,7 +526,7 @@ class ReadOnlyAgentNodes:
                     blocked=True,
                     errors=["task planning service is not configured"],
                 )
-                return {"response": response.model_dump(mode="json")}
+                return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
             if self.trace_recorder is not None:
                 self.trace_recorder.record(
                     state.get("trace_id", ""), "planning", "task_planning", status="ok" if planning.valid else "invalid",
@@ -472,16 +560,28 @@ class ReadOnlyAgentNodes:
                 errors=errors + warnings,
                 task_plan=planning.model_dump(mode="json"),
             )
-            return {"response": response.model_dump(mode="json")}
+            return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
+
+        final_intent = plan.intent
+        if plan.intent in READ_ONLY_INTENTS and state.get("current_intent"):
+            try:
+                candidate = AgentIntent(state["current_intent"])
+                if candidate in READ_ONLY_INTENTS:
+                    final_intent = candidate
+            except ValueError:
+                pass
+        synthesis_plan = plan
+        if final_intent != plan.intent or state.get("adaptive_step_count", 0):
+            synthesis_plan = plan.model_copy(update={"intent": final_intent, "tool_calls": []})
 
         response = await self.model.synthesize(
             state.get("user_text", ""),
-            plan,
+            synthesis_plan,
             observations,
             self._history(state),
             knowledge,
         )
-        response.intent = plan.intent
+        response.intent = final_intent
         response.tool_trace = self._trace(observations)
         response.knowledge_sources = list(dict.fromkeys(item.citation for item in knowledge))
         response.retrieval_trace = [
@@ -501,16 +601,20 @@ class ReadOnlyAgentNodes:
             response.blocked = True
         for item in retrieval_errors:
             response.errors.append(f"knowledge retrieval: {item.content}")
-        return {"response": response.model_dump(mode="json")}
+        return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
 
     @staticmethod
     def route_after_plan(state: AgentGraphState) -> str:
+        # Keep the historical router result for lightweight fake LangGraph
+        # implementations. The real graph maps both branches to the compatibility
+        # retrieval node before applying the adaptive/legacy route.
         plan = AgentPlan.model_validate(state["plan"])
         return "tools" if plan.tool_calls else "answer"
 
-    @staticmethod
-    def route_after_retrieval(state: AgentGraphState) -> str:
+    def route_after_retrieval(self, state: AgentGraphState) -> str:
         plan = AgentPlan.model_validate(state["plan"])
+        if plan.intent in READ_ONLY_INTENTS and self.adaptive_supported():
+            return "adaptive"
         return "tools" if plan.tool_calls else "answer"
 
 
@@ -535,6 +639,10 @@ class BaseReadOnlyAgent:
             "history": [turn.model_dump(mode="json") for turn in history],
             "knowledge": [],
             "observations": [],
+            "adaptive_steps": [],
+            "adaptive_step_count": 0,
+            "tool_call_count": 0,
+            "evidence_sufficient": False,
             "trace_id": trace_id,
         }
 
@@ -601,14 +709,20 @@ class SequentialReadOnlyAgent(BaseReadOnlyAgent):
             if context is None:
                 state.update(await self.nodes.plan(state))
                 state.update(await self.nodes.retrieve_knowledge(state))
-                if self.nodes.route_after_retrieval(state) == "tools":
+                route = self.nodes.route_after_retrieval(state)
+                if route == "adaptive":
+                    state.update(await self.nodes.adaptive_read(state))
+                elif route == "tools":
                     state.update(await self.nodes.execute_tools(state))
                 state.update(await self.nodes.answer(state))
             else:
                 with context:
                     state.update(await self.nodes.plan(state))
                     state.update(await self.nodes.retrieve_knowledge(state))
-                    if self.nodes.route_after_retrieval(state) == "tools":
+                    route = self.nodes.route_after_retrieval(state)
+                    if route == "adaptive":
+                        state.update(await self.nodes.adaptive_read(state))
+                    elif route == "tools":
                         state.update(await self.nodes.execute_tools(state))
                     state.update(await self.nodes.answer(state))
             response = AgentResponse.model_validate(state["response"])
@@ -644,14 +758,16 @@ class LangGraphReadOnlyAgent(BaseReadOnlyAgent):
         builder.add_node("plan", self.nodes.plan)
         builder.add_node("retrieve", self.nodes.retrieve_knowledge)
         builder.add_node("tools", self.nodes.execute_tools)
+        builder.add_node("adaptive", self.nodes.adaptive_read)
         builder.add_node("answer", self.nodes.answer)
         builder.add_edge(START, "plan")
         builder.add_conditional_edges(
             "plan", self.nodes.route_after_plan, {"tools": "retrieve", "answer": "retrieve"}
         )
         builder.add_conditional_edges(
-            "retrieve", self.nodes.route_after_retrieval, {"tools": "tools", "answer": "answer"}
+            "retrieve", self.nodes.route_after_retrieval, {"adaptive": "adaptive", "tools": "tools", "answer": "answer"}
         )
+        builder.add_edge("adaptive", "answer")
         builder.add_edge("tools", "answer")
         builder.add_edge("answer", END)
         return builder.compile(checkpointer=InMemorySaver())
@@ -684,6 +800,9 @@ def build_agent_runtime(
     tool_client,
     conversation_store: ConversationStore,
     max_tool_calls: int = 6,
+    max_steps: int = 8,
+    max_identical_tool_calls: int = 2,
+    max_consecutive_tool_failures: int = 2,
     knowledge_retriever=None,
     knowledge_top_k: int = 5,
     task_planning_service=None,
@@ -706,6 +825,9 @@ def build_agent_runtime(
         task_planning_service=task_planning_service,
         action_coordinator=action_coordinator,
         trace_recorder=trace_recorder,
+        max_steps=max_steps,
+        max_identical_tool_calls=max_identical_tool_calls,
+        max_consecutive_tool_failures=max_consecutive_tool_failures,
     )
     runtime = (runtime or "langgraph").strip().lower()
     if runtime in {"sequential", "test"}:

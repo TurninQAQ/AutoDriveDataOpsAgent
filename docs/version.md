@@ -103,6 +103,15 @@ v1.1.0  2027-07-15:(new:None base:None)
 1. https://alidocs.dingtalk.com/i/nodes/kDnRL6jAJM33NdGrIqyYv7DQWyMoPYe1?utm_scene=team_space
 ## Agent 化开发版本
 
+### V1.5.0 — Adaptive Evidence Loop — 2026-08-20
+
+1. 将只读证据获取从一次性执行初始 Tool List 升级为 `Observe → Decide → One Read Tool → Observe` 自适应循环；`AgentPlan` 保留为初始意图、实体、TaskSpec 和写动作契约。
+2. 新增 `AgentStepDecision` 与共享 `AdaptiveLoopController`，支持只读 intent 修正、累计 ToolObservation/KnowledgeObservation、单步执行、重复调用/失败/步骤/Tool budget，以及终止时的低置信度保护。
+3. Qwen、Gemini、OpenAI-compatible Provider 共用 `ADAPTIVE_EVIDENCE_CONTRACT`；不记录 chain-of-thought。Heuristic Model 保留历史 single-shot compatibility path。
+4. Sequential 与 LangGraph 共用同一 Adaptive Controller；Write/HITL/Precondition/Verification 和 TaskPlanningService 路径不进入 Adaptive Read Loop。
+5. 新增 `eval/v1_5_0/adaptive_cases.jsonl`、Scenario fixture/trajectory metrics 和 collection runner；包含两条 V1.4.4 known-regression probes，但不混入 unseen aggregate。
+6. 当前 shell 未导出 DashScope 凭据；受控 runtime 环境中的一次真实 qwen-plus collection 在首个请求等待 proxy response headers 约 2.5 分钟后中止，记录为 `BLOCKED_NOT_VALIDATED`（观察到1次尝试、0次完成），未伪造 Adaptive 分数。详见 `docs/evaluation/V1.5.0_ADAPTIVE_EVIDENCE_LOOP.md`。
+
 ### V0.1 Platform Core
 1. 抽离 Task/Queue/Docker/GPU/Diagnosis Service 与 Gateway。
 2. CLI 主路径复用 Platform Core。

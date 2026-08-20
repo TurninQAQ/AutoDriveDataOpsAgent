@@ -12,6 +12,12 @@ from .argument_contract import (
     validate_tool_case,
     validate_tool_cases,
 )
+from .adaptive import (
+    aggregate_adaptive_results,
+    evaluate_adaptive_trajectory,
+    load_adaptive_cases,
+    validate_adaptive_cases,
+)
 
 __all__ = [
     "evaluate_agent_suite",
@@ -24,4 +30,8 @@ __all__ = [
     "evaluate_argument_contract",
     "validate_tool_case",
     "validate_tool_cases",
+    "aggregate_adaptive_results",
+    "evaluate_adaptive_trajectory",
+    "load_adaptive_cases",
+    "validate_adaptive_cases",
 ]

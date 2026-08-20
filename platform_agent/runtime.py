@@ -100,6 +100,9 @@ def build_default_agent():
         tool_client,
         memory,
         max_tool_calls=agent_settings.max_tool_calls,
+        max_steps=agent_settings.max_steps,
+        max_identical_tool_calls=agent_settings.max_identical_tool_calls,
+        max_consecutive_tool_failures=agent_settings.max_consecutive_tool_failures,
         # Production RAG is now selected through the read-only MCP
         # search_knowledge Tool. The workflow parameter remains optional for
         # legacy V0.5 tests and historical evaluation collectors.

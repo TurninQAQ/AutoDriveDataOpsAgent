@@ -20,6 +20,9 @@ class AgentSettings:
     model: str
     runtime: str
     max_tool_calls: int
+    max_steps: int
+    max_identical_tool_calls: int
+    max_consecutive_tool_failures: int
     session_dir: Path
     temperature: float
     openai_base_url: str | None
@@ -73,6 +76,9 @@ class AgentSettings:
             )
         runtime = os.environ.get("PLATFORM_AGENT_RUNTIME", "langgraph").strip().lower() or "langgraph"
         max_tool_calls = int(os.environ.get("PLATFORM_AGENT_MAX_TOOL_CALLS", "6"))
+        max_steps = int(os.environ.get("PLATFORM_AGENT_MAX_STEPS", "8"))
+        max_identical_tool_calls = int(os.environ.get("PLATFORM_AGENT_MAX_IDENTICAL_TOOL_CALLS", "2"))
+        max_consecutive_tool_failures = int(os.environ.get("PLATFORM_AGENT_MAX_CONSECUTIVE_TOOL_FAILURES", "2"))
         temperature = float(os.environ.get("PLATFORM_AGENT_TEMPERATURE", "0"))
         session_dir_raw = os.environ.get("PLATFORM_AGENT_SESSION_DIR", "").strip()
         session_dir = Path(session_dir_raw) if session_dir_raw else platform_settings.state_dir / "agent_sessions"
@@ -139,6 +145,9 @@ class AgentSettings:
             model=model,
             runtime=runtime,
             max_tool_calls=max(1, max_tool_calls),
+            max_steps=max(1, max_steps),
+            max_identical_tool_calls=max(1, max_identical_tool_calls),
+            max_consecutive_tool_failures=max(1, max_consecutive_tool_failures),
             session_dir=session_dir,
             temperature=temperature,
             openai_base_url=openai_base_url,

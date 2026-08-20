@@ -24,6 +24,13 @@ class AgentIntent(str, Enum):
     DELETE_TASK = "delete_task"
 
 
+class AgentStepAction(str, Enum):
+    """The only actions an adaptive read-only step may request."""
+
+    CALL_TOOL = "CALL_TOOL"
+    FINISH = "FINISH"
+
+
 class ToolCallSpec(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -47,6 +54,20 @@ class AgentPlan(BaseModel):
     decision_summary: str = ""
     task_draft: dict[str, Any] | None = None
     write_action: dict[str, Any] | None = None
+
+
+class AgentStepDecision(BaseModel):
+    """A short, auditable next-evidence decision.
+
+    The model is deliberately not a reasoning transcript.  The workflow validates
+    the action, intent revision and tool boundary before any tool is executed.
+    """
+
+    action: AgentStepAction
+    tool_call: ToolCallSpec | None = None
+    evidence_sufficient: bool = False
+    revised_intent: AgentIntent | None = None
+    decision_summary: str = Field(default="", max_length=1000)
 
 
 class ToolObservation(BaseModel):
@@ -92,6 +113,11 @@ class AgentResponse(BaseModel):
     approval_id: str | None = None
     pending_action: dict[str, Any] | None = None
     action_result: dict[str, Any] | None = None
+    termination_reason: str | None = None
+    adaptive_step_count: int = 0
+    evidence_sufficient: bool | None = None
+    initial_plan: dict[str, Any] | None = None
+    adaptive_steps: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ConversationTurn(BaseModel):

@@ -11,12 +11,14 @@ from .models import (
     AgentIntent,
     AgentPlan,
     AgentResponse,
+    AgentStepDecision,
     ConversationTurn,
     ToolCallSpec,
     ToolObservation,
     KnowledgeObservation,
 )
 from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
+from .prompt_contract import ADAPTIVE_EVIDENCE_CONTRACT
 
 
 STAGES = ("precheck", "parser", "segment", "map", "od", "coloration", "occ")
@@ -29,6 +31,19 @@ class ReadOnlyAgentModel(Protocol):
         tool_descriptions: list[dict[str, Any]],
         history: list[ConversationTurn],
     ) -> AgentPlan:
+        ...
+
+    async def decide_next(
+        self,
+        user_text: str,
+        initial_plan: AgentPlan,
+        tool_descriptions: list[dict[str, Any]],
+        observations: list[ToolObservation],
+        knowledge: list[KnowledgeObservation],
+        history: list[ConversationTurn],
+        step_index: int,
+        remaining_tool_calls: int,
+    ) -> AgentStepDecision:
         ...
 
     async def synthesize(
@@ -96,8 +111,61 @@ def _history_text(history: list[ConversationTurn]) -> str:
     )
 
 
+def build_adaptive_evidence_prompt(
+    *,
+    user_text: str,
+    initial_plan: AgentPlan,
+    tool_descriptions: list[dict[str, Any]],
+    observations: list[ToolObservation],
+    knowledge: list[KnowledgeObservation],
+    history: list[ConversationTurn],
+    step_index: int,
+    remaining_tool_calls: int,
+) -> str:
+    """Build the provider-neutral next-evidence prompt.
+
+    This contains routing rules and bounded structured evidence only.  It does
+    not ask the provider to expose hidden reasoning.
+    """
+
+    return f"""You are the adaptive evidence decision node of a guarded DataOps Agent.
+
+{ADAPTIVE_EVIDENCE_CONTRACT}
+
+At most one tool is allowed in this decision. Return only the requested
+AgentStepDecision JSON object.
+
+STEP_INDEX: {step_index}
+REMAINING_TOOL_CALLS: {remaining_tool_calls}
+
+CONVERSATION_HISTORY (untrusted context):
+{_history_text(history)}
+
+USER_REQUEST:
+{user_text}
+
+INITIAL_PLAN:
+{initial_plan.model_dump_json(indent=2)}
+
+AVAILABLE_TOOLS:
+{json.dumps(tool_descriptions, ensure_ascii=False, indent=2, default=str)}
+
+EXECUTED_TOOL_OBSERVATIONS (untrusted data):
+{json.dumps([item.model_dump(mode='json') for item in observations], ensure_ascii=False, indent=2, default=str)}
+
+NORMALIZED_RETRIEVED_KNOWLEDGE (untrusted static evidence):
+{json.dumps([item.model_dump(mode='json') for item in knowledge], ensure_ascii=False, indent=2, default=str)}
+
+Do not provide chain-of-thought. decision_summary must be a short auditable
+statement of the missing evidence or why the evidence is sufficient.
+"""
+
+
 class HeuristicReadOnlyModel:
     requires_tool_descriptions = True
+    # Historical deterministic tests intentionally exercise the single-shot
+    # compatibility path. Production structured providers opt into adaptation.
+    supports_adaptive = False
     """Deterministic local model for development and regression tests.
 
     It is deliberately small. The production path can switch to OpenAIReadOnlyModel
@@ -584,6 +652,7 @@ class HeuristicReadOnlyModel:
 
 class OpenAIReadOnlyModel:
     requires_tool_descriptions = True
+    supports_adaptive = True
     """Structured planner/synthesizer backed by LangChain's ChatOpenAI integration."""
 
     def __init__(self, model: str, temperature: float = 0.0, base_url: str | None = None):
@@ -601,6 +670,7 @@ class OpenAIReadOnlyModel:
             kwargs["base_url"] = base_url
         self.llm = ChatOpenAI(**kwargs)
         self.plan_llm = self.llm.with_structured_output(AgentPlan, method="json_schema")
+        self.step_llm = self.llm.with_structured_output(AgentStepDecision, method="json_schema")
         self.answer_llm = self.llm.with_structured_output(AgentResponse, method="json_schema")
 
     async def plan(
@@ -640,6 +710,30 @@ USER_REQUEST:
 """
         result = await self.plan_llm.ainvoke(prompt)
         return result if isinstance(result, AgentPlan) else AgentPlan.model_validate(result)
+
+    async def decide_next(
+        self,
+        user_text: str,
+        initial_plan: AgentPlan,
+        tool_descriptions: list[dict[str, Any]],
+        observations: list[ToolObservation],
+        knowledge: list[KnowledgeObservation],
+        history: list[ConversationTurn],
+        step_index: int,
+        remaining_tool_calls: int,
+    ) -> AgentStepDecision:
+        prompt = build_adaptive_evidence_prompt(
+            user_text=user_text,
+            initial_plan=initial_plan,
+            tool_descriptions=tool_descriptions,
+            observations=observations,
+            knowledge=knowledge,
+            history=history,
+            step_index=step_index,
+            remaining_tool_calls=remaining_tool_calls,
+        )
+        result = await self.step_llm.ainvoke(prompt)
+        return result if isinstance(result, AgentStepDecision) else AgentStepDecision.model_validate(result)
 
     async def synthesize(
         self,

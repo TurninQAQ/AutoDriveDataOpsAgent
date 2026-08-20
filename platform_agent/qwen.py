@@ -8,7 +8,8 @@ from pydantic import BaseModel
 
 from platform_integrations.model_retry import retry_async
 
-from .models import AgentPlan, AgentResponse, ConversationTurn, KnowledgeObservation, ToolObservation
+from .model import build_adaptive_evidence_prompt
+from .models import AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, KnowledgeObservation, ToolObservation
 from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
 
 
@@ -31,6 +32,7 @@ class QwenReadOnlyModel:
     """
 
     requires_tool_descriptions = True
+    supports_adaptive = True
 
     def __init__(self, model: str = "qwen-plus", temperature: float = 0.0, base_url: str | None = None, client=None):
         if client is not None:
@@ -134,6 +136,29 @@ USER_REQUEST:
 Return JSON only.
 """
         return await self._structured(prompt, AgentPlan)
+
+    async def decide_next(
+        self,
+        user_text: str,
+        initial_plan: AgentPlan,
+        tool_descriptions: list[dict[str, Any]],
+        observations: list[ToolObservation],
+        knowledge: list[KnowledgeObservation],
+        history: list[ConversationTurn],
+        step_index: int,
+        remaining_tool_calls: int,
+    ) -> AgentStepDecision:
+        prompt = build_adaptive_evidence_prompt(
+            user_text=user_text,
+            initial_plan=initial_plan,
+            tool_descriptions=tool_descriptions,
+            observations=observations,
+            knowledge=knowledge,
+            history=history,
+            step_index=step_index,
+            remaining_tool_calls=remaining_tool_calls,
+        )
+        return await self._structured(prompt, AgentStepDecision)
 
     async def synthesize(
         self,
