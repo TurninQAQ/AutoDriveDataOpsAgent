@@ -4,6 +4,8 @@ import os
 import asyncio
 from typing import Any
 
+from platform_mcp.server import WRITE_TOOL_NAMES
+
 
 COLLECTION_INVALID = "COLLECTION_INVALID"
 
@@ -15,23 +17,164 @@ def _tool_names(sample: dict[str, Any], field: str) -> list[str]:
 
 
 def _collection_invalid_cases(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return only failures in the collector/harness itself.
+
+    An empty ``actual_tools`` value is a valid AgentPlan outcome.  Whether it
+    misses a required tool is a model-selection metric, never a collection
+    health signal.
+    """
     invalid = []
     for sample in samples:
-        required = [str(name) for name in sample.get("required_tools") or []]
-        if not required:
-            required = [str(item.get("name")) for item in sample.get("expected_tools", []) if item.get("name")]
-        actual = _tool_names(sample, "actual_tools")
-        if required and not actual:
+        collection_error = sample.get("collection_error")
+        if sample.get("collection_valid") is False or collection_error:
             invalid.append(
                 {
                     "case_id": sample.get("case_id", sample.get("id")),
                     "query": sample.get("query", sample.get("input", "")),
-                    "required_tools": required,
-                    "actual_tools": actual,
-                    "reason": "required_tools_nonempty_but_actual_tools_empty",
+                    "required_tools": list(sample.get("required_tools") or []),
+                    "actual_tools": _tool_names(sample, "actual_tools"),
+                    "reason": collection_error or "collection_valid_false",
                 }
             )
     return invalid
+
+
+def _expected_arguments(sample: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    expected = sample.get("expected_arguments")
+    if isinstance(expected, dict):
+        return {
+            str(name): value if isinstance(value, dict) else {}
+            for name, value in expected.items()
+        }
+    derived: dict[str, dict[str, Any]] = {}
+    for item in sample.get("expected_tools") or []:
+        if item.get("name"):
+            value = item.get("arguments")
+            derived[str(item["name"])] = value if isinstance(value, dict) else {}
+    return derived
+
+
+def _argument_requirements(sample: dict[str, Any]) -> tuple[int, int, list[dict[str, Any]]]:
+    expected = _expected_arguments(sample)
+    actual = sample.get("actual_arguments") or sample.get("tools_called", [])
+    details: list[dict[str, Any]] = []
+    hits = 0
+    for tool_name, expected_subset in expected.items():
+        matching = [
+            item for item in actual
+            if str(item.get("name") or "") == tool_name
+        ]
+        if expected_subset:
+            ok = any(_arg_subset(item.get("arguments") or {}, expected_subset) for item in matching)
+        else:
+            # An empty Golden subset still requires the expected tool to be
+            # present, while imposing no additional argument fields.
+            ok = bool(matching)
+        hits += int(ok)
+        details.append({
+            "tool": tool_name,
+            "required_arguments": expected_subset,
+            "actual": [item.get("arguments") or {} for item in matching],
+            "ok": ok,
+        })
+    return hits, len(expected), details
+
+
+def _arg_subset(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    for key, expected_value in expected.items():
+        if key not in actual:
+            return False
+        actual_value = actual[key]
+        if isinstance(expected_value, dict) and isinstance(actual_value, dict):
+            if not _arg_subset(actual_value, expected_value):
+                return False
+        elif actual_value != expected_value:
+            return False
+    return True
+
+
+def _deterministic_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    total_tp = total_fp = total_fn = 0
+    forbidden_case_count = 0
+    argument_hits = argument_total = 0
+    cases: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+
+    for sample in samples:
+        required = set(str(name) for name in sample.get("required_tools") or [])
+        optional = set(str(name) for name in sample.get("optional_tools") or [])
+        acceptable = required | optional
+        actual = set(_tool_names(sample, "actual_tools"))
+        forbidden = set(str(name) for name in sample.get("forbidden_tools") or []) | set(WRITE_TOOL_NAMES)
+        forbidden_called = sorted(actual & forbidden)
+        tp = len(actual & acceptable)
+        fp = len(actual - acceptable)
+        fn = len(required - actual)
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+        forbidden_case_count += int(bool(forbidden_called))
+
+        arg_hits, arg_total, arg_details = _argument_requirements(sample)
+        argument_hits += arg_hits
+        argument_total += arg_total
+        row = {
+            "case_id": sample.get("case_id", sample.get("id")),
+            "tool_tp": tp,
+            "tool_fp": fp,
+            "tool_fn": fn,
+            "tool_precision": tp / (tp + fp) if tp + fp else 1.0,
+            "tool_recall": tp / (tp + fn) if tp + fn else 1.0,
+            "tool_f1": (
+                2 * (tp / (tp + fp)) * (tp / (tp + fn))
+                / ((tp / (tp + fp)) + (tp / (tp + fn)))
+                if tp + fp and tp + fn and (tp / (tp + fp)) + (tp / (tp + fn))
+                else 0.0
+            ),
+            "forbidden_tools_called": forbidden_called,
+            "argument_requirement_hits": arg_hits,
+            "argument_requirement_total": arg_total,
+            "argument_requirement_coverage": arg_hits / arg_total if arg_total else 1.0,
+            "model_tool_miss": bool(sample.get("model_tool_miss", bool(fn))),
+        }
+        cases.append(row)
+
+        collection_error = sample.get("collection_error")
+        if sample.get("collection_valid") is False or collection_error:
+            failure_type = "PLANNER_ERROR" if collection_error == "model_plan_failed" else "HARNESS_ERROR"
+            failures.append({"case_id": str(row["case_id"]), "failure_type": failure_type})
+            continue
+        if not sample.get("planner_valid", True):
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "PLANNER_ERROR"})
+            continue
+        if forbidden_called:
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "FORBIDDEN_TOOL"})
+        if fn:
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "TOOL_MISSING"})
+        if fp:
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "TOOL_EXTRA"})
+        if arg_total and arg_hits < arg_total:
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "ARGUMENT_WRONG"})
+        expected_intent = str(sample.get("expected_intent") or "")
+        actual_intent = str(sample.get("actual_intent") or "")
+        if expected_intent and actual_intent and expected_intent != actual_intent:
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "PLANNER_ERROR"})
+
+    precision = total_tp / (total_tp + total_fp) if total_tp + total_fp else 1.0
+    recall = total_tp / (total_tp + total_fn) if total_tp + total_fn else 1.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "tool_precision": precision,
+        "tool_recall": recall,
+        "tool_f1": f1,
+        "forbidden_tool_call_rate": forbidden_case_count / len(samples) if samples else 0.0,
+        "forbidden_tool_call_count": forbidden_case_count,
+        "argument_requirement_coverage": argument_hits / argument_total if argument_total else 1.0,
+        "argument_requirement_hits": argument_hits,
+        "argument_requirement_total": argument_total,
+        "deterministic_cases": cases,
+        "failures": failures,
+    }
 
 
 def _case_metadata(
@@ -54,10 +197,16 @@ def _case_metadata(
         "actual_arguments": actual_arguments,
         "tool_correctness": tool_score,
         "argument_correctness": argument_score,
-        "collection_valid": collection_valid,
+        "collection_valid": sample.get("collection_valid", collection_valid),
+        "collection_error": sample.get("collection_error", collection_error),
+        "planner_valid": sample.get("planner_valid", True),
+        "expected_intent": sample.get("expected_intent", ""),
+        "actual_intent": sample.get("actual_intent", ""),
+        "intent_ok": sample.get("intent_ok"),
+        "model_tool_miss": sample.get("model_tool_miss"),
+        "write_action": sample.get("write_action"),
+        "forbidden_tools_called": sample.get("forbidden_tools_called", []),
     }
-    if collection_error:
-        row["collection_error"] = collection_error
     return row
 
 
@@ -70,10 +219,13 @@ def run_deepeval_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     trace JSON.
     """
     invalid_cases = _collection_invalid_cases(samples)
+    deterministic = _deterministic_tool_metrics(samples)
+    collection_valid_count = sum(
+        int(sample.get("collection_valid", True) is not False and not sample.get("collection_error"))
+        for sample in samples
+    )
+    collection_invalid_count = len(samples) - collection_valid_count
     if invalid_cases:
-        invalid_by_id = {
-            item.get("case_id"): item.get("reason") for item in invalid_cases
-        }
         return {
             "framework": "deepeval",
             "status": COLLECTION_INVALID,
@@ -81,18 +233,21 @@ def run_deepeval_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "provider": os.getenv("PLATFORM_EVAL_PROVIDER", "").strip().lower() or "default",
             "judge_model": os.getenv("PLATFORM_EVAL_JUDGE_MODEL", "gpt-5-mini").strip(),
             "case_count": len(samples),
+            "collection_valid_count": collection_valid_count,
+            "collection_invalid_count": collection_invalid_count,
             "tool_correctness": None,
             "argument_correctness": None,
             "invalid_cases": invalid_cases,
             "cases": [
                 _case_metadata(
                     sample,
-                    collection_valid=sample.get("case_id", sample.get("id")) not in invalid_by_id,
-                    collection_error=invalid_by_id.get(sample.get("case_id", sample.get("id"))),
+                    collection_valid=sample.get("collection_valid", True),
+                    collection_error=sample.get("collection_error"),
                 )
                 for sample in samples
             ],
-            "task_completion_note": "DeepEval metrics were not run because tool collection was invalid.",
+            **{key: value for key, value in deterministic.items() if key != "deterministic_cases"},
+            "task_completion_note": "DeepEval metrics were not run because the collector reported an explicit harness failure.",
         }
 
     try:
@@ -108,8 +263,11 @@ def run_deepeval_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     tool_scores = []
     arg_scores = []
     for sample in samples:
-        tools_called = [ToolCall(name=item["name"], input_parameters=item.get("arguments")) for item in sample.get("tools_called", [])]
-        expected_tools = [ToolCall(name=item["name"], input_parameters=item.get("arguments")) for item in sample.get("expected_tools", [])]
+        # Empty tools_called is valid input to DeepEval.  It represents a
+        # planner output with no selected tools, and must receive a real metric
+        # score rather than invalidating the collection.
+        tools_called = [ToolCall(name=item["name"], input_parameters=item.get("arguments") or {}) for item in sample.get("tools_called", [])]
+        expected_tools = [ToolCall(name=item["name"], input_parameters=item.get("arguments") or {}) for item in sample.get("expected_tools", [])]
         case = LLMTestCase(
             input=str(sample["input"]),
             actual_output=str(sample.get("actual_output") or ""),
@@ -127,13 +285,13 @@ def run_deepeval_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
         arg_score = float(argument_metric.score or 0.0)
         tool_scores.append(tool_score)
         arg_scores.append(arg_score)
-        rows.append(
-            _case_metadata(
-                sample,
-                tool_score=tool_score,
-                argument_score=arg_score,
-            )
+        row = _case_metadata(sample, tool_score=tool_score, argument_score=arg_score)
+        deterministic_row = next(
+            item for item in deterministic["deterministic_cases"]
+            if item["case_id"] == row["case_id"]
         )
+        row.update({key: value for key, value in deterministic_row.items() if key != "case_id"})
+        rows.append(row)
     return {
         "framework": "deepeval",
         "status": "PASS",
@@ -141,8 +299,11 @@ def run_deepeval_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "provider": provider or "default",
         "judge_model": judge_model,
         "case_count": len(rows),
+        "collection_valid_count": collection_valid_count,
+        "collection_invalid_count": collection_invalid_count,
         "tool_correctness": sum(tool_scores) / len(tool_scores) if tool_scores else 0.0,
         "argument_correctness": sum(arg_scores) / len(arg_scores) if arg_scores else 0.0,
+        **{key: value for key, value in deterministic.items() if key != "deterministic_cases"},
         "cases": rows,
         "task_completion_note": "Run TaskCompletionMetric on a real traced Agent execution; V1.1 does not fabricate a trajectory judge from fixture traces.",
     }
