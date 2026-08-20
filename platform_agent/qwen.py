@@ -6,10 +6,12 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from platform_integrations.model_retry import retry_async
+from dataclasses import replace
+
+from platform_integrations.model_retry import ModelRequestError, ModelRetryPolicy, retry_async
 
 from .model import build_adaptive_evidence_prompt
-from .models import AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, KnowledgeObservation, ToolObservation
+from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, KnowledgeObservation, ToolObservation
 from .prompt_contract import EVIDENCE_ROUTING_CONTRACT
 
 
@@ -34,7 +36,17 @@ class QwenReadOnlyModel:
     requires_tool_descriptions = True
     supports_adaptive = True
 
-    def __init__(self, model: str = "qwen-plus", temperature: float = 0.0, base_url: str | None = None, client=None):
+    def __init__(
+        self,
+        model: str = "qwen-plus",
+        temperature: float = 0.0,
+        base_url: str | None = None,
+        client=None,
+        request_timeout_sec: float | None = None,
+        metrics: dict[str, int] | None = None,
+    ):
+        self.request_timeout_sec = request_timeout_sec
+        self.metrics = metrics if metrics is not None else {}
         if client is not None:
             self.client = client
         else:
@@ -48,7 +60,8 @@ class QwenReadOnlyModel:
                 raise RuntimeError("DASHSCOPE_API_KEY is required for provider=qwen")
             if not endpoint:
                 raise RuntimeError("DASHSCOPE_OPENAI_BASE_URL is required for provider=qwen")
-            self.client = AsyncOpenAI(api_key=api_key, base_url=endpoint)
+            timeout = request_timeout_sec or ModelRetryPolicy.from_env().request_timeout_sec
+            self.client = AsyncOpenAI(api_key=api_key, base_url=endpoint, timeout=timeout)
         self.model = model
         self.temperature = temperature
 
@@ -70,26 +83,36 @@ class QwenReadOnlyModel:
 
     async def _structured(self, prompt: str, schema: type[T]) -> T:
         schema_text = json.dumps(schema.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
-        response = await retry_async(
-            lambda: self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Return only one valid JSON object. Do not use Markdown fences. "
-                            "Use exactly the fields and types in this JSON Schema: "
-                            f"{schema_text}"
-                        ),
-                    },
-                    {"role": "user", "content": f"{prompt}\nJSON_SCHEMA:\n{schema_text}"},
-                ],
-                temperature=self.temperature,
-                response_format={"type": "json_object"},
-                extra_body={"enable_thinking": False},
-            ),
-            operation_name=f"qwen:chat:{self.model}",
-        )
+        self.metrics["model_operations"] = self.metrics.get("model_operations", 0) + 1
+        retry_policy = ModelRetryPolicy.from_env()
+        if self.request_timeout_sec is not None:
+            retry_policy = replace(retry_policy, request_timeout_sec=max(0.001, float(self.request_timeout_sec)))
+        try:
+            response = await retry_async(
+                lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Return only one valid JSON object. Do not use Markdown fences. "
+                                "Use exactly the fields and types in this JSON Schema: "
+                                f"{schema_text}"
+                            ),
+                        },
+                        {"role": "user", "content": f"{prompt}\nJSON_SCHEMA:\n{schema_text}"},
+                    ],
+                    temperature=self.temperature,
+                    response_format={"type": "json_object"},
+                    extra_body={"enable_thinking": False},
+                ),
+                operation_name=f"qwen:chat:{self.model}",
+                policy=retry_policy,
+                attempt_metrics=self.metrics,
+            )
+        except ModelRequestError as exc:
+            self.metrics["provider_errors"] = self.metrics.get("provider_errors", 0) + 1
+            raise
         text = self._content_text(response)
         if not text.strip():
             raise RuntimeError(f"Qwen model {self.model} returned an empty JSON response")
@@ -147,6 +170,8 @@ Return JSON only.
         history: list[ConversationTurn],
         step_index: int,
         remaining_tool_calls: int,
+        current_intent: AgentIntent | None = None,
+        adaptive_steps: list[dict[str, Any]] | None = None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -157,6 +182,8 @@ Return JSON only.
             history=history,
             step_index=step_index,
             remaining_tool_calls=remaining_tool_calls,
+            current_intent=current_intent,
+            adaptive_steps=adaptive_steps,
         )
         return await self._structured(prompt, AgentStepDecision)
 

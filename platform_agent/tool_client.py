@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from platform_mcp.facade import PlatformMCPFacade, build_default_facade
-from platform_mcp.server import MCP_TOOL_DESCRIPTIONS, READ_ONLY_TOOL_NAMES, build_mcp_server
+from platform_mcp.server import READ_ONLY_TOOL_NAMES, build_mcp_server
 
+from .tool_catalog import build_read_only_tool_catalog
 from .models import ToolCallSpec, ToolObservation
 
 
@@ -129,25 +130,9 @@ class FacadeToolClient:
         self.facade = facade
 
     async def describe_tools(self) -> list[dict[str, Any]]:
-        tools = []
-        for name in READ_ONLY_TOOL_NAMES:
-            if name == "search_knowledge" and getattr(self.facade, "knowledge_service", None) is None:
-                continue
-            schema: dict[str, Any] = {}
-            description = name
-            if name in MCP_TOOL_DESCRIPTIONS:
-                description = MCP_TOOL_DESCRIPTIONS[name]
-            if name == "search_knowledge":
-                schema = {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Knowledge search query."},
-                        "top_k": {"type": "integer", "minimum": 1, "maximum": 100, "default": 5},
-                    },
-                    "required": ["query"],
-                }
-            tools.append({"name": name, "description": description, "input_schema": schema})
-        return tools
+        return build_read_only_tool_catalog(
+            knowledge_enabled=getattr(self.facade, "knowledge_service", None) is not None
+        )
 
     async def execute(self, calls: list[ToolCallSpec]) -> list[ToolObservation]:
         results: list[ToolObservation] = []

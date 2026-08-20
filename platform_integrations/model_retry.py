@@ -12,7 +12,7 @@ import re
 import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from typing import Any, Awaitable, Callable, Mapping, TypeVar
+from typing import Any, Awaitable, Callable, Mapping, MutableMapping, TypeVar
 
 from platform_observability.redaction import redact_text
 
@@ -31,6 +31,7 @@ class ModelRetryPolicy:
     base_sec: float = 1.0
     max_sec: float = 20.0
     jitter_sec: float = 0.25
+    request_timeout_sec: float = 45.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "ModelRetryPolicy":
@@ -47,6 +48,7 @@ class ModelRetryPolicy:
             base_sec=max(0.0, _float_env({"value": configured("PLATFORM_MODEL_RETRY_BASE_SEC", "PLATFORM_GEMINI_RETRY_BASE_SEC", "1")}, "value", 1.0)),
             max_sec=max(0.0, _float_env({"value": configured("PLATFORM_MODEL_RETRY_MAX_SEC", "PLATFORM_GEMINI_RETRY_MAX_SEC", "20")}, "value", 20.0)),
             jitter_sec=max(0.0, _float_env({"value": configured("PLATFORM_MODEL_RETRY_JITTER_SEC", "PLATFORM_GEMINI_RETRY_JITTER_SEC", "0.25")}, "value", 0.25)),
+            request_timeout_sec=max(0.001, _float_env(os.environ if environ is None else environ, "PLATFORM_MODEL_REQUEST_TIMEOUT_SEC", 45.0)),
         )
 
 
@@ -59,11 +61,13 @@ class ModelRequestError(RuntimeError):
         attempts: int,
         status_code: int | None,
         retryable: bool,
+        failure_type: str = "unknown_provider_error",
     ) -> None:
         self.operation = operation
         self.attempts = attempts
         self.status_code = status_code
         self.retryable = retryable
+        self.failure_type = failure_type
         status = str(status_code) if status_code is not None else "unknown"
         super().__init__(
             f"Model operation {redact_text(operation)} failed after {attempts} attempt(s) "
@@ -76,6 +80,7 @@ class _Failure:
     status_code: int | None
     retry_after_sec: float | None
     retryable: bool
+    failure_type: str
 
 
 def _int_env(env: Mapping[str, str], name: str, default: int) -> int:
@@ -166,10 +171,23 @@ def classify_exception(exc: BaseException) -> _Failure:
     if retry_after is None:
         retry_after = _retry_after_value(getattr(exc, "response", None))
     temporary_transport = isinstance(exc, (TimeoutError, ConnectionError, OSError))
+    if isinstance(exc, TimeoutError):
+        failure_type = "provider_timeout"
+    elif status in {401, 403}:
+        failure_type = "provider_auth_error"
+    elif status == 429:
+        failure_type = "provider_rate_limit"
+    elif status is not None:
+        failure_type = "provider_http_error"
+    elif isinstance(exc, (ConnectionError, OSError)):
+        failure_type = "provider_connection_error"
+    else:
+        failure_type = "unknown_provider_error"
     return _Failure(
         status_code=status,
         retry_after_sec=retry_after,
         retryable=status in RETRYABLE_STATUS_CODES or (status is None and temporary_transport),
+        failure_type=failure_type,
     )
 
 
@@ -190,7 +208,13 @@ def _safe_failure(operation: str, attempt: int, policy: ModelRetryPolicy, exc: B
         failure.status_code,
         failure.retryable,
     )
-    return ModelRequestError(operation, attempt, failure.status_code, failure.retryable)
+    return ModelRequestError(
+        operation,
+        attempt,
+        failure.status_code,
+        failure.retryable,
+        failure.failure_type,
+    )
 
 
 def retry_sync(
@@ -228,18 +252,26 @@ async def retry_async(
     policy: ModelRetryPolicy | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     jitter: Callable[[float], float] = lambda amount: random.uniform(0.0, amount),
+    attempt_metrics: MutableMapping[str, int] | None = None,
 ) -> T:
     active_policy = policy or ModelRetryPolicy.from_env()
     for attempt in range(1, active_policy.attempts + 1):
+        if attempt_metrics is not None:
+            attempt_metrics["attempts"] = int(attempt_metrics.get("attempts", 0)) + 1
         try:
             result = operation()
             if not inspect.isawaitable(result):
                 raise TypeError("async model operation did not return an awaitable")
-            return await result
+            return await asyncio.wait_for(result, timeout=active_policy.request_timeout_sec)
         except Exception as exc:
             failure = classify_exception(exc)
+            if attempt_metrics is not None:
+                attempt_metrics["errors"] = int(attempt_metrics.get("errors", 0)) + 1
+                attempt_metrics[failure.failure_type] = int(attempt_metrics.get(failure.failure_type, 0)) + 1
             if not failure.retryable or attempt >= active_policy.attempts:
                 raise _safe_failure(operation_name, attempt, active_policy, exc) from None
+            if attempt_metrics is not None:
+                attempt_metrics["retries"] = int(attempt_metrics.get("retries", 0)) + 1
             delay = _delay(active_policy, attempt, failure, jitter)
             LOGGER.warning(
                 "Model operation retrying operation=%s attempt=%d status_code=%s retryable=true delay_ms=%d",

@@ -2,20 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from platform_agent.tool_catalog import (
+    CANONICAL_READ_ONLY_TOOL_CATALOG,
+    build_read_only_tool_catalog,
+)
+
 from .facade import PlatformMCPFacade, build_default_facade
 
 
-READ_ONLY_TOOL_NAMES = (
-    "get_platform_health",
-    "list_tasks",
-    "get_task_detail",
-    "get_queue_state",
-    "get_gpu_pool",
-    "inspect_task_containers",
-    "get_stage_logs",
-    "diagnose_task",
-    "search_knowledge",
-)
+READ_ONLY_TOOL_NAMES = CANONICAL_READ_ONLY_TOOL_CATALOG
 
 WRITE_PREP_TOOL_NAMES = (
     "get_write_precondition",
@@ -34,18 +29,8 @@ WRITE_TOOL_NAMES = (
 ALL_TOOL_NAMES = READ_ONLY_TOOL_NAMES + WRITE_PREP_TOOL_NAMES + WRITE_TOOL_NAMES
 
 MCP_TOOL_DESCRIPTIONS = {
-    "get_gpu_pool": (
-        "Inspect current/live GPU runtime state, including device memory, "
-        "availability and active reservations. Use for what GPU resources or "
-        "reservations exist now, or current GPU allocation problems. Do not use "
-        "it to explain platform concepts, architecture or reservation rules."
-    ),
-    "search_knowledge": (
-        "Search static platform documentation and runbooks for definitions, "
-        "architecture, mechanisms, policies and operating rules such as GPU "
-        "Reservation, soft preemption and recovery. Use for what-is, how-it-works "
-        "and platform-rule questions. It does not return current runtime state."
-    ),
+    item["name"]: item["description"]
+    for item in build_read_only_tool_catalog()
 }
 
 
@@ -75,24 +60,24 @@ def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tool
 
     @mcp.tool()
     def get_platform_health() -> dict[str, Any]:
-        """Get platform component health and resource availability."""
+        """Inspect current platform component health and resource availability."""
         return facade.get_platform_health()
 
     @mcp.tool()
     def list_tasks(limit: int = 100) -> dict[str, Any]:
-        """List generated business tasks with priority and queue information."""
+        """List current generated business tasks with priority and queue information."""
         return facade.list_tasks(limit=limit)
 
     @mcp.tool()
     def get_task_detail(
         task_name: str, include_airflow_runs: bool = True, run_limit: int = 20
     ) -> dict[str, Any]:
-        """Get one business task's config, datasets, queue status and recent DagRuns."""
+        """Inspect the current config, queue status and recent DagRuns for one named business task."""
         return facade.get_task_detail(task_name, include_airflow_runs, run_limit)
 
     @mcp.tool()
     def get_queue_state(task_name: str = "") -> dict[str, Any]:
-        """Get the global priority queue or one task's queue position."""
+        """Inspect the current global priority queue or a named task's queue position."""
         return facade.get_queue_state(task_name)
 
     def get_gpu_pool(cleanup_dead: bool = True) -> dict[str, Any]:
@@ -105,7 +90,7 @@ def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tool
     def inspect_task_containers(
         task_name: str, datasets: list[str] | None = None
     ) -> dict[str, Any]:
-        """Inspect running Docker containers belonging to a task/dataset."""
+        """Inspect current Docker containers belonging to a concrete task and optional datasets."""
         return facade.inspect_task_containers(task_name, datasets)
 
     @mcp.tool()
@@ -115,12 +100,12 @@ def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tool
         stage: str = "",
         tail_lines: int = 200,
     ) -> dict[str, Any]:
-        """Get recent Airflow logs for a task's failed/running or selected Stage tasks."""
+        """Retrieve current or recent logs for a named task's failed, running or selected Stage."""
         return facade.get_stage_logs(task_name, dataset_name, stage, tail_lines)
 
     @mcp.tool()
     def diagnose_task(task_name: str, dataset_name: str = "") -> dict[str, Any]:
-        """Aggregate queue, Airflow, Docker and GPU evidence without LLM inference."""
+        """Aggregate current queue, Airflow, Docker and GPU evidence for one concrete task without LLM inference."""
         return facade.diagnose_task(task_name, dataset_name)
 
     if getattr(facade, "knowledge_service", None) is not None:

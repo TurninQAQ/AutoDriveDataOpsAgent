@@ -165,6 +165,8 @@ class AdaptiveLoopController:
                     history=history,
                     step_index=step_index,
                     remaining_tool_calls=remaining_tools,
+                    current_intent=result.current_intent,
+                    adaptive_steps=list(result.steps[-8:]),
                 )
                 if not isinstance(decision, AgentStepDecision):
                     decision = AgentStepDecision.model_validate(decision)

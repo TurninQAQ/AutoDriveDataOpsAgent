@@ -1,4 +1,11 @@
 ## 版本发布说明
+v1.5.1 2026-08-20：Adaptive State Closure & Provider Reliability
+1. 修复 Adaptive revised intent 闭环：后续 `decide_next` 明确接收 `CURRENT_INTENT` 和最近结构化 Adaptive decisions；保持 read-only intent 限制，禁止 revision 越过写安全边界。
+2. 新增 canonical read-only Tool Catalog，统一 MCP、Facade dependency-light client 和 V1.5 Scenario Fixture 的名称、语义描述与 required input schema；`get_gpu_pool` 继续表示 current/live state，`search_knowledge` 继续表示 static knowledge。
+3. 在 provider-neutral `retry_async` 增加 `PLATFORM_MODEL_REQUEST_TIMEOUT_SEC=45` 的单次 operation deadline；保留原有 retry attempts/backoff/Retry-After 和 Gemini compatibility 语义。
+4. 新增 synthetic Qwen structured preflight 与 V1.5.1 collector，冻结并记录 V1.5.0 case SHA256；真实 collection 只有 preflight 成功后才开始，provider failure 不产生伪造 Adaptive 分数。
+5. 真实运行中 preflight 2/2 PASS；正式 qwen-plus collection 在 3/16 frozen cases 后于代理 response-header 阶段阻塞，保留 3 条 trajectory、19 次尝试/18 次完成计数，完整 Adaptive baseline 记为 `PARTIAL_PROVIDER_BLOCKED`，不报告完整分数。
+
 v1.4.4 2026-08-20：Routing Generalization & Evaluation Hardening
 1. 冻结 V1.4.3 production routing contract，新增独立于 Prompt 示例的 48-case Routing Holdout，覆盖静态知识、实时 GPU、实时任务、通用/具名诊断、Hybrid、规划、写意图和无工具请求。
 2. Hybrid Holdout 明确要求实时 Operational Evidence 与 `search_knowledge` Knowledge Evidence 同时存在；不修改历史 V1.4.1/V1.4.2/V1.4.3 Golden。
@@ -102,6 +109,14 @@ v1.0.3 2026-07-13:(new:sam31:v1.0.9_cfy_07-13_11_17_09 base:None)
 v1.1.0  2027-07-15:(new:None base:None)
 1. https://alidocs.dingtalk.com/i/nodes/kDnRL6jAJM33NdGrIqyYv7DQWyMoPYe1?utm_scene=team_space
 ## Agent 化开发版本
+
+### V1.5.1 — Adaptive State Closure & Provider Reliability — 2026-08-20
+
+1. 修复 `current_intent` 与 previous adaptive decision context 未反馈给下一轮 `decide_next` 的状态闭环；只传有限结构化审计字段，不传 hidden reasoning。
+2. 新增 `platform_agent/tool_catalog.py`，让 MCP、Facade 和 frozen Scenario Fixture 使用 production-equivalent read-only Tool metadata；knowledge disabled 时不暴露 `search_knowledge`。
+3. 新增 provider-neutral request timeout、timeout classification、retry metrics 和 `scripts/check_qwen_provider.py` synthetic preflight；默认 `PLATFORM_MODEL_REQUEST_TIMEOUT_SEC=45`。
+4. 新增 `scripts/evaluate_adaptive_v151.py`，复用未修改的 `eval/v1_5_0/adaptive_cases.jsonl`，生成带 case hash、provider metadata 和 partial checkpoint 的 V1.5.1 artifacts。
+5. 当前真实 Qwen 状态以 preflight 为准；若 endpoint 未通过 preflight，则记录 `BLOCKED_PROVIDER_PREFLIGHT`，不开始正式 16-case collection。
 
 ### V1.5.0 — Adaptive Evidence Loop — 2026-08-20
 

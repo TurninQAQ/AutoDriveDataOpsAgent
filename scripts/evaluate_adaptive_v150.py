@@ -20,6 +20,7 @@ from typing import Any
 from platform_agent.memory import ConversationStore
 from platform_agent.models import ToolCallSpec, ToolObservation
 from platform_agent.qwen import QwenReadOnlyModel
+from platform_agent.tool_catalog import build_read_only_tool_catalog
 from platform_agent.workflow import build_agent_runtime
 from platform_eval.adaptive import (
     aggregate_adaptive_results,
@@ -46,10 +47,7 @@ class ScenarioFixtureToolClient:
         self.results: list[dict[str, Any]] = []
 
     async def describe_tools(self):
-        return [
-            {"name": name, "description": name, "input_schema": {"type": "object"}}
-            for name in READ_ONLY_TOOL_NAMES
-        ]
+        return build_read_only_tool_catalog(knowledge_enabled=True)
 
     async def execute(self, calls: list[ToolCallSpec]):
         if len(calls) != 1:
@@ -88,7 +86,9 @@ class CountingCompletions:
 
     async def create(self, **kwargs):
         self.counter["requests"] += 1
-        return await self.delegate.create(**kwargs)
+        response = await self.delegate.create(**kwargs)
+        self.counter["completed"] = self.counter.get("completed", 0) + 1
+        return response
 
 
 class CountingChat:
@@ -122,17 +122,23 @@ def _trajectory(case: dict[str, Any], response, client: ScenarioFixtureToolClien
     }
 
 
-async def _collect(cases: list[dict[str, Any]], model, root: Path, limits: dict[str, int]):
+async def _collect(
+    cases: list[dict[str, Any]],
+    model,
+    root: Path,
+    limits: dict[str, int],
+    checkpoint_prefix: str = "v1.5.0_adaptive_qwen_plus",
+):
     samples = []
     eval_rows = []
     root.mkdir(parents=True, exist_ok=True)
 
     def checkpoint() -> None:
-        (root / "v1.5.0_adaptive_qwen_plus_samples.partial.json").write_text(
+        (root / f"{checkpoint_prefix}_samples.partial.json").write_text(
             json.dumps({"samples": samples}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        (root / "v1.5.0_adaptive_qwen_plus_eval.partial.json").write_text(
+        (root / f"{checkpoint_prefix}_eval.partial.json").write_text(
             json.dumps({"cases": eval_rows, "aggregate": aggregate_adaptive_results(eval_rows)}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

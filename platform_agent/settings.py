@@ -20,6 +20,7 @@ class AgentSettings:
     model: str
     runtime: str
     max_tool_calls: int
+    request_timeout_sec: float
     max_steps: int
     max_identical_tool_calls: int
     max_consecutive_tool_failures: int
@@ -76,6 +77,7 @@ class AgentSettings:
             )
         runtime = os.environ.get("PLATFORM_AGENT_RUNTIME", "langgraph").strip().lower() or "langgraph"
         max_tool_calls = int(os.environ.get("PLATFORM_AGENT_MAX_TOOL_CALLS", "6"))
+        request_timeout_sec = float(os.environ.get("PLATFORM_MODEL_REQUEST_TIMEOUT_SEC", "45"))
         max_steps = int(os.environ.get("PLATFORM_AGENT_MAX_STEPS", "8"))
         max_identical_tool_calls = int(os.environ.get("PLATFORM_AGENT_MAX_IDENTICAL_TOOL_CALLS", "2"))
         max_consecutive_tool_failures = int(os.environ.get("PLATFORM_AGENT_MAX_CONSECUTIVE_TOOL_FAILURES", "2"))
@@ -145,6 +147,7 @@ class AgentSettings:
             model=model,
             runtime=runtime,
             max_tool_calls=max(1, max_tool_calls),
+            request_timeout_sec=max(0.001, request_timeout_sec),
             max_steps=max(1, max_steps),
             max_identical_tool_calls=max(1, max_identical_tool_calls),
             max_consecutive_tool_failures=max(1, max_consecutive_tool_failures),

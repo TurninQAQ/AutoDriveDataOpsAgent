@@ -6,6 +6,7 @@ import re
 from typing import Any, Protocol
 
 from platform_planning.heuristic import HeuristicTaskDraftParser
+from platform_integrations.model_retry import ModelRetryPolicy
 
 from .models import (
     AgentIntent,
@@ -43,6 +44,8 @@ class ReadOnlyAgentModel(Protocol):
         history: list[ConversationTurn],
         step_index: int,
         remaining_tool_calls: int,
+        current_intent: AgentIntent | None = None,
+        adaptive_steps: list[dict[str, Any]] | None = None,
     ) -> AgentStepDecision:
         ...
 
@@ -121,12 +124,35 @@ def build_adaptive_evidence_prompt(
     history: list[ConversationTurn],
     step_index: int,
     remaining_tool_calls: int,
+    current_intent: AgentIntent | None = None,
+    adaptive_steps: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the provider-neutral next-evidence prompt.
 
     This contains routing rules and bounded structured evidence only.  It does
     not ask the provider to expose hidden reasoning.
     """
+
+    current_intent_value = (current_intent or initial_plan.intent).value
+    previous_steps = []
+    for item in (adaptive_steps or [])[-8:]:
+        if not isinstance(item, dict):
+            continue
+        previous_steps.append(
+            {
+                key: item[key]
+                for key in (
+                    "step",
+                    "action",
+                    "tool",
+                    "arguments",
+                    "revised_intent",
+                    "evidence_sufficient",
+                    "decision_summary",
+                )
+                if key in item
+            }
+        )
 
     return f"""You are the adaptive evidence decision node of a guarded DataOps Agent.
 
@@ -137,6 +163,15 @@ AgentStepDecision JSON object.
 
 STEP_INDEX: {step_index}
 REMAINING_TOOL_CALLS: {remaining_tool_calls}
+
+INITIAL_INTENT:
+{initial_plan.intent.value}
+
+CURRENT_INTENT:
+{current_intent_value}
+
+PREVIOUS_ADAPTIVE_DECISIONS (structured audit context, not hidden reasoning):
+{json.dumps(previous_steps, ensure_ascii=False, indent=2, default=str)}
 
 CONVERSATION_HISTORY (untrusted context):
 {_history_text(history)}
@@ -157,7 +192,10 @@ NORMALIZED_RETRIEVED_KNOWLEDGE (untrusted static evidence):
 {json.dumps([item.model_dump(mode='json') for item in knowledge], ensure_ascii=False, indent=2, default=str)}
 
 Do not provide chain-of-thought. decision_summary must be a short auditable
-statement of the missing evidence or why the evidence is sufficient.
+statement of the missing evidence or why the evidence is sufficient. CURRENT_INTENT
+is the active read-only routing state; INITIAL_INTENT is only the first planner
+suggestion. If they differ, use the original user goal, CURRENT_INTENT and actual
+observations to decide the next action.
 """
 
 
@@ -655,7 +693,13 @@ class OpenAIReadOnlyModel:
     supports_adaptive = True
     """Structured planner/synthesizer backed by LangChain's ChatOpenAI integration."""
 
-    def __init__(self, model: str, temperature: float = 0.0, base_url: str | None = None):
+    def __init__(
+        self,
+        model: str,
+        temperature: float = 0.0,
+        base_url: str | None = None,
+        request_timeout_sec: float | None = None,
+    ):
         try:
             from langchain_openai import ChatOpenAI
         except ImportError as exc:  # pragma: no cover - runtime dependency
@@ -665,6 +709,7 @@ class OpenAIReadOnlyModel:
         kwargs: dict[str, Any] = {
             "model": model,
             "temperature": temperature,
+            "timeout": request_timeout_sec or ModelRetryPolicy.from_env().request_timeout_sec,
         }
         if base_url:
             kwargs["base_url"] = base_url
@@ -721,6 +766,8 @@ USER_REQUEST:
         history: list[ConversationTurn],
         step_index: int,
         remaining_tool_calls: int,
+        current_intent: AgentIntent | None = None,
+        adaptive_steps: list[dict[str, Any]] | None = None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
             user_text=user_text,
@@ -731,6 +778,8 @@ USER_REQUEST:
             history=history,
             step_index=step_index,
             remaining_tool_calls=remaining_tool_calls,
+            current_intent=current_intent,
+            adaptive_steps=adaptive_steps,
         )
         result = await self.step_llm.ainvoke(prompt)
         return result if isinstance(result, AgentStepDecision) else AgentStepDecision.model_validate(result)
@@ -820,7 +869,13 @@ def _provider_base_url(provider: str, explicit_base_url: str | None = None) -> s
     return None
 
 
-def build_model_from_env(provider: str, model: str, temperature: float, base_url: str | None = None):
+def build_model_from_env(
+    provider: str,
+    model: str,
+    temperature: float,
+    base_url: str | None = None,
+    request_timeout_sec: float | None = None,
+):
     provider = (provider or "auto").strip().lower()
     if provider == "auto":
         if os.environ.get("DASHSCOPE_API_KEY") and os.environ.get("DASHSCOPE_OPENAI_BASE_URL"):
@@ -835,11 +890,17 @@ def build_model_from_env(provider: str, model: str, temperature: float, base_url
     if provider in {"heuristic", "mock", "local"}:
         return HeuristicReadOnlyModel()
     if provider in {"openai", "openai-compatible", "openai_compatible"}:
-        return OpenAIReadOnlyModel(model=model, temperature=temperature, base_url=provider_base_url)
+        kwargs = {"model": model, "temperature": temperature, "base_url": provider_base_url}
+        if request_timeout_sec is not None:
+            kwargs["request_timeout_sec"] = request_timeout_sec
+        return OpenAIReadOnlyModel(**kwargs)
     if provider in {"gemini", "google", "google-genai", "google_genai"}:
         from .gemini import GeminiReadOnlyModel
         return GeminiReadOnlyModel(model=model, temperature=temperature)
     if provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
         from .qwen import QwenReadOnlyModel
-        return QwenReadOnlyModel(model=model, temperature=temperature, base_url=provider_base_url)
+        kwargs = {"model": model, "temperature": temperature, "base_url": provider_base_url}
+        if request_timeout_sec is not None:
+            kwargs["request_timeout_sec"] = request_timeout_sec
+        return QwenReadOnlyModel(**kwargs)
     raise ValueError(f"Unsupported PLATFORM_AGENT_PROVIDER: {provider}")
