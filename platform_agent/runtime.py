@@ -79,7 +79,6 @@ def build_default_agent():
         agent_settings.provider,
         agent_settings.model,
         agent_settings.temperature,
-        agent_settings.base_url,
     )
     memory = ConversationStore(agent_settings.session_dir)
     approval_store = ApprovalStore(agent_settings.approval_dir, ttl_sec=agent_settings.approval_ttl_sec)

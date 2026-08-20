@@ -22,7 +22,8 @@ class AgentSettings:
     max_tool_calls: int
     session_dir: Path
     temperature: float
-    base_url: str | None
+    openai_base_url: str | None
+    qwen_base_url: str | None
     knowledge_enabled: bool
     knowledge_source_dir: Path
     knowledge_index_file: Path
@@ -75,11 +76,8 @@ class AgentSettings:
         temperature = float(os.environ.get("PLATFORM_AGENT_TEMPERATURE", "0"))
         session_dir_raw = os.environ.get("PLATFORM_AGENT_SESSION_DIR", "").strip()
         session_dir = Path(session_dir_raw) if session_dir_raw else platform_settings.state_dir / "agent_sessions"
-        base_url = (
-            os.environ.get("OPENAI_BASE_URL", "").strip()
-            or os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "").strip()
-            or None
-        )
+        openai_base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+        qwen_base_url = os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "").strip() or None
 
         # This default works both in source checkout and deployed runtime:
         #   <repo>/platform_agent/settings.py         -> <repo>/knowledge
@@ -143,7 +141,8 @@ class AgentSettings:
             max_tool_calls=max(1, max_tool_calls),
             session_dir=session_dir,
             temperature=temperature,
-            base_url=base_url,
+            openai_base_url=openai_base_url,
+            qwen_base_url=qwen_base_url,
             knowledge_enabled=_env_bool("PLATFORM_AGENT_KNOWLEDGE_ENABLED", True),
             knowledge_source_dir=knowledge_source_dir,
             knowledge_index_file=knowledge_index_file,

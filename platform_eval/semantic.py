@@ -16,7 +16,7 @@ from platform_planning.service import TaskPlanningService
 from platform_rag.service import AsyncKnowledgeRetriever, KnowledgeService
 
 from .aligned import FixtureToolClient, load_jsonl
-from .deepeval_adapter import run_deepeval_tool_metrics
+from .deepeval_adapter import PRE_CONTRACT_AUDIT_BASELINE, run_deepeval_tool_metrics
 from .ragas_adapter import run_ragas_judge
 
 
@@ -26,7 +26,7 @@ async def _collect_rag_samples_async(
     settings: AgentSettings,
 ) -> list[dict[str, Any]]:
     cases = load_jsonl(cases_path)
-    model = build_model_from_env(settings.provider, settings.model, settings.temperature, settings.base_url)
+    model = build_model_from_env(settings.provider, settings.model, settings.temperature)
     samples = []
     with tempfile.TemporaryDirectory(prefix="v11_rag_judge_memory_") as td:
         runtime = build_agent_runtime(
@@ -89,6 +89,7 @@ def _tool_case_seed(case: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": case.get("id"),
         "case_id": case.get("id"),
+        "category": str(case.get("category") or ""),
         "input": case.get("query", ""),
         "query": case.get("query", ""),
         "actual_output": "",
@@ -161,7 +162,7 @@ async def _collect_tool_samples_async(cases_path: str | Path, settings: AgentSet
     samples = [_tool_case_seed(case) for case in cases]
 
     try:
-        model = build_model_from_env(settings.provider, settings.model, settings.temperature, settings.base_url)
+        model = build_model_from_env(settings.provider, settings.model, settings.temperature)
     except Exception:
         for sample in samples:
             _set_collection_error(sample, "model_build_failed")
@@ -232,4 +233,10 @@ def collect_deepeval_tool_samples(cases_path: str | Path, settings: AgentSetting
 
 
 def run_deepeval_on_agent(cases_path: str | Path, settings: AgentSettings) -> dict[str, Any]:
-    return run_deepeval_tool_metrics(collect_deepeval_tool_samples(cases_path, settings))
+    result = run_deepeval_tool_metrics(collect_deepeval_tool_samples(cases_path, settings))
+    contract_version = Path(cases_path).parent.name
+    result["contract_version"] = contract_version
+    result["case_file"] = str(cases_path)
+    if contract_version == "v1_3_2":
+        result["pre_contract_audit_baseline"] = dict(PRE_CONTRACT_AUDIT_BASELINE)
+    return result

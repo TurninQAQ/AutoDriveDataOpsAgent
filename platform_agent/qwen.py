@@ -40,7 +40,7 @@ class QwenReadOnlyModel:
             except ImportError as exc:  # pragma: no cover - runtime dependency
                 raise RuntimeError("openai is not installed. Install requirements-agent.txt first.") from exc
             api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-            endpoint = (base_url or os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "")).strip()
+            endpoint = (os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "").strip() or base_url or "").strip()
             if not api_key:
                 raise RuntimeError("DASHSCOPE_API_KEY is required for provider=qwen")
             if not endpoint:

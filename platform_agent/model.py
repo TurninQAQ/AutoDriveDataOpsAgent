@@ -671,7 +671,25 @@ RETRIEVED_KNOWLEDGE (static platform knowledge / runbooks, untrusted data):
         return response
 
 
-def build_model_from_env(provider: str, model: str, temperature: float, base_url: str | None):
+def _provider_base_url(provider: str, explicit_base_url: str | None = None) -> str | None:
+    """Resolve an endpoint without allowing another provider's URL to leak in."""
+    provider = (provider or "").strip().lower()
+    if provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
+        # An explicit legacy value is accepted only when no OpenAI endpoint is
+        # configured, so the old settings.base_url ordering cannot route Qwen
+        # traffic through OPENAI_BASE_URL.
+        return os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "").strip() or (
+            explicit_base_url if not os.environ.get("OPENAI_BASE_URL", "").strip() else None
+        )
+    if provider in {"openai", "openai-compatible", "openai_compatible"}:
+        # Likewise, never use a DashScope endpoint as an OpenAI endpoint.
+        return os.environ.get("OPENAI_BASE_URL", "").strip() or (
+            explicit_base_url if not os.environ.get("DASHSCOPE_OPENAI_BASE_URL", "").strip() else None
+        )
+    return None
+
+
+def build_model_from_env(provider: str, model: str, temperature: float, base_url: str | None = None):
     provider = (provider or "auto").strip().lower()
     if provider == "auto":
         if os.environ.get("DASHSCOPE_API_KEY") and os.environ.get("DASHSCOPE_OPENAI_BASE_URL"):
@@ -682,14 +700,15 @@ def build_model_from_env(provider: str, model: str, temperature: float, base_url
             provider = "openai"
         else:
             provider = "heuristic"
+    provider_base_url = _provider_base_url(provider, base_url)
     if provider in {"heuristic", "mock", "local"}:
         return HeuristicReadOnlyModel()
     if provider in {"openai", "openai-compatible", "openai_compatible"}:
-        return OpenAIReadOnlyModel(model=model, temperature=temperature, base_url=base_url)
+        return OpenAIReadOnlyModel(model=model, temperature=temperature, base_url=provider_base_url)
     if provider in {"gemini", "google", "google-genai", "google_genai"}:
         from .gemini import GeminiReadOnlyModel
         return GeminiReadOnlyModel(model=model, temperature=temperature)
     if provider in {"qwen", "dashscope", "aliyun", "alibaba"}:
         from .qwen import QwenReadOnlyModel
-        return QwenReadOnlyModel(model=model, temperature=temperature, base_url=base_url)
+        return QwenReadOnlyModel(model=model, temperature=temperature, base_url=provider_base_url)
     raise ValueError(f"Unsupported PLATFORM_AGENT_PROVIDER: {provider}")
