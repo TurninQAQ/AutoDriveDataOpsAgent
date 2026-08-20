@@ -222,6 +222,7 @@ def test_read_only_tool_contract_is_fixed():
         "inspect_task_containers",
         "get_stage_logs",
         "diagnose_task",
+        "search_knowledge",
     )
 
 

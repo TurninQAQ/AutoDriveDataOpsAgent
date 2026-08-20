@@ -14,6 +14,7 @@ READ_ONLY_TOOL_NAMES = (
     "inspect_task_containers",
     "get_stage_logs",
     "diagnose_task",
+    "search_knowledge",
 )
 
 WRITE_PREP_TOOL_NAMES = (
@@ -106,6 +107,11 @@ def build_mcp_server(facade: PlatformMCPFacade | None = None, include_write_tool
         """Aggregate queue, Airflow, Docker and GPU evidence without LLM inference."""
         return facade.diagnose_task(task_name, dataset_name)
 
+    @mcp.tool()
+    def search_knowledge(query: str, top_k: int = 5) -> dict[str, Any]:
+        """Search the static platform knowledge base and return ranked evidence."""
+        return facade.search_knowledge(query, top_k)
+
     if include_write_tools:
         @mcp.tool()
         def get_write_precondition(task_name: str = "") -> dict[str, Any]:
@@ -168,7 +174,19 @@ def main() -> None:
     import sys
 
     try:
-        server = build_mcp_server(include_write_tools=True)
+        # Keep the stdio MCP entrypoint aligned with the Agent runtime's configured
+        # embedding/index settings without importing Agent modules at module load.
+        from platform_agent.runtime import build_knowledge_service
+        from platform_agent.settings import AgentSettings
+        from platform_core.settings import PlatformSettings
+
+        platform_settings = PlatformSettings.from_env()
+        agent_settings = AgentSettings.from_env(platform_settings)
+        facade = build_default_facade(
+            platform_settings,
+            knowledge_service=build_knowledge_service(agent_settings),
+        )
+        server = build_mcp_server(facade, include_write_tools=True)
     except RuntimeError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         raise SystemExit(2) from None

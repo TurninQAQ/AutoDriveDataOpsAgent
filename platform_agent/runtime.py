@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from platform_core.settings import PlatformSettings
 from platform_mcp.facade import build_default_facade
-from platform_rag.service import AsyncKnowledgeRetriever, KnowledgeService
+from platform_rag.service import KnowledgeService
 from platform_rag.embeddings import GeminiEmbeddingProvider, QwenEmbeddingProvider
 from platform_planning.service import TaskPlanningService
 from platform_observability import ObservedToolClient, TraceRecorder, TraceStore
@@ -71,7 +71,11 @@ def build_trace_recorder(agent_settings: AgentSettings) -> TraceRecorder:
 def build_default_agent():
     platform_settings = PlatformSettings.from_env()
     agent_settings = AgentSettings.from_env(platform_settings)
-    facade = build_default_facade(platform_settings)
+    knowledge_service = build_knowledge_service(agent_settings)
+    facade = build_default_facade(
+        platform_settings,
+        knowledge_service=knowledge_service,
+    )
     raw_tool_client = InMemoryMCPToolClient(facade)
     trace_recorder = build_trace_recorder(agent_settings)
     tool_client = ObservedToolClient(raw_tool_client, trace_recorder)
@@ -82,19 +86,17 @@ def build_default_agent():
     )
     memory = ConversationStore(agent_settings.session_dir)
     approval_store = ApprovalStore(agent_settings.approval_dir, ttl_sec=agent_settings.approval_ttl_sec)
-    knowledge_service = build_knowledge_service(agent_settings)
     task_planning_service = TaskPlanningService.from_env()
-    knowledge_retriever = AsyncKnowledgeRetriever(
-        knowledge_service,
-        enabled=agent_settings.knowledge_enabled,
-    )
     return build_agent_runtime(
         agent_settings.runtime,
         model,
         tool_client,
         memory,
         max_tool_calls=agent_settings.max_tool_calls,
-        knowledge_retriever=knowledge_retriever,
+        # Production RAG is now selected through the read-only MCP
+        # search_knowledge Tool. The workflow parameter remains optional for
+        # legacy V0.5 tests and historical evaluation collectors.
+        knowledge_retriever=None,
         knowledge_top_k=agent_settings.knowledge_top_k,
         task_planning_service=task_planning_service,
         approval_store=approval_store,

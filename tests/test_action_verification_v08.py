@@ -51,7 +51,7 @@ def test_v08_adds_internal_verification_tool_without_exposing_it_to_model():
     assert "get_action_verification_snapshot" in WRITE_PREP_TOOL_NAMES
     assert "get_action_verification_snapshot" in ALL_TOOL_NAMES
     assert "get_action_verification_snapshot" not in READ_ONLY_TOOL_NAMES
-    assert len(ALL_TOOL_NAMES) == 16
+    assert len(ALL_TOOL_NAMES) == 17
 
 
 def test_priority_verification_requires_persisted_config_and_queue_priority():

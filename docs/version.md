@@ -1,4 +1,11 @@
 ## 版本发布说明
+v1.4.1 2026-08-20：RAG as Read-only Agent Tool
+1. 将现有 `KnowledgeService.search()` 以只读 MCP Tool `search_knowledge` 暴露给 Agent，复用原有 Embedding、Chunk、Dense sidecar、Vector Store 和 Hybrid Retrieval，不改变检索算法。
+2. `search_knowledge(query, top_k)` 正式进入 `READ_ONLY_TOOL_NAMES`、MCP schema、InMemoryMCPToolClient 和 Agent policy allowlist；Tool 返回 rank、source、chunk、content、score 及既有 metadata。
+3. 生产 Runtime 不再把 `AsyncKnowledgeRetriever` 注入 workflow 的固定检索节点；Qwen Agent 通过可见 Tool Catalog 自主决定是否调用 `search_knowledge`。旧 workflow 参数保留给历史兼容测试/评测。
+4. 新增独立 `eval/v1_4_1/rag_as_tool_cases.jsonl` 和 RAG-as-Tool 专项测试；不修改 V1.1/V1.3.2 Tool Cases、Prompt、阈值或写安全边界。
+5. 真实 qwen-plus 新增 Tool collection 为 5/5 valid；本轮观察到 qwen-plus 在知识机制 Case 上选择了 `get_gpu_pool` 而非 `search_knowledge`，因此自主 RAG Tool 选择指标如实记为 baseline/partial，不通过 Prompt tuning 修饰。
+
 v1.3.3 2026-08-20：Qwen Plus Primary Agent
 1. Runtime 默认 Agent Model 切换为 `qwen-plus`；`qwen3.7-flash` 保留为 legacy/fallback，可通过显式 `PLATFORM_AGENT_MODEL` 使用。
 2. 保持 `qwen3.7-text-embedding`、1024 维 Embedding、Qwen DashScope Base URL、Tool Contract、Prompt、Golden Set、HITL、Precondition、Verification、Retry 和 GPU 逻辑不变。

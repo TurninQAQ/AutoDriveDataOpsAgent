@@ -112,6 +112,7 @@ def test_v07_tool_contract_extends_but_does_not_change_v03_read_only_contract():
         "inspect_task_containers",
         "get_stage_logs",
         "diagnose_task",
+        "search_knowledge",
     )
     assert WRITE_PREP_TOOL_NAMES == (
         "get_write_precondition", "validate_task_spec", "get_action_verification_snapshot"
@@ -123,7 +124,7 @@ def test_v07_tool_contract_extends_but_does_not_change_v03_read_only_contract():
         "stop_task",
         "delete_task",
     )
-    assert len(ALL_TOOL_NAMES) == 16
+    assert len(ALL_TOOL_NAMES) == 17
 
 
 def test_mcp_server_registers_write_surface_only_when_enabled(monkeypatch):

@@ -112,7 +112,22 @@ class FacadeToolClient:
         self.facade = facade
 
     async def describe_tools(self) -> list[dict[str, Any]]:
-        return [{"name": name, "description": name, "input_schema": {}} for name in READ_ONLY_TOOL_NAMES]
+        tools = []
+        for name in READ_ONLY_TOOL_NAMES:
+            schema: dict[str, Any] = {}
+            description = name
+            if name == "search_knowledge":
+                description = "Search the static platform knowledge base and return ranked evidence."
+                schema = {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Knowledge search query."},
+                        "top_k": {"type": "integer", "minimum": 1, "maximum": 100, "default": 5},
+                    },
+                    "required": ["query"],
+                }
+            tools.append({"name": name, "description": description, "input_schema": schema})
+        return tools
 
     async def execute(self, calls: list[ToolCallSpec]) -> list[ToolObservation]:
         results: list[ToolObservation] = []

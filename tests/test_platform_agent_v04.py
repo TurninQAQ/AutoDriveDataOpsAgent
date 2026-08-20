@@ -119,6 +119,7 @@ def test_v04_read_only_contract_reuses_v03_tools_only():
         "inspect_task_containers",
         "get_stage_logs",
         "diagnose_task",
+        "search_knowledge",
     }
 
 

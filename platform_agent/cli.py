@@ -99,7 +99,13 @@ async def _chat(args) -> int:
 
 async def _tools(args) -> int:
     platform_settings = PlatformSettings.from_env()
-    client = InMemoryMCPToolClient(build_default_facade(platform_settings))
+    agent_settings = AgentSettings.from_env(platform_settings)
+    client = InMemoryMCPToolClient(
+        build_default_facade(
+            platform_settings,
+            knowledge_service=build_knowledge_service(agent_settings),
+        )
+    )
     tools = await client.describe_tools()
     if args.json:
         print(json.dumps(tools, ensure_ascii=False, indent=2, default=str))
