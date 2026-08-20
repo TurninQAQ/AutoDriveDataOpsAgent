@@ -1,4 +1,11 @@
 ## 版本发布说明
+v1.5.2 2026-08-20：Resumable Adaptive Evaluation & Baseline Completion
+1. 新增 Case-level resumable Adaptive Evaluation runner；每个 Case 使用独立 runtime/thread/fixture，Provider/Agent failure 不阻断后续 Case。
+2. 新增原子 manifest、per-case COMPLETE checkpoint、failed attempt artifact、resume compatibility validation 和 full/partial finalize 语义。
+3. 冻结 `eval/v1_5_0/adaptive_cases.jsonl` 并强制校验 SHA256 `dbd338133139da7785722b0efa1a5718461e62c4df6f888bb133c0ea78199e42`；不修改历史 Adaptive Golden 或 production Prompt。
+4. Provider availability 与 Agent quality 分离；只有 16/16 COMPLETE 才发布 `FULL_BASELINE=true`，不将 Provider Error 计作 Agent Scenario Failure。
+5. 首轮真实 qwen-plus collection 完成 12/16；4 个 Case 各两次 attempt 后为 `provider_auth_error`，随后 resume preflight 2/2 失败；生成 `FULL_BASELINE=false` 的 partial artifact，不伪造 16-case 分数，详见 `docs/evaluation/V1.5.2_RESUMABLE_ADAPTIVE_BASELINE.md`。
+
 v1.5.1 2026-08-20：Adaptive State Closure & Provider Reliability
 1. 修复 Adaptive revised intent 闭环：后续 `decide_next` 明确接收 `CURRENT_INTENT` 和最近结构化 Adaptive decisions；保持 read-only intent 限制，禁止 revision 越过写安全边界。
 2. 新增 canonical read-only Tool Catalog，统一 MCP、Facade dependency-light client 和 V1.5 Scenario Fixture 的名称、语义描述与 required input schema；`get_gpu_pool` 继续表示 current/live state，`search_knowledge` 继续表示 static knowledge。
