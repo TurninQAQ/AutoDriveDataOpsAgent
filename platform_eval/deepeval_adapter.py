@@ -6,6 +6,11 @@ from typing import Any
 
 from platform_mcp.server import WRITE_TOOL_NAMES
 
+from .argument_contract import (
+    evaluate_argument_contract,
+    legacy_subset_match,
+)
+
 
 COLLECTION_INVALID = "COLLECTION_INVALID"
 
@@ -95,48 +100,28 @@ def _expected_arguments(sample: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _argument_requirements(sample: dict[str, Any]) -> tuple[int, int, list[dict[str, Any]]]:
-    expected = _expected_arguments(sample)
     actual = sample.get("actual_arguments") or sample.get("tools_called", [])
-    details: list[dict[str, Any]] = []
-    hits = 0
-    for tool_name, expected_subset in expected.items():
-        matching = [
-            item for item in actual
-            if str(item.get("name") or "") == tool_name
-        ]
-        if expected_subset:
-            ok = any(_arg_subset(item.get("arguments") or {}, expected_subset) for item in matching)
-        else:
-            # An empty Golden subset still requires the expected tool to be
-            # present, while imposing no additional argument fields.
-            ok = bool(matching)
-        hits += int(ok)
-        details.append({
-            "tool": tool_name,
-            "required_arguments": expected_subset,
-            "actual": [item.get("arguments") or {} for item in matching],
-            "ok": ok,
-        })
-    return hits, len(expected), details
+    result = evaluate_argument_contract(
+        actual,
+        expected_arguments=sample.get("expected_arguments"),
+        argument_contract=sample.get("argument_contract"),
+    )
+    return result["hits"], result["total"], result["details"]
 
 
 def _arg_subset(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    for key, expected_value in expected.items():
-        if key not in actual:
-            return False
-        actual_value = actual[key]
-        if isinstance(expected_value, dict) and isinstance(actual_value, dict):
-            if not _arg_subset(actual_value, expected_value):
-                return False
-        elif actual_value != expected_value:
-            return False
-    return True
+    """Backward-compatible alias for the shared legacy matcher."""
+
+    return legacy_subset_match(actual, expected)
 
 
 def _deterministic_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     total_tp = total_fp = total_fn = 0
     forbidden_case_count = 0
     argument_hits = argument_total = 0
+    argument_presence_hits = argument_presence_total = 0
+    exact_argument_hits = exact_argument_total = 0
+    order_hits = order_total = 0
     cases: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
 
@@ -155,9 +140,30 @@ def _deterministic_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]
         total_fn += fn
         forbidden_case_count += int(bool(forbidden_called))
 
-        arg_hits, arg_total, arg_details = _argument_requirements(sample)
+        arg_result = evaluate_argument_contract(
+            sample.get("actual_arguments") or sample.get("tools_called", []),
+            expected_arguments=sample.get("expected_arguments"),
+            argument_contract=sample.get("argument_contract"),
+        )
+        arg_hits = arg_result["hits"]
+        arg_total = arg_result["total"]
+        arg_details = arg_result["details"]
         argument_hits += arg_hits
         argument_total += arg_total
+        argument_presence_hits += arg_result["presence_hits"]
+        argument_presence_total += arg_result["presence_total"]
+        exact_argument_hits += arg_result["exact_hits"]
+        exact_argument_total += arg_result["exact_total"]
+        required_order = [str(name) for name in sample.get("required_order") or []]
+        order_ok = True
+        if required_order:
+            order_total += 1
+            cursor = 0
+            for name in _tool_names(sample, "actual_tools"):
+                if cursor < len(required_order) and name == required_order[cursor]:
+                    cursor += 1
+            order_ok = cursor == len(required_order)
+            order_hits += int(order_ok)
         row = {
             "case_id": sample.get("case_id", sample.get("id")),
             "tool_tp": tp,
@@ -175,6 +181,14 @@ def _deterministic_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]
             "argument_requirement_hits": arg_hits,
             "argument_requirement_total": arg_total,
             "argument_requirement_coverage": arg_hits / arg_total if arg_total else 1.0,
+            "argument_contract_accuracy": arg_result["contract_accuracy"],
+            "argument_presence_coverage": arg_result["presence_coverage"],
+            "exact_argument_accuracy": arg_result["exact_accuracy"],
+            "argument_details": arg_details,
+            "missing_arguments": arg_result["missing_arguments"],
+            "wrong_exact_arguments": arg_result["wrong_exact_arguments"],
+            "required_order": required_order,
+            "order_ok": order_ok,
             "model_tool_miss": bool(sample.get("model_tool_miss", bool(fn))),
         }
         cases.append(row)
@@ -193,6 +207,8 @@ def _deterministic_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]
             failures.append({"case_id": str(row["case_id"]), "failure_type": "TOOL_MISSING"})
         if fp:
             failures.append({"case_id": str(row["case_id"]), "failure_type": "TOOL_EXTRA"})
+        if required_order and not order_ok:
+            failures.append({"case_id": str(row["case_id"]), "failure_type": "TOOL_ORDER_WRONG"})
         if arg_total and arg_hits < arg_total:
             failures.append({"case_id": str(row["case_id"]), "failure_type": "ARGUMENT_WRONG"})
         expected_intent = str(sample.get("expected_intent") or "")
@@ -212,6 +228,16 @@ def _deterministic_tool_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]
         "argument_requirement_coverage": argument_hits / argument_total if argument_total else 1.0,
         "argument_requirement_hits": argument_hits,
         "argument_requirement_total": argument_total,
+        "argument_contract_accuracy": argument_hits / argument_total if argument_total else 1.0,
+        "argument_presence_coverage": argument_presence_hits / argument_presence_total if argument_presence_total else 1.0,
+        "argument_presence_hits": argument_presence_hits,
+        "argument_presence_total": argument_presence_total,
+        "exact_argument_accuracy": exact_argument_hits / exact_argument_total if exact_argument_total else 1.0,
+        "exact_argument_hits": exact_argument_hits,
+        "exact_argument_total": exact_argument_total,
+        "ordering_accuracy": order_hits / order_total if order_total else 1.0,
+        "ordering_hits": order_hits,
+        "ordering_total": order_total,
         "deterministic_cases": cases,
         "failures": failures,
     }
@@ -242,6 +268,9 @@ def _contract_metrics(
             "tool_recall": deterministic_read["tool_recall"],
             "tool_f1": deterministic_read["tool_f1"],
             "argument_requirement_coverage": deterministic_read["argument_requirement_coverage"],
+            "argument_contract_accuracy": deterministic_read["argument_contract_accuracy"],
+            "argument_presence_coverage": deterministic_read["argument_presence_coverage"],
+            "exact_argument_accuracy": deterministic_read["exact_argument_accuracy"],
         },
         "write_metrics": {
             "case_count": len(write_samples),
@@ -314,6 +343,7 @@ def _case_metadata(
         "model_tool_miss": sample.get("model_tool_miss"),
         "write_action": sample.get("write_action"),
         "forbidden_tools_called": sample.get("forbidden_tools_called", []),
+        "required_order": list(sample.get("required_order") or []),
     }
     return row
 

@@ -1,4 +1,11 @@
 ## 版本发布说明
+v1.4.4 2026-08-20：Routing Generalization & Evaluation Hardening
+1. 冻结 V1.4.3 production routing contract，新增独立于 Prompt 示例的 48-case Routing Holdout，覆盖静态知识、实时 GPU、实时任务、通用/具名诊断、Hybrid、规划、写意图和无工具请求。
+2. Hybrid Holdout 明确要求实时 Operational Evidence 与 `search_knowledge` Knowledge Evidence 同时存在；不修改历史 V1.4.1/V1.4.2/V1.4.3 Golden。
+3. 新增统一 `platform_eval.argument_contract`，支持 `exact`、`subset`、`present`、`non_empty`、`one_of`、`range`，并保持旧 `expected_arguments` 递归 subset 兼容。
+4. 新增 Holdout leakage guard、Case schema/tool-set safety validation 和 Argument Contract metrics：Contract Accuracy、Presence Coverage、Exact Accuracy。
+5. 真实 qwen-plus Holdout 为 48/48 valid；Intent Accuracy `0.958333`、ToolCorrectness `0.979167`、ArgumentCorrectness `0.812500`、Tool Precision/Recall/F1 `1.000000/0.953488/0.976190`、Forbidden Write `0`；Hybrid complete route `3/5`，因此 Generalization 记录为 `PARTIAL`，详见 `docs/evaluation/V1.4.4_ROUTING_GENERALIZATION_AND_EVAL_HARDENING.md`。DeepEval 与 Agent 同模型时标记为 `SELF_MODEL_EVALUATION`。
+
 v1.4.3 2026-08-20：Agent Routing & Tool Semantics
 1. 以共享 Evidence Routing Contract 统一 Qwen、Gemini 和 OpenAI-compatible Planner，明确静态知识、实时 GPU、具名任务诊断、任务规划、写操作和无工具请求的路由语义。
 2. 收紧 `get_gpu_pool` 与 `search_knowledge` 的 Tool Description：前者只提供 current/live GPU runtime evidence，后者只提供 static platform documentation、机制、规则和 runbook evidence。

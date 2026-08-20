@@ -20,6 +20,7 @@ from platform_rag.service import AsyncKnowledgeRetriever, KnowledgeService
 from platform_observability.redaction import redact_text
 
 from .aligned import FixtureToolClient, load_jsonl
+from .argument_contract import ArgumentContractError, validate_tool_case, validate_tool_cases
 from .deepeval_adapter import PRE_CONTRACT_AUDIT_BASELINE, run_deepeval_tool_metrics
 from .ragas_adapter import GENERATION_METRIC_NAMES, run_ragas_judge
 
@@ -289,9 +290,13 @@ def _tool_case_seed(case: dict[str, Any]) -> dict[str, Any]:
             for name in required_tools
         ],
         "expected_arguments": expected_arguments,
+        "argument_contract": dict(case.get("argument_contract") or {})
+        if isinstance(case.get("argument_contract"), dict) else {},
         "expected_intent": str(case.get("expected_intent") or ""),
         "actual_intent": "",
         "intent_ok": None,
+        "required_order": list(case.get("required_order") or [])
+        if isinstance(case.get("required_order"), list) else [],
         "write_case": case.get("category") == "write",
         "write_action": None,
         "consider_ordering": bool(case.get("required_order")),
@@ -325,25 +330,24 @@ def _catalog_is_valid(tool_descriptions: Any) -> bool:
 
 
 def _case_schema_error(case: dict[str, Any]) -> str | None:
-    query = case.get("query")
-    if not isinstance(query, str) or not query.strip():
-        return "case_missing_query"
-    for field in ("required_tools", "optional_tools", "forbidden_tools", "required_order"):
-        value = case.get(field)
-        if value is not None and not isinstance(value, list):
-            return f"case_invalid_{field}"
-    expected_arguments = case.get("expected_arguments")
-    if expected_arguments is not None and not isinstance(expected_arguments, dict):
-        return "case_invalid_expected_arguments"
-    expected_intent = case.get("expected_intent")
-    if expected_intent is not None and not isinstance(expected_intent, str):
-        return "case_invalid_expected_intent"
+    try:
+        validate_tool_case(case)
+    except ArgumentContractError as exc:
+        message = str(exc)
+        return "case_invalid_contract:" + message
     return None
 
 
 async def _collect_tool_samples_async(cases_path: str | Path, settings: AgentSettings) -> list[dict[str, Any]]:
     cases = load_jsonl(cases_path)
     samples = [_tool_case_seed(case) for case in cases]
+
+    try:
+        validate_tool_cases(cases)
+    except ArgumentContractError as exc:
+        for sample in samples:
+            _set_collection_error(sample, "case_schema_invalid:" + str(exc))
+        return samples
 
     try:
         model = build_model_from_env(settings.provider, settings.model, settings.temperature)

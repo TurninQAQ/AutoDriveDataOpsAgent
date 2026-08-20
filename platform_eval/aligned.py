@@ -19,6 +19,12 @@ from platform_planning.evaluation import evaluate_task_planning
 from platform_rag.models import RetrievedKnowledge
 from platform_rag.service import KnowledgeService
 
+from .argument_contract import (
+    evaluate_argument_contract,
+    legacy_subset_match,
+    validate_tool_cases,
+)
+
 
 @dataclass(frozen=True)
 class MetricSummary:
@@ -185,16 +191,9 @@ class FixtureToolClient:
 
 
 def _arg_subset(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    for key, expected_value in expected.items():
-        if key not in actual:
-            return False
-        actual_value = actual[key]
-        if isinstance(expected_value, dict) and isinstance(actual_value, dict):
-            if not _arg_subset(actual_value, expected_value):
-                return False
-        elif actual_value != expected_value:
-            return False
-    return True
+    """Backward-compatible alias for the shared legacy matcher."""
+
+    return legacy_subset_match(actual, expected)
 
 
 def _tool_names(calls: Iterable[ToolCallSpec]) -> list[str]:
@@ -202,10 +201,13 @@ def _tool_names(calls: Iterable[ToolCallSpec]) -> list[str]:
 
 
 async def _evaluate_tool_cases_async(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    validate_tool_cases(cases)
     model = HeuristicReadOnlyModel()
     rows = []
     total_tp = total_fp = total_fn = 0
     arg_hits = arg_total = 0
+    arg_presence_hits = arg_presence_total = 0
+    exact_arg_hits = exact_arg_total = 0
     intent_hits = 0
     forbidden_hits = 0
     order_hits = order_total = 0
@@ -225,14 +227,17 @@ async def _evaluate_tool_cases_async(cases: list[dict[str, Any]]) -> dict[str, A
         total_fn += fn
         forbidden_called = [name for name in actual_names if name in forbidden or name in WRITE_TOOL_NAMES]
         forbidden_hits += len(forbidden_called)
-        expected_args = case.get("expected_arguments") or {}
-        arg_details = []
-        for tool_name, expected in expected_args.items():
-            matching = [call for call in calls if call.name == tool_name]
-            ok = bool(matching and any(_arg_subset(call.arguments, expected) for call in matching))
-            arg_total += 1
-            arg_hits += int(ok)
-            arg_details.append({"tool": tool_name, "ok": ok, "expected_subset": expected, "actual": [call.arguments for call in matching]})
+        argument_result = evaluate_argument_contract(
+            calls,
+            expected_arguments=case.get("expected_arguments"),
+            argument_contract=case.get("argument_contract"),
+        )
+        arg_hits += argument_result["hits"]
+        arg_total += argument_result["total"]
+        arg_presence_hits += argument_result["presence_hits"]
+        arg_presence_total += argument_result["presence_total"]
+        exact_arg_hits += argument_result["exact_hits"]
+        exact_arg_total += argument_result["exact_total"]
         expected_intent = str(case.get("expected_intent") or "")
         intent_ok = not expected_intent or plan.intent.value == expected_intent
         intent_hits += int(intent_ok)
@@ -260,7 +265,13 @@ async def _evaluate_tool_cases_async(cases: list[dict[str, Any]]) -> dict[str, A
             "tool_tp": tp,
             "tool_fp": fp,
             "tool_fn": fn,
-            "arguments": arg_details,
+            "arguments": argument_result["details"],
+            "argument_contract_accuracy": argument_result["contract_accuracy"],
+            "argument_presence_coverage": argument_result["presence_coverage"],
+            "exact_argument_accuracy": argument_result["exact_accuracy"],
+            "argument_requirement_coverage": argument_result["contract_accuracy"],
+            "missing_arguments": argument_result["missing_arguments"],
+            "wrong_exact_arguments": argument_result["wrong_exact_arguments"],
             "order_ok": order_ok,
         })
     precision = total_tp / (total_tp + total_fp) if total_tp + total_fp else 1.0
@@ -274,6 +285,14 @@ async def _evaluate_tool_cases_async(cases: list[dict[str, Any]]) -> dict[str, A
         "tool_recall": recall,
         "tool_f1": f1,
         "argument_accuracy": arg_hits / arg_total if arg_total else 1.0,
+        "argument_contract_accuracy": arg_hits / arg_total if arg_total else 1.0,
+        "argument_presence_coverage": arg_presence_hits / arg_presence_total if arg_presence_total else 1.0,
+        "argument_presence_hits": arg_presence_hits,
+        "argument_presence_total": arg_presence_total,
+        "exact_argument_accuracy": exact_arg_hits / exact_arg_total if exact_arg_total else 1.0,
+        "exact_argument_hits": exact_arg_hits,
+        "exact_argument_total": exact_arg_total,
+        "argument_requirement_coverage": arg_hits / arg_total if arg_total else 1.0,
         "forbidden_tool_call_rate": forbidden_hits / len(rows) if rows else 0.0,
         "ordering_accuracy": order_hits / order_total if order_total else 1.0,
         "cases": rows,
