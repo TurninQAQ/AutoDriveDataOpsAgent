@@ -39,11 +39,13 @@ class AutonomyDecision(BaseModel):
     action: str
     risk_level: AutonomyRisk
     eligible: bool
-    policy_version: str = "v1.7.0"
+    policy_version: str = "v1.8.0"
     reasons: list[str] = Field(default_factory=list)
     checks: list[AutonomyCheck] = Field(default_factory=list)
     budget: dict[str, Any] = Field(default_factory=dict)
     frozen_arguments: dict[str, Any] = Field(default_factory=dict)
+    reservation_status: str | None = None
+    existing_approval_id: str | None = None
 
 
 def _clean_name(value: Any) -> str:
@@ -126,17 +128,19 @@ class BoundedAutonomyPolicy:
         enabled: bool = False,
         max_actions_per_request: int = 1,
         max_resume_datasets: int = 3,
+        policy_version: str = "v1.8.0",
     ):
         self.enabled = bool(enabled)
         self.max_actions_per_request = max(1, int(max_actions_per_request))
         self.max_resume_datasets = max(1, int(max_resume_datasets))
+        self.policy_version = str(policy_version)
 
     @staticmethod
     def _check(name: str, passed: bool, expected: Any = None, actual: Any = None) -> AutonomyCheck:
         return AutonomyCheck(name=name, passed=bool(passed), expected=expected, actual=actual)
 
-    @staticmethod
     def _result(
+        self,
         *,
         mode: AutonomyMode,
         action: str,
@@ -151,6 +155,7 @@ class BoundedAutonomyPolicy:
             action=action,
             risk_level=risk,
             eligible=mode == AutonomyMode.AUTO,
+            policy_version=self.policy_version,
             reasons=reasons,
             checks=checks,
             budget=budget,

@@ -1,0 +1,22 @@
+{
+  "version": "V1.8.0",
+  "source": "eval/v1_8/scenario_matrix.json",
+  "deterministic_regression": {"status": "PASS", "tests_passed": 180, "tests_failed": 0},
+  "categories": {
+    "read": "covered_by_existing_regression",
+    "planning": "covered_by_existing_regression",
+    "diagnosis": "covered_by_existing_regression",
+    "hitl": "PASS",
+    "auto": "PASS",
+    "deny": "PASS",
+    "verification": "PASS",
+    "concurrency": "PASS",
+    "environment": "PARTIAL",
+    "efficiency": "NON_BLOCKING_VARIANCE"
+  },
+  "notes": [
+    "Repository-wide candidate run collected 458 tests but timed out in a historical slow GPU/runtime area.",
+    "Fresh model validation had one initial hybrid evidence-selection variance; a bounded one-case adjudication passed.",
+    "No safety failure or false Goal success was observed."
+  ]
+}

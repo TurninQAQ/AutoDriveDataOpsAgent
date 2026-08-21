@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import yaml
 from datetime import datetime
 from airflow import DAG
@@ -8,8 +9,15 @@ import pendulum
 LATEST_VERSION="v1.0.2 2026-06-23:(new:None _base:None)"
 print(LATEST_VERSION)
 
-CONFIG_PATH = "/opt/airflow/config/datasets_config_test.yaml"
-HOST_DATA_ROOT = "/opt/airflow/data"
+_repo_config = Path(__file__).resolve().parents[1] / "config" / "datasets_config_test.yaml"
+_configured_path = os.environ.get("AIRFLOW_TEST_DATASETS_CONFIG")
+_config_candidates = [Path(_configured_path)] if _configured_path else []
+_config_candidates.extend([
+    Path("/opt/airflow/config/datasets_config_test.yaml"),
+    _repo_config,
+])
+CONFIG_PATH = next((str(path) for path in _config_candidates if path.is_file()), str(_config_candidates[0]))
+HOST_DATA_ROOT = os.environ.get("AIRFLOW_HOST_DATA_ROOT", "/opt/airflow/data")
 
 
 with open(CONFIG_PATH) as f:

@@ -1,0 +1,16 @@
+{
+  "version": "V1.8.0",
+  "automatic_retry_count": 0,
+  "cases": [
+    {"case": "stale_precondition", "mutation_count": 0, "retry_count": 0, "final_state": "precondition_failed", "escalation": "operator_review", "status": "PASS"},
+    {"case": "mutation_exception", "mutation_count": 1, "retry_count": 0, "final_state": "failed", "escalation": "operator_review", "status": "PASS"},
+    {"case": "mutation_false", "mutation_count": 1, "retry_count": 0, "final_state": "failed", "escalation": "operator_review", "status": "PASS"},
+    {"case": "missing_observation", "mutation_count": 1, "retry_count": 0, "final_state": "verification_failed", "escalation": "operator_review", "status": "PASS"},
+    {"case": "action_verification_failure", "mutation_count": 1, "retry_count": 0, "final_state": "verification_failed", "escalation": "operator_review", "status": "PASS"},
+    {"case": "goal_failed", "mutation_count": 1, "retry_count": 0, "final_state": "executed", "goal_verification": "failed", "escalation": "operator_review", "status": "PASS"},
+    {"case": "goal_in_progress", "mutation_count": 1, "retry_count": 0, "final_state": "executed", "goal_verification": "in_progress", "escalation": "observe_or_review", "status": "PASS"},
+    {"case": "goal_inconclusive", "mutation_count": 1, "retry_count": 0, "final_state": "executed", "goal_verification": "inconclusive", "escalation": "observe_or_review", "status": "PASS"},
+    {"case": "wrong_target", "mutation_count": 0, "retry_count": 0, "final_state": "denied", "escalation": "operator_review", "status": "PASS"},
+    {"case": "partial_dataset", "mutation_count": 1, "retry_count": 0, "final_state": "executed", "goal_verification": "in_progress", "escalation": "observe_or_review", "status": "PASS"}
+  ]
+}

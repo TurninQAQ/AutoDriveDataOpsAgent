@@ -582,7 +582,7 @@ def parser() -> argparse.ArgumentParser:
     reject.add_argument("--json", action="store_true")
 
     approvals = sub.add_parser("approvals", help="List persisted HITL approvals")
-    approvals.add_argument("--status", default="pending", choices=["pending", "executing", "rejected", "executed", "failed", "verification_failed", "expired", ""])
+    approvals.add_argument("--status", default="pending", choices=["pending", "authorized", "executing", "rejected", "executed", "failed", "verification_failed", "execution_unknown", "expired", ""])
     approvals.add_argument("--json", action="store_true")
 
     traces = sub.add_parser("traces", help="List persisted Agent/Audit trace summaries")

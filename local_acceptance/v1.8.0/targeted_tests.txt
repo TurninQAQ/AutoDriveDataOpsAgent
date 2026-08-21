@@ -1,0 +1,25 @@
+Baseline targeted tests:
+PYTHONPATH=. pytest -q V1.7/V1.6 write, approval, verification, evidence and goal subset
+Result: 78 passed in 0.69s
+
+V1.8.0 focused concurrency/failure and affected safety tests:
+PYTHONPATH=. pytest -q tests/test_autonomy_concurrency_v180.py tests/test_autonomy_failure_injection_v180.py plus V1.7/V1.6 autonomy, write, verification, evidence, planning and adaptive regressions
+Result: 180 passed in 2.27s
+
+Repository collection:
+PYTHONPATH=. pytest --collect-only -q
+Result: 458 tests collected in 1.95s
+
+Repository-wide final candidate:
+PYTHONPATH=. timeout 180s pytest -q
+Result: TIMEOUT; no product failure attribution made. Historical GPU/runtime area remained running.
+
+compileall:
+PYTHONPATH=. python -m compileall -q platform_agent platform_core platform_mcp
+PASS
+
+git diff --check:
+PASS
+
+Local E2E:
+Deterministic AUTO/HITL/DENY integration PASS. External Airflow/Docker runtime E2E NOT_RUN/ENVIRONMENT_BLOCKED.

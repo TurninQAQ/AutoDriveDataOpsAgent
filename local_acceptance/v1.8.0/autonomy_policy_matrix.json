@@ -1,0 +1,18 @@
+{
+  "policy_version": "v1.8.0",
+  "cases": [
+    {"case": "safe_failed_only_resume", "expected": "AUTO", "actual": "AUTO", "status": "PASS"},
+    {"case": "autonomy_disabled", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "non_failed_dataset", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "dataset_budget_exceeded", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "cross_task_preemption", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "missing_target", "expected": "DENY", "actual": "DENY", "status": "PASS"},
+    {"case": "wrong_target", "expected": "DENY", "actual": "DENY", "status": "PASS"},
+    {"case": "task_missing", "expected": "DENY", "actual": "DENY", "status": "PASS"},
+    {"case": "critical_evidence_unavailable", "expected": "DENY", "actual": "DENY", "status": "PASS"},
+    {"case": "submit", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "priority", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "stop", "expected": "HITL", "actual": "HITL", "status": "PASS"},
+    {"case": "delete", "expected": "HITL", "actual": "HITL", "status": "PASS"}
+  ]
+}

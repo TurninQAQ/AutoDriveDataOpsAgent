@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .approval import ApprovalStore, PendingApproval
-from .autonomy import AutonomyDecision, AutonomyMode, BoundedAutonomyPolicy
+from .approval import ApprovalStore, PendingApproval, action_fingerprint
+from .autonomy import AutonomyDecision, AutonomyMode, AutonomyRisk, BoundedAutonomyPolicy
 from .goal_verification import GoalVerifier
 from .models import AgentIntent, AgentPlan, ToolCallSpec, ToolObservation
 from .policy import AgentPolicyEngine
@@ -274,7 +274,8 @@ class WriteActionCoordinator:
         if decision.mode == AutonomyMode.AUTO:
             context.arguments = dict(decision.frozen_arguments)
             context.impact_summary, context.impact_details = self.impact(plan, observations, context.arguments)
-            auto = self.approval_store.create_auto_execution(
+            reservation = self.approval_store.reserve_auto_execution(
+                max_actions_per_request=self.autonomy_policy.max_actions_per_request if self.autonomy_policy else 1,
                 thread_id=thread_id,
                 user_request=state_user_text,
                 tool_name=context.tool_name,
@@ -287,7 +288,50 @@ class WriteActionCoordinator:
                 trace_id=trace_id,
                 policy_decision=decision.model_dump(mode="json"),
             )
-            return decision, auto
+            decision = decision.model_copy(update={
+                "reservation_status": reservation.status,
+                "existing_approval_id": reservation.existing_record.approval_id if reservation.existing_record else None,
+                "budget": {
+                    **decision.budget,
+                    "actions_used": reservation.auto_actions_used,
+                },
+            })
+            if self.trace_recorder is not None and trace_id:
+                self.trace_recorder.record(
+                    trace_id,
+                    "autonomy",
+                    "autonomy_reservation",
+                    status=reservation.status,
+                    data={
+                        "approval_id": reservation.record.approval_id if reservation.record else None,
+                        "existing_approval_id": reservation.existing_record.approval_id if reservation.existing_record else None,
+                        "action_fingerprint": reservation.action_fingerprint,
+                        "auto_actions_used": reservation.auto_actions_used,
+                        "actions_limit": self.autonomy_policy.max_actions_per_request if self.autonomy_policy else 1,
+                    },
+                )
+            if reservation.status == "reserved":
+                return decision, reservation.record
+            if reservation.status == "duplicate_existing":
+                return decision, reservation.existing_record
+
+            # The policy snapshot may have been stale, but the atomic
+            # reservation is authoritative.  A different AUTO action already
+            # consumed the slot, so fall back to the ordinary HITL path.
+            decision = decision.model_copy(update={
+                "mode": AutonomyMode.HITL,
+                "eligible": False,
+                "risk_level": AutonomyRisk.MEDIUM,
+                "reasons": [*decision.reasons, "autonomy_action_budget_exceeded"],
+            })
+            pending = self._create_hitl_approval(
+                context=context,
+                state_user_text=state_user_text,
+                thread_id=thread_id,
+                trace_id=trace_id,
+                policy_decision=decision,
+            )
+            return decision, pending
 
         if decision.mode == AutonomyMode.DENY:
             return decision, None
@@ -304,12 +348,11 @@ class WriteActionCoordinator:
     async def execute_approval(self, approval_id: str, execution_trace_id: str = "") -> PendingApproval:
         preview = self.approval_store.get(approval_id)
         self.policy.validate_write_tool(preview.tool_name)
-        if preview.authorization_mode == "auto":
-            if preview.status != "executing":
-                raise RuntimeError(f"Auto action is not executable from status: {preview.status}")
-            item = preview
-        else:
-            item = self.approval_store.claim_for_execution(approval_id, execution_trace_id=execution_trace_id)
+        # Both HITL and AUTO use the same atomic CAS-style claim.  In
+        # particular, an AUTO record in ``executing`` is never replayed: it
+        # may represent an external mutation whose outcome is unknown after a
+        # crash.
+        item = self.approval_store.claim_for_execution(approval_id, execution_trace_id=execution_trace_id)
         if self.trace_recorder is not None and execution_trace_id:
             self.trace_recorder.record(
                 execution_trace_id,
@@ -322,11 +365,25 @@ class WriteActionCoordinator:
                     "tool": item.tool_name,
                     "arguments": item.arguments,
                     "risk_level": item.risk_level,
+                    "authorization_mode": item.authorization_mode,
+                    "action_fingerprint": item.action_fingerprint,
                 },
                 parent_trace_id=item.trace_id or None,
             )
         arguments = dict(item.arguments)
         arguments["precondition"] = dict(item.precondition)
+        if item.authorization_mode == "auto" and item.action_fingerprint:
+            if action_fingerprint(item.tool_name, item.arguments) != item.action_fingerprint:
+                failed = self.approval_store.mark_failed(approval_id, "Frozen AUTO action fingerprint mismatch; mutation was blocked")
+                if self.trace_recorder is not None and execution_trace_id:
+                    self.trace_recorder.record(
+                        execution_trace_id,
+                        "autonomy",
+                        "failure_escalation",
+                        status="error",
+                        data={"approval_id": approval_id, "reason": "action_fingerprint_mismatch", "automatic_retry": False},
+                    )
+                return failed
         try:
             observations = await self.tool_client.execute([
                 ToolCallSpec(name=item.tool_name, arguments=arguments)

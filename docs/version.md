@@ -1,4 +1,13 @@
 ## 版本发布说明
+### V1.8.0 A+ Final Hardening — 2026-08-21
+
+1. 为 bounded autonomous `resume_task` 增加 trace-scoped atomic reservation、canonical action fingerprint 和 duplicate/budget race protection。
+2. 将 AUTO record 生命周期收紧为 `authorized -> executing -> final`，并让 AUTO/HITL 共用 atomic execution claim；已 claim 的 AUTO record fail closed，禁止 replay。
+3. 增加并发 reservation/claim、重启持久化、failure injection、冻结 scope/fingerprint 和 no-retry 回归；保持只有 `resume_task` 可 AUTO，其他写操作继续 HITL。
+4. 增加 A+ capability/safety matrix、scenario matrix 和 V1.8 acceptance artifacts；Frozen Golden 保持不变。
+
+详见 `docs/evaluation/V1.8.0_A_PLUS_FINAL_HARDENING.md`。
+
 ### V1.7.0 Bounded Autonomy — 2026-08-21
 
 1. 新增 deterministic `AUTO/HITL/DENY` autonomy policy；只有满足当前失败 dataset、冻结 scope、完整 verification baseline、有效 Precondition、dataset/action budget 和无跨任务抢占条件的 `resume_task` 可以 AUTO。

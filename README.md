@@ -154,6 +154,16 @@ export PLATFORM_AGENT_AUTO_RESUME_MAX_DATASETS=3
 
 实现与验收记录见：[V1.7.0 Bounded Autonomy](docs/evaluation/V1.7.0_BOUNDED_AUTONOMY.md)。
 
+## V1.8 A+ Final Hardening
+
+V1.8 保持只有 `resume_task` 可进入 deterministic AUTO，并封闭并发
+reservation race、重复 action fingerprint、同一 AUTO record 的重复 claim、
+重启 replay、scope drift 和 failure retry。AUTO 记录先持久化为
+`authorized`，再通过原子 claim 进入 `executing`，并继续经过
+Precondition、Mutation、Action Verification 和 Goal Verification。
+
+实现与验收记录见：[V1.8.0 A+ Final Hardening](docs/evaluation/V1.8.0_A_PLUS_FINAL_HARDENING.md)。
+
 
 ## Agent V0.9 Observability / Evaluation
 

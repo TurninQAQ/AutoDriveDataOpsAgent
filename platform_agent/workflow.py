@@ -571,6 +571,43 @@ class ReadOnlyAgentNodes:
                 tool_trace=self._trace(observations),
             )
 
+        if decision.mode == AutonomyMode.AUTO and decision.reservation_status == "duplicate_existing":
+            existing = pending
+            if existing is None:
+                return AgentResponse(
+                    intent=plan.intent,
+                    summary="Duplicate AUTO request was blocked because its existing authorization record could not be loaded.",
+                    confidence="low",
+                    blocked=True,
+                    errors=["duplicate_existing authorization record missing"],
+                    policy_decision=decision_payload,
+                    authorization_mode="auto",
+                    task_plan=task_plan_dict,
+                    tool_trace=self._trace(observations),
+                )
+            existing_goal = existing.goal_verification_result or {}
+            already_satisfied = existing.status == "executed" and existing_goal.get("status") == "satisfied"
+            return AgentResponse(
+                intent=plan.intent,
+                summary=(
+                    "The same AUTO action already has an authorization/execution record; "
+                    "no duplicate mutation was executed."
+                ),
+                evidence=["duplicate_existing"],
+                confidence="high" if already_satisfied else "medium",
+                blocked=not already_satisfied,
+                approval_required=False,
+                approval_id=existing.approval_id,
+                pending_action=existing.model_dump(mode="json"),
+                action_result=existing.execution_result,
+                authorization_mode="auto",
+                policy_decision=decision_payload,
+                action_verification=existing.verification_result,
+                goal_verification_result=existing.goal_verification_result,
+                task_plan=task_plan_dict,
+                tool_trace=self._trace(observations),
+            )
+
         if decision.mode == AutonomyMode.AUTO:
             if pending is None:
                 return AgentResponse(
