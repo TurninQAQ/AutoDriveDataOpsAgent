@@ -63,21 +63,28 @@ def _extract_paths(text: str) -> list[str]:
     """Extract only paths explicitly described as input data.
 
     A generic absolute-path scan misclassified output/config destinations as
-    datasets. Keep this parser intentionally small and literal; ambiguous paths
-    remain available to the model draft or unresolved validation.
+    datasets.  Locate an input-data introducer first, then consume only the
+    contiguous path group that follows it.  This keeps explicit multi-dataset
+    literals authoritative without treating later output/config paths as input.
     """
 
-    path = r"(/[^\s,，;；。！？?]+)"
-    patterns = (
-        rf"(?:数据(?:集)?|dataset)\s*(?:在|为|是|路径(?:为)?)?\s*[:=：]?\s*{path}",
-        rf"(?:dataset)\s*[:=：]\s*{path}",
-        rf"(?:把|用)\s*{path}\s*(?:做|处理|跑|作为)",
-        rf"(?:处理|输入|使用)\s*{path}",
+    path = r"/[^\s,，、;；。！？?]+"
+    introducer = re.compile(
+        r"(?:数据(?:集)?|datasets?|输入|处理|使用|把)"
+        r"\s*(?:在|为|是|路径(?:为)?)?\s*[:=：]?\s*",
+        re.IGNORECASE,
+    )
+    path_group = re.compile(
+        rf"{path}(?:\s*(?:,|，|、|和|与|and)\s*{path})*",
+        re.IGNORECASE,
     )
     found: list[str] = []
-    for pattern in patterns:
-        found.extend(match.group(1) for match in re.finditer(pattern, text, re.IGNORECASE))
-    return _unique([item.rstrip(".。") for item in found])
+    for match in introducer.finditer(text):
+        group = path_group.match(text, match.end())
+        if not group:
+            continue
+        found.extend(re.findall(path, group.group(0), re.IGNORECASE))
+    return _unique([item.rstrip(".,，、;；。！？?）)]}") for item in found])
 
 
 def _dataset_names(text: str) -> list[str]:

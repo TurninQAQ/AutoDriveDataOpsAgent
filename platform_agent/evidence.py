@@ -47,6 +47,22 @@ TARGET_AWARE_EVIDENCE_TYPES = frozenset(
     }
 )
 
+# These are fields from DiagnosisService.inspect_task().  A successful call
+# with only task_name (or an arbitrary status/message field) is not enough to
+# claim that diagnostic facts were collected.
+DIAGNOSTIC_FACT_KEYS = frozenset(
+    {
+        "queue",
+        "airflow",
+        "containers",
+        "gpu_reservations",
+        "gpu_devices",
+        "errors",
+        "evidence_complete",
+        "datasets",
+    }
+)
+
 
 def evidence_types_for_tool(tool_name: str) -> tuple[EvidenceType, ...]:
     """Return metadata for a tool without making a routing decision."""
@@ -104,6 +120,20 @@ def _has_non_empty_key(data: Any, keys: set[str]) -> bool:
         for key, value in data.items()
         if str(key).lower() in keys
     )
+
+
+def is_diagnostic_context_payload(data: Any) -> bool:
+    """Return whether *data* contains a real diagnosis facts field.
+
+    DiagnosisService is deliberately a deterministic facts plane.  Presence of
+    at least one field from its structured contract is sufficient, including
+    partial values and ``evidence_complete=False``.  A task name alone,
+    arbitrary metadata, or a success message is not diagnostic context.
+    """
+
+    if not isinstance(data, dict):
+        return False
+    return any(str(key).lower() in DIAGNOSTIC_FACT_KEYS for key in data)
 
 
 @dataclass
@@ -171,6 +201,7 @@ class EvidenceTracker:
             observation.tool_name == "diagnose_task"
             and isinstance(observation.data, dict)
             and task_name is not None
+            and is_diagnostic_context_payload(observation.data)
         )
         if observation.tool_name == "get_stage_logs":
             logs = observation.data.get("logs") if isinstance(observation.data, dict) else None
@@ -269,6 +300,8 @@ __all__ = [
     "TOOL_EVIDENCE_TYPES",
     "TASK_SCOPED_TOOLS",
     "TARGET_AWARE_EVIDENCE_TYPES",
+    "DIAGNOSTIC_FACT_KEYS",
     "evidence_subject_from_observation",
+    "is_diagnostic_context_payload",
     "evidence_types_for_tool",
 ]

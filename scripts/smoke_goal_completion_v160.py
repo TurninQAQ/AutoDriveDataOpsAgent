@@ -316,7 +316,7 @@ async def collect(args) -> int:
 
     valid = sum(1 for item in samples if item.get("smoke_case_valid", False))
     payload = {
-        "version": "v1.6.2",
+        "version": "v1.6.3",
         "development_model": args.model,
         "not_formal_qwen_plus_benchmark": True,
         "preflight": preflight.as_dict(),
@@ -357,7 +357,7 @@ async def collect(args) -> int:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="qwen3.7-plus")
-    parser.add_argument("--output", type=Path, default=Path("local_acceptance/v1.6.0_goal_smoke_qwen3_7_plus.json"))
+    parser.add_argument("--output", type=Path, default=Path("local_acceptance/v1.6.3_goal_smoke_qwen3_7_plus.json"))
     parser.add_argument("--max-steps", type=int, default=8)
     parser.add_argument("--max-tool-calls", type=int, default=6)
     parser.add_argument("--request-timeout-sec", type=float, default=45.0)

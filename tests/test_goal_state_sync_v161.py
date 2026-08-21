@@ -67,7 +67,12 @@ class _Client:
         assert len(calls) == 1
         call_spec = calls[0]
         if call_spec.name == "diagnose_task":
-            data = {"task_name": "release_demo", "reason": "waiting_gpu"}
+            data = {
+                "task_name": "release_demo",
+                "queue": {"state": "waiting_gpu"},
+                "errors": [],
+                "evidence_complete": True,
+            }
         else:
             data = {"results": [{"content": "soft preemption rule"}]}
         return [ToolObservation(tool_name=call_spec.name, arguments=call_spec.arguments, ok=True, data=data)]

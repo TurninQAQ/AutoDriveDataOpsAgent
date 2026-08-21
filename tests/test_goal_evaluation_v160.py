@@ -53,7 +53,16 @@ def test_hybrid_goal_requires_both_live_and_static_evidence():
             "success_criteria": ["ignored"],
         }
     )
-    live = observation("diagnose_task", {"task_name": "release_demo", "state": "draining"}, task_name="release_demo")
+    live = observation(
+        "diagnose_task",
+        {
+            "task_name": "release_demo",
+            "queue": {"state": "draining"},
+            "errors": [],
+            "evidence_complete": True,
+        },
+        task_name="release_demo",
+    )
     static = observation("search_knowledge", {"results": [{"content": "soft preemption"}]}, query="soft preemption")
     only_live = evaluate_goal_progress(goal, records_for(live), [live])
     complete = evaluate_goal_progress(goal, records_for(live, static), [live, static])

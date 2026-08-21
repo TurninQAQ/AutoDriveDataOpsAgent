@@ -60,7 +60,12 @@ def test_goal_progress_reaches_next_decision_and_finish_is_goal_satisfied():
                 tool_name=call_spec.name,
                 arguments=call_spec.arguments,
                 ok=True,
-                data={"task_name": "release_demo", "reason": "waiting_gpu"},
+                data={
+                    "task_name": "release_demo",
+                    "queue": {"state": "waiting_gpu"},
+                    "errors": [],
+                    "evidence_complete": True,
+                },
             )
         ]
 

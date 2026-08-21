@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.6.3 Final Deterministic Invariant Closure — 2026-08-21
+
+1. 收紧 `DIAGNOSTIC_CONTEXT`：只有 target-bound `diagnose_task` 返回真实 DiagnosisService facts 字段时才生成；空 payload、任意 message 和 task_name-only payload 不再满足诊断 Evidence，`evidence_complete=false` 的 partial facts 仍然有效。
+2. 完善显式 multi-dataset path group 提取，支持中文/英文分隔符并排除输出 YAML/config 路径；保持 Explicit User Literal > Model Semantic > Derived > Default precedence。
+3. 新增诊断 context、wrong-target、multi-dataset、output-path 和双数据集 TaskSpec deterministic regressions；相关回归 `214 passed`。
+4. 使用 qwen3.7-plus 完成一次非正式 10-case smoke：9/10 valid、Goal State Parity 10/10、安全违规 0；失败仍是 bounded read-only efficiency variance，不通过 Prompt tuning 修复。qwen-plus formal benchmark deferred。
+
 ### V1.6.2 Entity-Bound Evidence, Diagnosis Semantics & Planning Merge Correctness — 2026-08-21
 
 1. 为 `EvidenceRecord` 增加可选的 `task_name`/`dataset_name` provenance；任务级 Goal 条件现在要求目标实体 exact match，避免跨任务诊断或 Recovery evidence 污染。
