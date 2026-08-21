@@ -19,7 +19,12 @@ from .models import (
     GoalProgress,
     ToolObservation,
 )
-from .goal import evaluate_goal_progress, normalize_plan_goal, resolve_goal_contract
+from .goal import (
+    evaluate_goal_progress,
+    finalize_goal_response,
+    normalize_plan_goal,
+    resolve_goal_contract,
+)
 from .policy import AgentPolicyEngine
 
 
@@ -574,8 +579,25 @@ class ReadOnlyAgentNodes:
             knowledge,
             goal_contract=goal_contract,
         )
-        state.setdefault("goal_evaluation", goal_evaluation.model_dump(mode="json"))
-        state.setdefault("goal_progress", goal_evaluation.state.value)
+        # Adaptive budget/failure termination is an authoritative blocked state;
+        # do not let the answer node recompute it back to IN_PROGRESS merely
+        # because the final observation set is incomplete.
+        if state.get("goal_progress") == GoalProgress.BLOCKED.value:
+            goal_evaluation = goal_evaluation.model_copy(
+                update={
+                    "state": GoalProgress.BLOCKED,
+                    "summary": "Goal was blocked by adaptive termination before completion.",
+                }
+            )
+        if state.get("termination_reason") == "unsafe_adaptive_decision":
+            goal_evaluation = goal_evaluation.model_copy(
+                update={
+                    "state": GoalProgress.BLOCKED,
+                    "summary": "Goal was blocked because an adaptive decision crossed the read-only safety boundary.",
+                }
+            )
+        state["goal_evaluation"] = goal_evaluation.model_dump(mode="json")
+        state["goal_progress"] = goal_evaluation.state.value
 
         if plan.intent in WRITE_INTENTS:
             response = await self._write_answer(state, plan, observations)
@@ -704,6 +726,33 @@ class ReadOnlyAgentNodes:
             response.blocked = True
         for item in retrieval_errors:
             response.errors.append(f"knowledge retrieval: {item.content}")
+        final_goal_evaluation = finalize_goal_response(
+            plan.goal,
+            goal_contract,
+            goal_evaluation,
+            response,
+        )
+        state["goal_evaluation"] = final_goal_evaluation.model_dump(mode="json")
+        state["goal_progress"] = final_goal_evaluation.state.value
+        if final_goal_evaluation.state != GoalProgress.SATISFIED:
+            state["evidence_sufficient"] = False
+            if state.get("adaptive_step_count") and state.get("termination_reason") in {
+                None,
+                "unknown",
+                "agent_finished",
+                "goal_satisfied",
+                "goal_incomplete",
+            }:
+                state["termination_reason"] = "goal_incomplete"
+            message = "Final synthesis did not provide enough information to complete the user goal."
+            if message not in response.errors:
+                response.errors.append(message)
+            if response.confidence == "high":
+                response.confidence = "low"
+        else:
+            state["evidence_sufficient"] = True
+            if state.get("adaptive_step_count") and state.get("termination_reason") == "goal_incomplete":
+                state["termination_reason"] = "goal_satisfied"
         return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
 
     @staticmethod

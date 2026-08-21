@@ -40,6 +40,23 @@ _DETERMINISTIC_DRAFT_FIELDS = (
     "images",
 )
 
+_FIELD_EXPLICIT_MARKERS: dict[str, tuple[str, ...]] = {
+    "task_type": ("task_type",),
+    "task_prefix": ("task_prefix",),
+    "priority": ("priority",),
+    "dataset_paths": ("datasets.dataset_path",),
+    "dataset_names": ("datasets.dataset_name",),
+    "pipeline_stages": ("pipeline_stages",),
+    "pipeline_mode": ("pipeline_stages",),
+    "timeout_min": ("datasets.timeout_min",),
+    "max_active_runs": ("max_active_runs",),
+    "gpu_ids": ("gpu_ids",),
+    "gpu_stage_memory_mb": ("gpu_stage_memory_mb",),
+    "exclusive_gpu_stages": ("exclusive_gpu_stages",),
+    "shared_gpu_stages": ("shared_gpu_stages",),
+    "images": ("datasets.images",),
+}
+
 
 def _has_draft_value(value: Any) -> bool:
     return value is not None and value != "" and value != [] and value != {}
@@ -58,9 +75,15 @@ def merge_task_drafts(
 
     deterministic = dict(deterministic_draft or {})
     merged = deepcopy(dict(model_draft or {}))
+    explicit_fields = {str(item) for item in deterministic.get("explicit_fields") or []}
     for field in _DETERMINISTIC_DRAFT_FIELDS:
         value = deterministic.get(field)
         if not _has_draft_value(value):
+            continue
+        is_explicit = bool(explicit_fields.intersection(_FIELD_EXPLICIT_MARKERS.get(field, ())))
+        # Explicit user literals override model output. Derived parser values
+        # are only fallbacks and must not overwrite a model semantic value.
+        if not is_explicit and _has_draft_value(merged.get(field)):
             continue
         if isinstance(value, dict):
             current = merged.get(field)
@@ -70,14 +93,14 @@ def merge_task_drafts(
         else:
             merged[field] = deepcopy(value)
 
-    explicit_fields: list[str] = []
+    merged_explicit_fields: list[str] = []
     for source in (merged.get("explicit_fields"), deterministic.get("explicit_fields")):
         for field in source or []:
             field = str(field)
-            if field not in explicit_fields:
-                explicit_fields.append(field)
-    if explicit_fields:
-        merged["explicit_fields"] = explicit_fields
+            if field not in merged_explicit_fields:
+                merged_explicit_fields.append(field)
+    if merged_explicit_fields:
+        merged["explicit_fields"] = merged_explicit_fields
     return merged
 
 
@@ -241,12 +264,15 @@ class TaskPlanningService:
             # leave the model draft untouched and let normal validation report
             # unresolved fields.
             deterministic_draft = {}
-        draft = merge_task_drafts(deterministic_draft, draft)
+        model_draft = dict(draft or {})
+        deterministic_explicit_fields = set(deterministic_draft.get("explicit_fields") or [])
         derived_prefix_from_type = (
             _has_draft_value(deterministic_draft.get("task_prefix"))
-            and "task_prefix" not in (deterministic_draft.get("explicit_fields") or [])
+            and "task_prefix" not in deterministic_explicit_fields
             and _has_draft_value(deterministic_draft.get("task_type"))
+            and not _has_draft_value(model_draft.get("task_prefix"))
         )
+        draft = merge_task_drafts(deterministic_draft, model_draft)
         try:
             defaults = self.defaults_loader.load()
         except Exception as exc:
@@ -260,7 +286,7 @@ class TaskPlanningService:
         explicit_fields = list(dict.fromkeys(draft.get("explicit_fields") or []))
 
         task_prefix = str(draft.get("task_prefix") or "").strip()
-        if derived_prefix_from_type:
+        if derived_prefix_from_type and task_prefix:
             defaults_used.append("task_prefix_from_task_type")
         if not task_prefix and str(draft.get("task_type") or "").strip():
             task_prefix = str(draft.get("task_type")).strip().lower()

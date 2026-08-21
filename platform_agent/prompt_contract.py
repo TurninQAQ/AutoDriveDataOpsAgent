@@ -38,3 +38,10 @@ ADAPTIVE_EVIDENCE_CONTRACT = """Adaptive evidence contract:
 - FROZEN_GOAL_CONTRACT lists completion conditions, not concrete tools. Do not lower or rewrite those conditions when CURRENT_INTENT changes; choose an appropriate read-only tool for any missing condition.
 - FINISH when the accumulated evidence is sufficient. If the required evidence cannot be obtained, FINISH with evidence_sufficient=false and a short auditable decision_summary.
 - decision_summary must be a concise operational reason, not private reasoning or a chain-of-thought."""
+
+
+SYNTHESIS_GROUNDING_CONTRACT = """Synthesis grounding contract:
+- Root-cause conclusions may use only actual TOOL_OBSERVATIONS and their target-bound diagnostic context.
+- Static knowledge may explain platform mechanisms, but it is not current task state and cannot by itself establish a task root cause.
+- If diagnostic evidence is insufficient or contradictory, set root_cause to null and explain the limitation in the summary.
+- Never invent current state, task identity, checkpoint state or a mutation result."""

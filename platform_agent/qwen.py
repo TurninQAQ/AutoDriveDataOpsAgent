@@ -12,7 +12,7 @@ from platform_integrations.model_retry import ModelRequestError, ModelRetryPolic
 
 from .model import build_adaptive_evidence_prompt
 from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, GoalContract, KnowledgeObservation, ToolObservation
-from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT, SYNTHESIS_GROUNDING_CONTRACT
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -227,6 +227,7 @@ Rules:
 - If evidence is incomplete or conflicting, say so and reduce confidence.
 - Recommended actions are suggestions only; never claim a mutation was executed unless the workflow evidence says so.
 - Do not reveal hidden chain-of-thought.
+{SYNTHESIS_GROUNDING_CONTRACT}
 
 Conversation history:
 {_history_text(history)}

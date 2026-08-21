@@ -60,10 +60,24 @@ def _parse_pipeline_literal(text: str) -> list[str | list[str]] | None:
 
 
 def _extract_paths(text: str) -> list[str]:
-    # Stop at common sentence separators. Docker image references are not absolute
-    # filesystem paths, so a leading slash is a useful discriminator here.
-    raw = re.findall(r"(?<![A-Za-z0-9_:])(/[^\s,，;；。！？?]+)", text)
-    return _unique([item.rstrip(".。") for item in raw])
+    """Extract only paths explicitly described as input data.
+
+    A generic absolute-path scan misclassified output/config destinations as
+    datasets. Keep this parser intentionally small and literal; ambiguous paths
+    remain available to the model draft or unresolved validation.
+    """
+
+    path = r"(/[^\s,，;；。！？?]+)"
+    patterns = (
+        rf"(?:数据(?:集)?|dataset)\s*(?:在|为|是|路径(?:为)?)?\s*[:=：]?\s*{path}",
+        rf"(?:dataset)\s*[:=：]\s*{path}",
+        rf"(?:把|用)\s*{path}\s*(?:做|处理|跑|作为)",
+        rf"(?:处理|输入|使用)\s*{path}",
+    )
+    found: list[str] = []
+    for pattern in patterns:
+        found.extend(match.group(1) for match in re.finditer(pattern, text, re.IGNORECASE))
+    return _unique([item.rstrip(".。") for item in found])
 
 
 def _dataset_names(text: str) -> list[str]:

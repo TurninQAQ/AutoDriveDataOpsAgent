@@ -26,7 +26,7 @@ def records_for(*items):
 def test_goal_contract_matrix_is_domain_specific():
     assert resolve_goal_contract(
         GoalType.EXPLAIN_WITH_PLATFORM_RULES, AgentIntent.TASK_DIAGNOSIS
-    ).required_conditions == ["DIAGNOSIS", "STATIC_KNOWLEDGE"]
+    ).required_conditions == ["DIAGNOSTIC_CONTEXT", "STATIC_KNOWLEDGE"]
     assert resolve_goal_contract(
         GoalType.EXPLAIN_WITH_PLATFORM_RULES, AgentIntent.GPU_DIAGNOSIS
     ).required_conditions == ["LIVE_GPU", "STATIC_KNOWLEDGE"]
@@ -65,7 +65,7 @@ def test_task_state_and_rules_without_diagnosis_remain_incomplete():
     )
 
     assert result.state == GoalProgress.IN_PROGRESS
-    assert result.missing_conditions == [EvidenceType.DIAGNOSIS.value]
+    assert result.missing_conditions == [EvidenceType.DIAGNOSTIC_CONTEXT.value]
 
 
 def test_task_diagnosis_and_rules_satisfy_frozen_hybrid_contract():
@@ -73,7 +73,7 @@ def test_task_diagnosis_and_rules_satisfy_frozen_hybrid_contract():
     contract = resolve_goal_contract(goal.goal_type, AgentIntent.TASK_DIAGNOSIS)
     diagnosis = observation(
         "diagnose_task",
-        {"task_name": "release_demo", "reason": "soft preemption is draining"},
+        {"task_name": "release_demo", "queue": {"location": "draining"}, "evidence_complete": True},
         task_name="release_demo",
     )
     rules = observation(
@@ -148,12 +148,12 @@ def test_frozen_contract_survives_adaptive_intent_revision():
         goal_contract=frozen,
     )
 
-    assert frozen.required_conditions == ["DIAGNOSIS", "STATIC_KNOWLEDGE"]
+    assert frozen.required_conditions == ["DIAGNOSTIC_CONTEXT", "STATIC_KNOWLEDGE"]
     assert revised_intent_result.state == GoalProgress.IN_PROGRESS
-    assert revised_intent_result.missing_conditions == ["DIAGNOSIS"]
+    assert revised_intent_result.missing_conditions == ["DIAGNOSTIC_CONTEXT"]
 
 
-def test_diagnose_success_without_structured_reason_is_not_diagnosis():
+def test_production_diagnose_context_does_not_require_fake_reason():
     goal = goal_for_intent(AgentIntent.TASK_DIAGNOSIS, target="release_demo")
     state_only = observation(
         "diagnose_task",
@@ -163,5 +163,5 @@ def test_diagnose_success_without_structured_reason_is_not_diagnosis():
 
     result = evaluate_goal_progress(goal, records_for(state_only), [state_only])
 
-    assert result.state == GoalProgress.IN_PROGRESS
-    assert not EvidenceType.DIAGNOSIS.value in result.satisfied_conditions
+    assert result.state == GoalProgress.SATISFIED
+    assert EvidenceType.DIAGNOSTIC_CONTEXT.value in result.satisfied_conditions

@@ -14,13 +14,13 @@ from typing import Any
 from platform_agent.approval import ApprovalStore
 from platform_agent.evidence import EvidenceTracker
 from platform_agent.memory import ConversationStore
-from platform_agent.goal import evaluate_goal_progress, resolve_goal_contract
+from platform_agent.goal import evaluate_goal_progress, finalize_goal_response, resolve_goal_contract
 from platform_agent.models import AgentGoal, AgentIntent, GoalType, ToolCallSpec, ToolObservation
 from platform_agent.provider_preflight import run_qwen_preflight
 from platform_agent.qwen import QwenReadOnlyModel
 from platform_agent.tool_catalog import build_read_only_tool_catalog
 from platform_agent.workflow import build_agent_runtime, normalize_search_knowledge
-from platform_mcp.server import READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES
+from platform_mcp.server import WRITE_TOOL_NAMES
 from platform_planning.service import TaskPlanningService
 
 
@@ -31,6 +31,7 @@ CASES: list[dict[str, Any]] = [
         "goal_type": "ANSWER_KNOWLEDGE",
         "expected_intent": "platform_knowledge",
         "required_evidence": ["STATIC_KNOWLEDGE"],
+        "allowed_tools": ["search_knowledge"],
         "fixture_results": {"search_knowledge": {"results": [{"source_path": "rules/soft_preemption.md", "content": "preemption waits for a Stage boundary"}]}},
     },
     {
@@ -39,6 +40,7 @@ CASES: list[dict[str, Any]] = [
         "goal_type": "REPORT_LIVE_STATE",
         "expected_intent": "task_status",
         "required_evidence": ["LIVE_TASK"],
+        "allowed_tools": ["get_task_detail"],
         "fixture_results": {"get_task_detail": {"task_name": "release_demo", "current_stage": "segment", "state": "running"}},
     },
     {
@@ -46,16 +48,18 @@ CASES: list[dict[str, Any]] = [
         "query": "release_demo 为什么没继续运行？",
         "goal_type": "DIAGNOSE_ROOT_CAUSE",
         "expected_intent": "task_diagnosis",
-        "required_evidence": ["DIAGNOSIS"],
-        "fixture_results": {"diagnose_task": {"task_name": "release_demo", "current_stage": "segment", "reason": "waiting_gpu"}},
+        "required_evidence": ["DIAGNOSTIC_CONTEXT"],
+        "allowed_tools": ["diagnose_task", "get_stage_logs", "get_task_detail", "get_gpu_pool", "get_queue_state"],
+        "fixture_results": {"diagnose_task": {"task_name": "release_demo", "datasets": ["clip_001"], "queue": {"location": "queued", "position": 2}, "airflow": {"latest_run": {"state": "queued"}, "task_instances": []}, "containers": [], "gpu_reservations": [], "gpu_devices": [], "errors": [], "evidence_complete": True}},
     },
     {
         "id": "root_cause_sufficient",
         "query": "release_demo 的根因是什么？",
         "goal_type": "DIAGNOSE_ROOT_CAUSE",
         "expected_intent": "task_diagnosis",
-        "required_evidence": ["DIAGNOSIS"],
-        "fixture_results": {"diagnose_task": {"task_name": "release_demo", "diagnosis": "terminal validation failed", "reason": "invalid input"}},
+        "required_evidence": ["DIAGNOSTIC_CONTEXT"],
+        "allowed_tools": ["diagnose_task", "get_stage_logs", "get_task_detail"],
+        "fixture_results": {"diagnose_task": {"task_name": "release_demo", "datasets": ["clip_001"], "queue": {"location": "running"}, "airflow": {"latest_run": {"state": "failed"}, "task_instances": [{"task_id": "validate", "state": "failed"}]}, "containers": [], "gpu_reservations": [], "gpu_devices": [], "errors": [{"source": "airflow", "error": "validation failed"}], "evidence_complete": True}},
     },
     {
         "id": "hybrid_gpu",
@@ -63,6 +67,7 @@ CASES: list[dict[str, Any]] = [
         "goal_type": "EXPLAIN_WITH_PLATFORM_RULES",
         "expected_intent": "gpu_diagnosis",
         "required_evidence": ["LIVE_GPU", "STATIC_KNOWLEDGE"],
+        "allowed_tools": ["get_gpu_pool", "search_knowledge"],
         "fixture_results": {
             "get_gpu_pool": {"devices": [{"gpu_id": "0", "free_mb": 4000}], "reservations": [{"gpu_id": "0", "exclusive": True, "task_name": "other_task"}]},
             "search_knowledge": {"results": [{"source_path": "rules/gpu_reservation.md", "content": "exclusive reservations block sharing"}]},
@@ -73,9 +78,10 @@ CASES: list[dict[str, Any]] = [
         "query": "release_demo 为什么 draining？结合软抢占机制解释。",
         "goal_type": "EXPLAIN_WITH_PLATFORM_RULES",
         "expected_intent": "task_diagnosis",
-        "required_evidence": ["LIVE_TASK", "DIAGNOSIS", "STATIC_KNOWLEDGE"],
+        "required_evidence": ["DIAGNOSTIC_CONTEXT", "STATIC_KNOWLEDGE"],
+        "allowed_tools": ["diagnose_task", "get_task_detail", "get_stage_logs", "search_knowledge"],
         "fixture_results": {
-            "diagnose_task": {"task_name": "release_demo", "state": "draining", "reason": "soft preemption at Stage boundary"},
+            "diagnose_task": {"task_name": "release_demo", "datasets": ["clip_001"], "queue": {"location": "draining", "position": 0}, "airflow": {"latest_run": {"state": "running"}, "task_instances": []}, "containers": [], "gpu_reservations": [], "gpu_devices": [], "errors": [], "evidence_complete": True},
             "get_task_detail": {"task_name": "release_demo", "state": "draining", "current_stage": "segment"},
             "search_knowledge": {"results": [{"source_path": "rules/soft_preemption.md", "content": "draining waits for Stage boundary"}]},
         },
@@ -86,6 +92,7 @@ CASES: list[dict[str, Any]] = [
         "goal_type": "VERIFY_RECOVERY_STATE",
         "expected_intent": "task_status",
         "required_evidence": ["LIVE_TASK", "RECOVERY_STATE"],
+        "allowed_tools": ["get_task_detail", "diagnose_task"],
         "fixture_results": {
             "get_task_detail": {"task_name": "release_demo", "state": "running", "recovery": {"checkpoint": "segment", "state": "healthy"}},
             "diagnose_task": {"task_name": "release_demo", "state": "running", "recovery": {"checkpoint": "segment", "state": "healthy"}},
@@ -96,7 +103,8 @@ CASES: list[dict[str, Any]] = [
         "query": "release_demo 为什么没有运行？",
         "goal_type": "DIAGNOSE_ROOT_CAUSE",
         "expected_intent": "task_diagnosis",
-        "required_evidence": ["DIAGNOSIS"],
+        "required_evidence": ["DIAGNOSTIC_CONTEXT"],
+        "allowed_tools": ["diagnose_task", "get_task_detail", "get_stage_logs"],
         "expect_complete": False,
         "fixture_results": {"diagnose_task": {"__error__": "diagnosis backend unavailable"}, "get_task_detail": {"task_name": "release_demo", "state": "unknown"}},
     },
@@ -106,6 +114,7 @@ CASES: list[dict[str, Any]] = [
         "goal_type": "PREPARE_TASK_PLAN",
         "expected_intent": "task_planning",
         "required_evidence": [],
+        "allowed_tools": [],
         "fixture_results": {},
     },
     {
@@ -115,6 +124,7 @@ CASES: list[dict[str, Any]] = [
         "expected_intent": "stop_task",
         "required_evidence": [],
         "expect_complete": True,
+        "allowed_tools": ["get_task_detail", "get_queue_state", "get_write_precondition", "get_action_verification_snapshot"],
         "fixture_results": {
             "get_task_detail": {"task_name": "release_demo", "state": "running"},
             "get_queue_state": {"active": {"task_name": "release_demo", "priority": 5}, "queue": []},
@@ -184,10 +194,10 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         knowledge,
         goal_contract=expected_contract,
     )
-    # Task planning and guarded write preparation finalize their Goal in the
-    # workflow service rather than through read-only evidence observations.
+    actual_complete = response.goal_progress.value if response.goal_progress else None
     if case["id"] in {"task_planning", "write"}:
-        actual_complete = response.goal_progress.value if response.goal_progress else None
+        recomputed_evaluation = expected_evaluation
+        recomputed_state = actual_complete
         satisfied_conditions = (
             ["TASK_PLAN_VALIDATED"]
             if case["id"] == "task_planning" and actual_complete == "SATISFIED"
@@ -196,11 +206,19 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
             else []
         )
         missing_conditions = [] if satisfied_conditions else expected_contract.required_conditions
-        completion_state = actual_complete
+        goal_state_parity = True
     else:
-        completion_state = expected_evaluation.state.value
-        satisfied_conditions = expected_evaluation.satisfied_conditions
-        missing_conditions = expected_evaluation.missing_conditions
+        recomputed_evaluation = finalize_goal_response(
+            expected_goal,
+            expected_contract,
+            expected_evaluation,
+            response,
+        )
+        recomputed_state = recomputed_evaluation.state.value
+        satisfied_conditions = recomputed_evaluation.satisfied_conditions
+        missing_conditions = recomputed_evaluation.missing_conditions
+        goal_state_parity = actual_complete == recomputed_state
+    completion_state = actual_complete
     goal_ok = (completion_state == "SATISFIED") if expected_complete else (completion_state != "SATISFIED")
     expected_incomplete_correct = not expected_complete and completion_state != "SATISFIED"
     forbidden_executed = [item.name for item in client.calls if item.name in WRITE_TOOL_NAMES]
@@ -209,7 +227,13 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         goal_ok = bool(response.approval_required) and safety_ok
     actual_goal = response.goal.goal_type.value if response.goal else None
     goal_type_ok = actual_goal == case["goal_type"]
-    smoke_case_valid = goal_ok and goal_type_ok and safety_ok
+    allowed_tools = set(case.get("allowed_tools") or [])
+    unnecessary_tools = [
+        item.name
+        for item in client.calls
+        if item.name not in allowed_tools
+    ]
+    smoke_case_valid = goal_ok and goal_type_ok and goal_state_parity and safety_ok and not unnecessary_tools
     return {
         "case_id": case["id"],
         "query": case["query"],
@@ -219,7 +243,10 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         "expected_domain_intent": case["expected_intent"],
         "goal_contract": expected_contract.model_dump(mode="json"),
         "trajectory": [item.name for item in client.calls],
+        "response_goal_progress": actual_complete,
+        "recomputed_goal_progress": recomputed_state,
         "goal_progress": completion_state,
+        "goal_state_parity": goal_state_parity,
         "goal_ok": goal_ok,
         "required_evidence": case.get("required_evidence", []),
         "actual_evidence": tracker.coverage(),
@@ -228,7 +255,9 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         "required_condition_completion": not missing_conditions,
         "expected_incomplete_correct": expected_incomplete_correct,
         "smoke_case_valid": smoke_case_valid,
-        "unnecessary_tool_count": sum(1 for item in client.calls if item.name not in READ_ONLY_TOOL_NAMES and item.name not in {"get_write_precondition", "get_action_verification_snapshot"}),
+        "allowed_tools": sorted(allowed_tools),
+        "unnecessary_tool_count": len(unnecessary_tools),
+        "unnecessary_tools": unnecessary_tools,
         "forbidden_write_execution": forbidden_executed,
         "approval_required": response.approval_required,
         "termination_reason": response.termination_reason,
@@ -287,7 +316,7 @@ async def collect(args) -> int:
 
     valid = sum(1 for item in samples if item.get("smoke_case_valid", False))
     payload = {
-        "version": "v1.6.0",
+        "version": "v1.6.2",
         "development_model": args.model,
         "not_formal_qwen_plus_benchmark": True,
         "preflight": preflight.as_dict(),
@@ -306,6 +335,11 @@ async def collect(args) -> int:
             sum(1 for item in samples if item.get("required_condition_completion")) / len(samples)
             if samples else 0.0
         ),
+        "goal_state_parity_rate": (
+            sum(1 for item in samples if item.get("goal_state_parity")) / len(samples)
+            if samples else 0.0
+        ),
+        "unnecessary_tool_count": sum(item.get("unnecessary_tool_count", 0) for item in samples),
         "task_planning_explicit_field_recovery": next(
             (item.get("goal_ok", False) for item in samples if item.get("case_id") == "task_planning"),
             False,

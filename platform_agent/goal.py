@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from .evidence import TARGET_AWARE_EVIDENCE_TYPES, EvidenceTracker
 from .models import (
     AgentGoal,
     AgentIntent,
@@ -28,15 +29,12 @@ from .models import (
 _GOAL_CRITERIA: dict[GoalType, tuple[str, ...]] = {
     GoalType.ANSWER_KNOWLEDGE: ("STATIC_KNOWLEDGE",),
     GoalType.REPORT_LIVE_STATE: ("LIVE_OPERATIONAL_EVIDENCE",),
-    GoalType.DIAGNOSE_ROOT_CAUSE: ("DIAGNOSIS",),
+    GoalType.DIAGNOSE_ROOT_CAUSE: ("DIAGNOSTIC_CONTEXT",),
     GoalType.EXPLAIN_WITH_PLATFORM_RULES: (
-        "LIVE_OPERATIONAL_EVIDENCE",
+        "DIAGNOSTIC_CONTEXT",
         "STATIC_KNOWLEDGE",
     ),
-    GoalType.VERIFY_RECOVERY_STATE: (
-        "LIVE_OPERATIONAL_EVIDENCE",
-        "RECOVERY_STATE",
-    ),
+    GoalType.VERIFY_RECOVERY_STATE: ("LIVE_TASK", "RECOVERY_STATE"),
     GoalType.PREPARE_TASK_PLAN: ("TASK_PLAN_VALIDATED",),
     GoalType.PREPARE_WRITE_ACTION: ("WRITE_PLAN_PREPARED",),
     GoalType.GENERAL_ASSISTANCE: (),
@@ -97,15 +95,15 @@ def resolve_goal_contract(goal_type: GoalType, intent: AgentIntent) -> GoalContr
             AgentIntent.PLATFORM_HEALTH: (EvidenceType.PLATFORM_HEALTH.value,),
         }.get(intent, ("LIVE_OPERATIONAL_EVIDENCE",))
     elif goal_type == GoalType.DIAGNOSE_ROOT_CAUSE:
-        conditions = (EvidenceType.DIAGNOSIS.value,)
+        conditions = (EvidenceType.DIAGNOSTIC_CONTEXT.value,)
     elif goal_type == GoalType.EXPLAIN_WITH_PLATFORM_RULES:
         conditions = {
             AgentIntent.TASK_DIAGNOSIS: (
-                EvidenceType.DIAGNOSIS.value,
+                EvidenceType.DIAGNOSTIC_CONTEXT.value,
                 EvidenceType.STATIC_KNOWLEDGE.value,
             ),
             AgentIntent.STAGE_FAILURE: (
-                EvidenceType.DIAGNOSIS.value,
+                EvidenceType.DIAGNOSTIC_CONTEXT.value,
                 EvidenceType.STATIC_KNOWLEDGE.value,
             ),
             AgentIntent.GPU_DIAGNOSIS: (
@@ -122,14 +120,42 @@ def resolve_goal_contract(goal_type: GoalType, intent: AgentIntent) -> GoalContr
             ),
         }.get(intent, ("LIVE_OPERATIONAL_EVIDENCE", EvidenceType.STATIC_KNOWLEDGE.value))
     elif goal_type == GoalType.VERIFY_RECOVERY_STATE:
-        conditions = ("LIVE_OPERATIONAL_EVIDENCE", EvidenceType.RECOVERY_STATE.value)
+        conditions = (EvidenceType.LIVE_TASK.value, EvidenceType.RECOVERY_STATE.value)
     else:
         conditions = _GOAL_CRITERIA[goal_type]
     return GoalContract(
         goal_type=goal_type,
         domain_intent=intent,
         required_conditions=list(conditions),
+        schema_version="v1.6.2",
     )
+
+
+def evidence_matches_goal_target(
+    record: EvidenceRecord | dict[str, Any],
+    goal: AgentGoal | dict[str, Any],
+) -> bool:
+    """Return whether a record can satisfy this goal's entity scope.
+
+    Task-scoped evidence requires exact task identity.  Global evidence remains
+    usable for target-bound goals when its evidence domain is intentionally global
+    (for example LIVE_GPU or STATIC_KNOWLEDGE).
+    """
+
+    if not isinstance(record, EvidenceRecord):
+        try:
+            record = EvidenceRecord.model_validate(record)
+        except Exception:
+            return False
+    if not isinstance(goal, AgentGoal):
+        try:
+            goal = AgentGoal.model_validate(goal)
+        except Exception:
+            return False
+    target = goal.target.strip() if isinstance(goal.target, str) else None
+    if not target or record.type not in TARGET_AWARE_EVIDENCE_TYPES:
+        return True
+    return bool(record.task_name and record.task_name.strip() == target)
 
 
 def criteria_for_goal(goal_type: GoalType, intent: AgentIntent | None = None) -> list[str]:
@@ -190,15 +216,23 @@ def normalize_plan_goal(plan: AgentPlan) -> AgentPlan:
     )
 
 
-def _record_types(records: Iterable[EvidenceRecord | dict[str, Any]]) -> set[EvidenceType]:
-    types: set[EvidenceType] = set()
-    for item in records:
-        value = item.type if isinstance(item, EvidenceRecord) else item.get("type") if isinstance(item, dict) else None
-        try:
-            types.add(value if isinstance(value, EvidenceType) else EvidenceType(str(value)))
-        except (TypeError, ValueError):
+def _normalized_records(
+    evidence_records: Iterable[EvidenceRecord | dict[str, Any]],
+    observations: list[ToolObservation],
+) -> list[EvidenceRecord]:
+    """Load saved records and derive missing records from current observations."""
+
+    tracker = EvidenceTracker.from_records(evidence_records)
+    derived = EvidenceTracker.from_observations(observations)
+    records: list[EvidenceRecord] = []
+    seen: set[tuple[Any, ...]] = set()
+    for item in [*tracker.records, *derived.records]:
+        key = (item.type, item.source_tool, item.task_name, item.dataset_name, item.summary)
+        if key in seen:
             continue
-    return types
+        seen.add(key)
+        records.append(item)
+    return records
 
 
 def _non_empty(value: Any) -> bool:
@@ -211,85 +245,42 @@ def _non_empty(value: Any) -> bool:
     return True
 
 
-def _has_explicit_diagnosis(observations: Iterable[ToolObservation]) -> bool:
-    diagnosis_keys = {
-        "diagnosis",
-        "root_cause",
-        "rootcause",
-        "reason",
-        "failure_reason",
-        "cause",
-    }
-    for observation in observations:
-        if not observation.ok or observation.tool_name not in {"diagnose_task", "get_stage_logs"}:
-            continue
-        data = observation.data
-        if not isinstance(data, dict):
-            continue
-        if any(_non_empty(data.get(key)) for key in diagnosis_keys):
-            return True
-    return False
-
-
-def _has_recovery_evidence(observations: Iterable[ToolObservation]) -> bool:
-    recovery_keys = {
-        "recovery",
-        "recovery_state",
-        "recovery_runs",
-        "checkpoint",
-        "checkpoint_state",
-        "resume",
-        "resumed",
-        "recovered",
-    }
-    for observation in observations:
-        if not observation.ok or observation.tool_name not in _TASK_TOOLS:
-            continue
-        data = observation.data
-        if isinstance(data, dict) and any(_non_empty(data.get(key)) for key in recovery_keys):
-            return True
-    return False
-
-
-def _has_relevant_live_evidence(
+def _matching_records(
+    records: Iterable[EvidenceRecord],
     goal: AgentGoal,
-    records: set[EvidenceType],
-    observations: Iterable[ToolObservation],
-) -> bool:
-    if not records.intersection(_LIVE_EVIDENCE):
-        return False
-    if not goal.target:
-        return True
-    for observation in observations:
-        if not observation.ok or observation.tool_name not in _TASK_TOOLS:
-            continue
-        argument_target = observation.arguments.get("task_name")
-        data_target = observation.data.get("task_name") if isinstance(observation.data, dict) else None
-        if goal.target in {str(argument_target or ""), str(data_target or "")}:
-            return True
-    return False
+    evidence_type: EvidenceType,
+) -> list[EvidenceRecord]:
+    return [
+        item
+        for item in records
+        if item.type == evidence_type and evidence_matches_goal_target(item, goal)
+    ]
 
 
 def _condition_satisfied(
     condition: str,
     goal: AgentGoal,
-    records: set[EvidenceType],
-    observations: list[ToolObservation],
+    records: list[EvidenceRecord],
 ) -> bool:
     if condition == "STATIC_KNOWLEDGE":
-        return EvidenceType.STATIC_KNOWLEDGE in records
+        return bool(_matching_records(records, goal, EvidenceType.STATIC_KNOWLEDGE))
     if condition == "LIVE_OPERATIONAL_EVIDENCE":
-        return _has_relevant_live_evidence(goal, records, observations)
+        return any(
+            _matching_records(records, goal, candidate)
+            for candidate in _LIVE_EVIDENCE
+        )
     if condition == EvidenceType.LIVE_TASK.value:
-        return _has_relevant_live_evidence(goal, records, observations) and EvidenceType.LIVE_TASK in records
+        return bool(_matching_records(records, goal, EvidenceType.LIVE_TASK))
     if condition == EvidenceType.LIVE_GPU.value:
-        return EvidenceType.LIVE_GPU in records
+        return bool(_matching_records(records, goal, EvidenceType.LIVE_GPU))
     if condition == EvidenceType.PLATFORM_HEALTH.value:
-        return EvidenceType.PLATFORM_HEALTH in records
+        return bool(_matching_records(records, goal, EvidenceType.PLATFORM_HEALTH))
+    if condition == EvidenceType.DIAGNOSTIC_CONTEXT.value:
+        return bool(_matching_records(records, goal, EvidenceType.DIAGNOSTIC_CONTEXT))
     if condition == EvidenceType.DIAGNOSIS.value:
-        return EvidenceType.DIAGNOSIS in records
+        return bool(_matching_records(records, goal, EvidenceType.DIAGNOSIS))
     if condition == EvidenceType.RECOVERY_STATE.value:
-        return EvidenceType.RECOVERY_STATE in records
+        return bool(_matching_records(records, goal, EvidenceType.RECOVERY_STATE))
     if condition == "TASK_PLAN_VALIDATED" or condition == "WRITE_PLAN_PREPARED":
         return False
     return False
@@ -324,20 +315,32 @@ def evaluate_goal_progress(
             required_conditions=list(_GOAL_CRITERIA[goal.goal_type]),
         )
     observation_list = list(observations)
-    types = _record_types(evidence_records)
+    records = _normalized_records(evidence_records, observation_list)
     if any(item.ok and item.tool_name == "search_knowledge" for item in observation_list):
-        types.add(EvidenceType.STATIC_KNOWLEDGE)
+        if not any(item.type == EvidenceType.STATIC_KNOWLEDGE for item in records):
+            records.append(
+                EvidenceRecord(
+                    type=EvidenceType.STATIC_KNOWLEDGE,
+                    source_tool="search_knowledge",
+                    timestamp=0.0,
+                    summary="search_knowledge returned static knowledge.",
+                )
+            )
     if any(item.content.strip() and not item.metadata.get("error") for item in knowledge):
-        types.add(EvidenceType.STATIC_KNOWLEDGE)
-    if _has_explicit_diagnosis(observation_list):
-        types.add(EvidenceType.DIAGNOSIS)
-    if _has_recovery_evidence(observation_list):
-        types.add(EvidenceType.RECOVERY_STATE)
+        if not any(item.type == EvidenceType.STATIC_KNOWLEDGE for item in records):
+            records.append(
+                EvidenceRecord(
+                    type=EvidenceType.STATIC_KNOWLEDGE,
+                    source_tool="knowledge_retriever",
+                    timestamp=0.0,
+                    summary="Static knowledge is available.",
+                )
+            )
 
     satisfied: list[str] = []
     missing: list[str] = []
     for condition in contract.required_conditions:
-        present = _condition_satisfied(condition, goal, types, observation_list)
+        present = _condition_satisfied(condition, goal, records)
         (satisfied if present else missing).append(condition)
 
     if not missing:
@@ -360,9 +363,52 @@ def evaluate_goal_progress(
     )
 
 
+def finalize_goal_response(
+    goal: AgentGoal | dict[str, Any],
+    goal_contract: GoalContract | dict[str, Any],
+    evidence_evaluation: GoalEvaluation,
+    response: Any,
+) -> GoalEvaluation:
+    """Apply deterministic post-synthesis checks to a goal evaluation.
+
+    Evidence readiness is not itself a natural-language diagnosis.  Diagnosis
+    goals require the synthesis response to contain a non-empty root_cause; the
+    finalizer validates that shape but never invents or edits the conclusion.
+    """
+
+    if not isinstance(goal, AgentGoal):
+        goal = AgentGoal.model_validate(goal)
+    if not isinstance(goal_contract, GoalContract):
+        goal_contract = GoalContract.model_validate(goal_contract)
+
+    diagnosis_goal = goal.goal_type in {
+        GoalType.DIAGNOSE_ROOT_CAUSE,
+        GoalType.EXPLAIN_WITH_PLATFORM_RULES,
+    } and EvidenceType.DIAGNOSTIC_CONTEXT.value in goal_contract.required_conditions
+    if not diagnosis_goal or evidence_evaluation.state != GoalProgress.SATISFIED:
+        return evidence_evaluation
+
+    root_cause = getattr(response, "root_cause", None)
+    if _non_empty(root_cause):
+        return evidence_evaluation
+
+    missing = list(evidence_evaluation.missing_conditions)
+    if "ROOT_CAUSE_CONCLUSION" not in missing:
+        missing.append("ROOT_CAUSE_CONCLUSION")
+    return evidence_evaluation.model_copy(
+        update={
+            "state": GoalProgress.IN_PROGRESS,
+            "missing_conditions": missing,
+            "summary": "Diagnostic evidence is available, but synthesis did not provide a root-cause conclusion.",
+        }
+    )
+
+
 __all__ = [
     "criteria_for_goal",
     "evaluate_goal_progress",
+    "evidence_matches_goal_target",
+    "finalize_goal_response",
     "goal_for_intent",
     "normalize_goal",
     "normalize_plan_goal",

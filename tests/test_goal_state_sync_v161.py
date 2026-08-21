@@ -56,7 +56,7 @@ class _Model:
 
     async def synthesize(self, user_text, plan, observations, history, knowledge=None):
         del user_text, observations, history, knowledge
-        return AgentResponse(intent=plan.intent, summary="synthesized", confidence="high")
+        return AgentResponse(intent=plan.intent, summary="synthesized", root_cause="waiting for GPU", confidence="high")
 
 
 class _Client:
@@ -110,7 +110,7 @@ def test_final_goal_and_completion_state_are_consistent(runtime, tmp_path: Path)
     assert response.goal is not None
     assert response.goal.completion_state == response.goal_progress
     assert response.termination_reason == "goal_satisfied"
-    assert model.goal_contracts[0]["required_conditions"] == ["DIAGNOSIS", "STATIC_KNOWLEDGE"]
+    assert model.goal_contracts[0]["required_conditions"] == ["DIAGNOSTIC_CONTEXT", "STATIC_KNOWLEDGE"]
 
 
 def test_incomplete_goal_state_is_consistent_after_finish_without_diagnosis(tmp_path: Path):

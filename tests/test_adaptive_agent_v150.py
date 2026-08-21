@@ -69,6 +69,7 @@ class ScriptedAdaptiveModel:
         return AgentResponse(
             intent=plan.intent,
             summary="executed: " + ", ".join(item.tool_name for item in observations),
+            root_cause=("scripted diagnostic conclusion" if plan.intent in {AgentIntent.TASK_DIAGNOSIS, AgentIntent.STAGE_FAILURE} else None),
             confidence="high",
         )
 

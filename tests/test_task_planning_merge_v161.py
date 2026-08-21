@@ -38,7 +38,9 @@ def test_explicit_priority_overrides_conflicting_model_literal():
 
     assert result.valid is True
     assert result.task_spec is not None
-    assert result.task_spec.task_prefix == "release"
+    # "release" is a derived fallback from task_type, so the model's semantic
+    # task_prefix remains authoritative when the user gave no explicit name.
+    assert result.task_spec.task_prefix == "model_prefix"
     assert result.task_spec.priority == 4
     assert result.task_spec.datasets[0].dataset_path == "/data/test_a"
 

@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.6.2 Entity-Bound Evidence, Diagnosis Semantics & Planning Merge Correctness — 2026-08-21
+
+1. 为 `EvidenceRecord` 增加可选的 `task_name`/`dataset_name` provenance；任务级 Goal 条件现在要求目标实体 exact match，避免跨任务诊断或 Recovery evidence 污染。
+2. 将真实 `diagnose_task` 的 deterministic facts bundle 规范化为 `DIAGNOSTIC_CONTEXT`；保留历史 `DIAGNOSIS` 兼容读取，并在 synthesis 后 deterministic 校验 diagnosis Goal 必须有非空 `root_cause`。
+3. 修复 Task Planning merge precedence：用户显式 literal > LLM semantic draft > deterministic derived fallback > platform default；收紧 dataset path 提取，忽略输出 YAML 路径。
+4. 加强 V1.6 Goal smoke：比较 production response 与 recomputed Goal state，增加 goal-state parity、allowed-tools 和 unnecessary-tool 检查；受控 runtime 中 qwen3.7-plus 非正式 smoke 为 9/10 valid、Goal State Parity 10/10、安全违规 0；qwen-plus formal benchmark deferred。
+
 ### V1.6.1 Goal Contract & Task Planning Hardening — 2026-08-21
 
 1. Task Planning 在现有 deterministic parser 与 LLM draft 之间增加 field-level merge；用户显式 literal 优先，缺失语义字段仍保持 unresolved。

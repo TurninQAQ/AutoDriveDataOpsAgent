@@ -10,7 +10,7 @@ from platform_integrations.gemini_retry import retry_async
 
 from .model import build_adaptive_evidence_prompt
 from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, GoalContract, KnowledgeObservation, ToolObservation
-from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
+from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT, SYNTHESIS_GROUNDING_CONTRACT
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -186,6 +186,7 @@ Rules:
 - If evidence is incomplete or conflicting, say so and reduce confidence.
 - Recommended actions must be suggestions only. Do not claim that any mutation was executed.
 - Do not reveal hidden chain-of-thought. Provide conclusions and supporting evidence only.
+{SYNTHESIS_GROUNDING_CONTRACT}
 
 Conversation history:
 {_history_text(history)}

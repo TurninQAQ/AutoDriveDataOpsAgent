@@ -39,6 +39,7 @@ class EvidenceType(str, Enum):
     LIVE_LOG = "LIVE_LOG"
     LIVE_CONTAINER = "LIVE_CONTAINER"
     PLATFORM_HEALTH = "PLATFORM_HEALTH"
+    DIAGNOSTIC_CONTEXT = "DIAGNOSTIC_CONTEXT"
     DIAGNOSIS = "DIAGNOSIS"
     RECOVERY_STATE = "RECOVERY_STATE"
 
@@ -50,6 +51,10 @@ class EvidenceRecord(BaseModel):
     source_tool: str
     timestamp: float
     summary: str = Field(default="", max_length=500)
+    # Optional provenance keeps V1.5.x artifacts loadable while preventing
+    # task-scoped evidence from satisfying a different task's goal.
+    task_name: str | None = None
+    dataset_name: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
@@ -79,7 +84,7 @@ class GoalContract(BaseModel):
     goal_type: GoalType
     domain_intent: AgentIntent
     required_conditions: list[str] = Field(default_factory=list)
-    schema_version: str = "v1.6.1"
+    schema_version: str = "v1.6.2"
 
 
 class AgentGoal(BaseModel):

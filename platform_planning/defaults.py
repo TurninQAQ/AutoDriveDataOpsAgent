@@ -10,10 +10,8 @@ from platform_core.errors import TaskConfigError
 
 
 DEFAULT_PLANNING_CONFIG = Path(
-    os.environ.get(
-        "PLATFORM_TASK_PLANNING_DEFAULTS",
-        str(Path(__file__).resolve().parents[1] / "config" / "task_planning_defaults.yaml"),
-    )
+    os.environ.get("PLATFORM_TASK_PLANNING_DEFAULTS")
+    or str(Path(__file__).resolve().parents[1] / "config" / "task_planning_defaults.yaml")
 )
 
 

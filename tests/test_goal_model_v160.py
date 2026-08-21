@@ -25,7 +25,7 @@ def test_goal_schema_serializes_and_uses_deterministic_criteria():
     assert normalized is not None
     assert normalized.goal_type == GoalType.EXPLAIN_WITH_PLATFORM_RULES
     assert normalized.target == "release_demo"
-    assert normalized.success_criteria == ["DIAGNOSIS", "STATIC_KNOWLEDGE"]
+    assert normalized.success_criteria == ["DIAGNOSTIC_CONTEXT", "STATIC_KNOWLEDGE"]
     assert normalized.completion_state == GoalProgress.NOT_STARTED
     assert "provider supplied text" not in normalized.model_dump_json()
 

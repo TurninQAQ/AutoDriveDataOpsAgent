@@ -25,11 +25,58 @@ TOOL_EVIDENCE_TYPES: dict[str, tuple[EvidenceType, ...]] = {
     "search_knowledge": (EvidenceType.STATIC_KNOWLEDGE,),
 }
 
+TASK_SCOPED_TOOLS = frozenset(
+    {
+        "get_task_detail",
+        "diagnose_task",
+        "get_stage_logs",
+        "inspect_task_containers",
+        "get_queue_state",
+    }
+)
+
+TARGET_AWARE_EVIDENCE_TYPES = frozenset(
+    {
+        EvidenceType.LIVE_TASK,
+        EvidenceType.LIVE_LOG,
+        EvidenceType.LIVE_CONTAINER,
+        EvidenceType.LIVE_QUEUE,
+        EvidenceType.DIAGNOSTIC_CONTEXT,
+        EvidenceType.DIAGNOSIS,
+        EvidenceType.RECOVERY_STATE,
+    }
+)
+
 
 def evidence_types_for_tool(tool_name: str) -> tuple[EvidenceType, ...]:
     """Return metadata for a tool without making a routing decision."""
 
     return TOOL_EVIDENCE_TYPES.get(str(tool_name), ())
+
+
+def _subject_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return None
+
+
+def evidence_subject_from_observation(observation: ToolObservation) -> dict[str, str | None]:
+    """Extract exact entity provenance from tool arguments/result metadata.
+
+    This helper intentionally does not infer identity from free-form text.  Tool
+    arguments are preferred because they are the request's structured subject;
+    result fields are only a fallback for production tool payloads that echo it.
+    """
+
+    data = observation.data if isinstance(observation.data, dict) else {}
+    task_name = _subject_value(observation.arguments.get("task_name"))
+    if task_name is None:
+        task_name = _subject_value(data.get("task_name"))
+    dataset_name = _subject_value(observation.arguments.get("dataset_name"))
+    if dataset_name is None:
+        dataset_name = _subject_value(data.get("dataset_name"))
+    return {"task_name": task_name, "dataset_name": dataset_name}
 
 
 def _observation_summary(observation: ToolObservation) -> str:
@@ -81,6 +128,8 @@ class EvidenceTracker:
                         source_tool=str(item["source_tool"]),
                         timestamp=float(item.get("timestamp", time.time())),
                         summary=str(item.get("summary", ""))[:500],
+                        task_name=_subject_value(item.get("task_name")),
+                        dataset_name=_subject_value(item.get("dataset_name")),
                     )
                 )
             except (KeyError, TypeError, ValueError):
@@ -100,15 +149,49 @@ class EvidenceTracker:
         if not observation.ok:
             return []
         created: list[EvidenceRecord] = []
+        subject = evidence_subject_from_observation(observation)
+        task_name = subject["task_name"] if observation.tool_name in TASK_SCOPED_TOOLS else None
+        dataset_name = subject["dataset_name"] if task_name else None
         for evidence_type in evidence_types_for_tool(observation.tool_name):
             record = EvidenceRecord(
                 type=evidence_type,
                 source_tool=observation.tool_name,
                 timestamp=time.time(),
                 summary=_observation_summary(observation),
+                task_name=task_name,
+                dataset_name=dataset_name,
             )
             self.records.append(record)
             created.append(record)
+        # A successful production diagnose_task is a deterministic facts bundle,
+        # not a root-cause conclusion.  It still provides diagnostic context for
+        # the Agent synthesis layer.  Stage logs provide the same context only
+        # when a non-empty log payload is actually present.
+        diagnostic_context = (
+            observation.tool_name == "diagnose_task"
+            and isinstance(observation.data, dict)
+            and task_name is not None
+        )
+        if observation.tool_name == "get_stage_logs":
+            logs = observation.data.get("logs") if isinstance(observation.data, dict) else None
+            diagnostic_context = logs not in (None, "", [], {}, ())
+        if diagnostic_context:
+            complete = observation.data.get("evidence_complete") if isinstance(observation.data, dict) else None
+            detail = "complete" if complete is True else "partial" if complete is False else "available"
+            record = EvidenceRecord(
+                type=EvidenceType.DIAGNOSTIC_CONTEXT,
+                source_tool=observation.tool_name,
+                timestamp=time.time(),
+                summary=f"{observation.tool_name} returned target-bound diagnostic context ({detail}).",
+                task_name=task_name,
+                dataset_name=dataset_name,
+            )
+            self.records.append(record)
+            created.append(record)
+
+        # Keep DIAGNOSIS records for V1.5.x artifact/test compatibility.  New
+        # production contracts use DIAGNOSTIC_CONTEXT and final root-cause
+        # validation happens after synthesis.
         if observation.tool_name in {"diagnose_task", "get_stage_logs"} and _has_non_empty_key(
             observation.data,
             {"diagnosis", "root_cause", "rootcause", "reason", "failure_reason", "cause"},
@@ -118,6 +201,8 @@ class EvidenceTracker:
                 source_tool=observation.tool_name,
                 timestamp=time.time(),
                 summary=f"{observation.tool_name} returned explicit diagnosis evidence.",
+                task_name=task_name,
+                dataset_name=dataset_name,
             )
             self.records.append(record)
             created.append(record)
@@ -145,6 +230,8 @@ class EvidenceTracker:
                 source_tool=observation.tool_name,
                 timestamp=time.time(),
                 summary=f"{observation.tool_name} returned recovery/checkpoint evidence.",
+                task_name=task_name,
+                dataset_name=dataset_name,
             )
             self.records.append(record)
             created.append(record)
@@ -180,5 +267,8 @@ __all__ = [
     "EvidenceTracker",
     "EvidenceType",
     "TOOL_EVIDENCE_TYPES",
+    "TASK_SCOPED_TOOLS",
+    "TARGET_AWARE_EVIDENCE_TYPES",
+    "evidence_subject_from_observation",
     "evidence_types_for_tool",
 ]

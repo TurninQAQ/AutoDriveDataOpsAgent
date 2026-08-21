@@ -62,14 +62,14 @@ def test_hybrid_goal_requires_both_live_and_static_evidence():
     assert complete.state == GoalProgress.SATISFIED
 
 
-def test_diagnosis_requires_explicit_root_cause_signal():
+def test_diagnosis_requires_target_bound_diagnostic_context():
     goal = goal_for_intent(AgentIntent.TASK_DIAGNOSIS, target="release_demo")
-    state_only = observation("diagnose_task", {"task_name": "release_demo", "current_stage": "segment"}, task_name="release_demo")
-    diagnosis = observation("diagnose_task", {"task_name": "release_demo", "reason": "waiting_gpu"}, task_name="release_demo")
+    state_only = observation("get_task_detail", {"task_name": "release_demo", "current_stage": "segment"}, task_name="release_demo")
+    diagnosis = observation("diagnose_task", {"task_name": "release_demo", "queue": {"location": "queued"}, "evidence_complete": True}, task_name="release_demo")
     assert evaluate_goal_progress(goal, records_for(state_only), [state_only]).state == GoalProgress.IN_PROGRESS
     result = evaluate_goal_progress(goal, records_for(diagnosis), [diagnosis])
     assert result.state == GoalProgress.SATISFIED
-    assert EvidenceType.DIAGNOSIS.value in [item.type.value for item in records_for(diagnosis)]
+    assert EvidenceType.DIAGNOSTIC_CONTEXT.value in [item.type.value for item in records_for(diagnosis)]
 
 
 def test_recovery_goal_requires_live_and_recovery_evidence():

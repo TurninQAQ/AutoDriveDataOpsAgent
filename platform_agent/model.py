@@ -22,8 +22,12 @@ from .models import (
     GoalContract,
     GoalEvaluation,
 )
-from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
-from .prompt_contract import ADAPTIVE_EVIDENCE_CONTRACT
+from .prompt_contract import (
+    ADAPTIVE_EVIDENCE_CONTRACT,
+    EVIDENCE_ROUTING_CONTRACT,
+    GOAL_INTERPRETATION_CONTRACT,
+    SYNTHESIS_GROUNDING_CONTRACT,
+)
 
 
 STAGES = ("precheck", "parser", "segment", "map", "od", "coloration", "occ")
@@ -180,7 +184,7 @@ def build_adaptive_evidence_prompt(
             evidence_summary.append(
                 {
                     key: item[key]
-                    for key in ("type", "source_tool", "timestamp", "summary")
+                    for key in ("type", "source_tool", "timestamp", "summary", "task_name", "dataset_name")
                     if key in item
                 }
             )
@@ -890,6 +894,7 @@ Rules:
 - If evidence is incomplete or conflicting, say so and reduce confidence.
 - Recommended actions must be suggestions only. Do not claim that any mutation was executed.
 - Do not reveal hidden chain-of-thought. Provide conclusions and supporting evidence only.
+{SYNTHESIS_GROUNDING_CONTRACT}
 
 Conversation history:
 {_history_text(history)}
