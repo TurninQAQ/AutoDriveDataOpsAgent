@@ -1,0 +1,10 @@
+Commit: 5f0995d00897c4e9981b66fe0163986ee46cb88f
+Branch: main
+origin/main: 5f0995d00897c4e9981b66fe0163986ee46cb88f
+Working tree: clean
+git diff --check: PASS
+Latest commit: 5f0995d feat: add policy-gated bounded resume autonomy
+
+Capture note: values above were collected after the implementation commit was
+pushed and before this small acceptance-state metadata commit. The final
+acceptance commit is reported separately in the delivery result.
