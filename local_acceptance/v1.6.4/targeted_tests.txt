@@ -22,3 +22,16 @@ PASS (ready_dependency_light=true, ready_full_runtime=true, errors=[])
 
 Local E2E:
 PASS (ok=true, 10/10 steps)
+
+V1.6.4 multi-dataset GoalVerifier follow-up:
+PYTHONPATH=. /home/ubuntu/project/autodrive_dataops_runtime/venv/bin/pytest -q tests/test_goal_verification_v164.py tests/test_action_verification_v08.py tests/test_evidence_invariants_v164.py tests/test_goal_write_boundary_v160.py
+Result: 32 passed in 0.19s
+
+compileall:
+PASS
+
+git diff --check:
+PASS
+
+New LLM calls:
+0

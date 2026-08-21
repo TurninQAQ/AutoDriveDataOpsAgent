@@ -42,13 +42,13 @@ class SnapshotClient:
         return [ToolObservation(tool_name=calls[0].name, arguments=calls[0].arguments, ok=True, data=self.snapshot)]
 
 
-def verify(snapshot, *, arguments=None, error=None):
+def verify(snapshot, *, arguments=None, error=None, baseline_data=None):
     client = SnapshotClient(snapshot, error=error)
     result = run(
         GoalVerifier(client).verify_resume(
             arguments=arguments or {"task_name": "release_demo", "datasets": []},
             action_verification=action_verified(),
-            baseline=baseline(),
+            baseline=baseline_data or baseline(),
         )
     )
     return result, client
@@ -62,6 +62,31 @@ def accepted_snapshot(state="queued", task_name="release_demo"):
         "airflow_runs": [
             {"run_id": "old1", "dataset_name": "clip_001", "state": "failed"},
             {"run_id": "new1", "dataset_name": "clip_001", "state": state},
+        ],
+    }
+
+
+def multidataset_baseline():
+    return {
+        "task_name": "release_demo",
+        "task_exists": True,
+        "errors": {},
+        "airflow_runs": [
+            {"run_id": "old_a", "dataset_name": "A", "state": "failed"},
+            {"run_id": "old_b", "dataset_name": "B", "state": "failed"},
+        ],
+    }
+
+
+def multidataset_snapshot(*runs):
+    return {
+        "task_name": "release_demo",
+        "task_exists": True,
+        "errors": {},
+        "airflow_runs": [
+            {"run_id": "old_a", "dataset_name": "A", "state": "failed"},
+            {"run_id": "old_b", "dataset_name": "B", "state": "failed"},
+            *runs,
         ],
     }
 
@@ -96,6 +121,44 @@ def test_old_failed_run_without_new_execution_is_not_satisfied():
     snapshot = baseline()
     result, _ = verify(snapshot)
     assert result.status == "in_progress"
+
+
+def test_explicit_multidataset_partial_coverage_is_in_progress():
+    result, _ = verify(
+        multidataset_snapshot({"run_id": "new_a", "dataset_name": "A", "state": "running"}),
+        arguments={"task_name": "release_demo", "datasets": ["A", "B"]},
+        baseline_data=multidataset_baseline(),
+    )
+    assert result.status == "in_progress"
+    coverage = next(check for check in result.checks if check.name == "all_target_datasets_resumed")
+    assert coverage.passed is False
+    assert coverage.expected == ["A", "B"]
+    assert coverage.actual == ["A"]
+
+
+def test_derived_multidataset_partial_coverage_is_in_progress():
+    result, _ = verify(
+        multidataset_snapshot({"run_id": "new_a", "dataset_name": "A", "state": "running"}),
+        arguments={"task_name": "release_demo", "datasets": []},
+        baseline_data=multidataset_baseline(),
+    )
+    assert result.status == "in_progress"
+    assert result.evidence["expected_datasets"] == ["A", "B"]
+    assert result.evidence["observed_new_datasets"] == ["A"]
+
+
+def test_multidataset_complete_coverage_is_satisfied():
+    result, _ = verify(
+        multidataset_snapshot(
+            {"run_id": "new_a", "dataset_name": "A", "state": "running"},
+            {"run_id": "new_b", "dataset_name": "B", "state": "queued"},
+        ),
+        arguments={"task_name": "release_demo", "datasets": ["A", "B"]},
+        baseline_data=multidataset_baseline(),
+    )
+    assert result.status == "satisfied"
+    coverage = next(check for check in result.checks if check.name == "all_target_datasets_resumed")
+    assert coverage.passed is True
 
 
 class FixedActionVerifier:

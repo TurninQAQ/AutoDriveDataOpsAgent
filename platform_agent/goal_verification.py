@@ -173,10 +173,30 @@ class GoalVerifier:
             for item in new_runs
         ]
         checks.append(self._check("new_execution_created", bool(new_runs), True, bool(new_runs), str(new_summary)))
+        expected_datasets = set(selected)
+        observed_new_datasets = {
+            item["dataset_name"]
+            for item in new_summary
+            if item["dataset_name"]
+        }
+        all_target_datasets_observed = (
+            not expected_datasets
+            or expected_datasets.issubset(observed_new_datasets)
+        )
+        checks.append(
+            self._check(
+                "all_target_datasets_resumed",
+                all_target_datasets_observed,
+                sorted(expected_datasets),
+                sorted(observed_new_datasets),
+            )
+        )
         evidence = {
             "task_name": observed_task,
             "task_exists": task_exists,
             "selected_datasets": selected,
+            "expected_datasets": sorted(expected_datasets),
+            "observed_new_datasets": sorted(observed_new_datasets),
             "new_executions": new_summary,
         }
         if not new_runs:
@@ -187,6 +207,16 @@ class GoalVerifier:
                 attempts=attempts,
                 checks=checks,
                 errors=["resume action was verified, but no new execution was observed"],
+                evidence=evidence,
+            )
+        if expected_datasets and not all_target_datasets_observed:
+            return GoalVerificationResult(
+                action="resume_task",
+                task_name=task_name,
+                status="in_progress",
+                attempts=attempts,
+                checks=checks,
+                errors=["not all target datasets have a new post-action execution"],
                 evidence=evidence,
             )
 

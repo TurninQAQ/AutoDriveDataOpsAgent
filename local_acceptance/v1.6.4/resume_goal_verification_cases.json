@@ -62,6 +62,30 @@
       "target": "release_demo",
       "observed_target": "release_demo",
       "approval_goal_verification_field": "in_progress"
+    },
+    {
+      "case": "multi_dataset_partial_coverage",
+      "expected_datasets": ["A", "B"],
+      "observed_new_datasets": ["A"],
+      "expected_goal_status": "in_progress",
+      "actual_goal_status": "in_progress",
+      "all_target_datasets_resumed": false
+    },
+    {
+      "case": "multi_dataset_derived_partial_coverage",
+      "expected_datasets": ["A", "B"],
+      "observed_new_datasets": ["A"],
+      "expected_goal_status": "in_progress",
+      "actual_goal_status": "in_progress",
+      "all_target_datasets_resumed": false
+    },
+    {
+      "case": "multi_dataset_complete_coverage",
+      "expected_datasets": ["A", "B"],
+      "observed_new_datasets": ["A", "B"],
+      "expected_goal_status": "satisfied",
+      "actual_goal_status": "satisfied",
+      "all_target_datasets_resumed": true
     }
   ]
 }
