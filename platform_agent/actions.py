@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from .approval import ApprovalStore, PendingApproval
+from .autonomy import AutonomyDecision, AutonomyMode, BoundedAutonomyPolicy
 from .goal_verification import GoalVerifier
 from .models import AgentIntent, AgentPlan, ToolCallSpec, ToolObservation
 from .policy import AgentPolicyEngine
@@ -18,6 +20,17 @@ WRITE_INTENT_TO_TOOL = {
 }
 
 
+@dataclass
+class PreparedWriteAction:
+    tool_name: str
+    arguments: dict[str, Any]
+    precondition: dict[str, Any]
+    verification_baseline: dict[str, Any]
+    impact_summary: str
+    impact_details: list[str]
+    risk_level: str
+
+
 class WriteActionCoordinator:
     def __init__(
         self,
@@ -27,6 +40,7 @@ class WriteActionCoordinator:
         verifier: ActionVerifier | None = None,
         goal_verifier: GoalVerifier | None = None,
         trace_recorder=None,
+        autonomy_policy: BoundedAutonomyPolicy | None = None,
     ):
         self.tool_client = tool_client
         self.policy = policy
@@ -34,6 +48,7 @@ class WriteActionCoordinator:
         self.verifier = verifier or ActionVerifier(tool_client)
         self.goal_verifier = goal_verifier or GoalVerifier(tool_client)
         self.trace_recorder = trace_recorder
+        self.autonomy_policy = autonomy_policy
 
     @staticmethod
     def _find_observation(observations: list[ToolObservation], tool_name: str) -> ToolObservation | None:
@@ -92,7 +107,7 @@ class WriteActionCoordinator:
             return "Permanently delete the generated business task and its platform metadata/artifacts.", details
         return action, details
 
-    async def prepare(
+    async def _build_context(
         self,
         *,
         state_user_text: str,
@@ -100,8 +115,7 @@ class WriteActionCoordinator:
         plan: AgentPlan,
         observations: list[ToolObservation],
         task_plan: dict[str, Any] | None = None,
-        trace_id: str = "",
-    ) -> PendingApproval:
+    ) -> PreparedWriteAction:
         tool_name = WRITE_INTENT_TO_TOOL.get(plan.intent)
         if not tool_name:
             raise ValueError(f"Intent is not a write action: {plan.intent}")
@@ -147,17 +161,37 @@ class WriteActionCoordinator:
 
         impact_summary, impact_details = self.impact(plan, observations, arguments)
         risk = self.policy.risk_for_tool(tool_name)
+        return PreparedWriteAction(
+            tool_name=tool_name,
+            arguments=arguments,
+            precondition=dict(pre[0].data),
+            verification_baseline=verification_baseline,
+            impact_summary=impact_summary,
+            impact_details=impact_details,
+            risk_level=risk,
+        )
+
+    def _create_hitl_approval(
+        self,
+        *,
+        context: PreparedWriteAction,
+        state_user_text: str,
+        thread_id: str,
+        trace_id: str,
+        policy_decision: AutonomyDecision | None = None,
+    ) -> PendingApproval:
         pending = self.approval_store.create(
             thread_id=thread_id,
             user_request=state_user_text,
-            tool_name=tool_name,
-            arguments=arguments,
-            precondition=pre[0].data,
-            risk_level=risk,
-            impact_summary=impact_summary,
-            impact_details=impact_details,
-            verification_baseline=verification_baseline,
+            tool_name=context.tool_name,
+            arguments=context.arguments,
+            precondition=context.precondition,
+            risk_level=context.risk_level,
+            impact_summary=context.impact_summary,
+            impact_details=context.impact_details,
+            verification_baseline=context.verification_baseline,
             trace_id=trace_id,
+            policy_decision=policy_decision.model_dump(mode="json") if policy_decision else None,
         )
         if self.trace_recorder is not None and trace_id:
             self.trace_recorder.record(
@@ -167,19 +201,115 @@ class WriteActionCoordinator:
                 status="pending",
                 data={
                     "approval_id": pending.approval_id,
-                    "tool": tool_name,
-                    "risk_level": risk,
-                    "arguments": arguments,
-                    "precondition": pre[0].data,
-                    "impact_summary": impact_summary,
+                    "tool": context.tool_name,
+                    "risk_level": context.risk_level,
+                    "arguments": context.arguments,
+                    "precondition": context.precondition,
+                    "impact_summary": context.impact_summary,
                 },
             )
         return pending
 
+    async def prepare(
+        self,
+        *,
+        state_user_text: str,
+        thread_id: str,
+        plan: AgentPlan,
+        observations: list[ToolObservation],
+        task_plan: dict[str, Any] | None = None,
+        trace_id: str = "",
+    ) -> PendingApproval:
+        context = await self._build_context(
+            state_user_text=state_user_text,
+            thread_id=thread_id,
+            plan=plan,
+            observations=observations,
+            task_plan=task_plan,
+        )
+        return self._create_hitl_approval(
+            context=context,
+            state_user_text=state_user_text,
+            thread_id=thread_id,
+            trace_id=trace_id,
+        )
+
+    async def prepare_with_autonomy(
+        self,
+        *,
+        state_user_text: str,
+        thread_id: str,
+        plan: AgentPlan,
+        observations: list[ToolObservation],
+        task_plan: dict[str, Any] | None = None,
+        trace_id: str = "",
+    ) -> tuple[AutonomyDecision, PendingApproval | None]:
+        """Prepare a frozen action and authorize it through the V1.7 policy."""
+
+        context = await self._build_context(
+            state_user_text=state_user_text,
+            thread_id=thread_id,
+            plan=plan,
+            observations=observations,
+            task_plan=task_plan,
+        )
+        if self.autonomy_policy is None:
+            decision = AutonomyDecision(
+                mode=AutonomyMode.HITL,
+                action=context.tool_name,
+                risk_level=context.risk_level,
+                eligible=False,
+                reasons=["autonomy_policy_unavailable"],
+                frozen_arguments=context.arguments,
+            )
+        else:
+            decision = self.autonomy_policy.decide(
+                action=context.tool_name,
+                arguments=context.arguments,
+                precondition=context.precondition,
+                baseline=context.verification_baseline,
+                auto_actions_used=self.approval_store.count_auto_actions(trace_id),
+            )
+
+        if decision.mode == AutonomyMode.AUTO:
+            context.arguments = dict(decision.frozen_arguments)
+            context.impact_summary, context.impact_details = self.impact(plan, observations, context.arguments)
+            auto = self.approval_store.create_auto_execution(
+                thread_id=thread_id,
+                user_request=state_user_text,
+                tool_name=context.tool_name,
+                arguments=context.arguments,
+                precondition=context.precondition,
+                risk_level=context.risk_level,
+                impact_summary=context.impact_summary,
+                impact_details=context.impact_details,
+                verification_baseline=context.verification_baseline,
+                trace_id=trace_id,
+                policy_decision=decision.model_dump(mode="json"),
+            )
+            return decision, auto
+
+        if decision.mode == AutonomyMode.DENY:
+            return decision, None
+
+        pending = self._create_hitl_approval(
+            context=context,
+            state_user_text=state_user_text,
+            thread_id=thread_id,
+            trace_id=trace_id,
+            policy_decision=decision,
+        )
+        return decision, pending
+
     async def execute_approval(self, approval_id: str, execution_trace_id: str = "") -> PendingApproval:
         preview = self.approval_store.get(approval_id)
         self.policy.validate_write_tool(preview.tool_name)
-        item = self.approval_store.claim_for_execution(approval_id, execution_trace_id=execution_trace_id)
+        if preview.authorization_mode == "auto":
+            if preview.status != "executing":
+                raise RuntimeError(f"Auto action is not executable from status: {preview.status}")
+            item = preview
+        else:
+            item = self.approval_store.claim_for_execution(approval_id, execution_trace_id=execution_trace_id)
         if self.trace_recorder is not None and execution_trace_id:
             self.trace_recorder.record(
                 execution_trace_id,
@@ -205,17 +335,23 @@ class WriteActionCoordinator:
             failed = self.approval_store.mark_failed(approval_id, str(exc))
             if self.trace_recorder is not None and execution_trace_id:
                 self.trace_recorder.record(execution_trace_id, "mutation", item.tool_name, status="error", data={"approval_id": approval_id, "error": str(exc)})
+                if item.authorization_mode == "auto":
+                    self.trace_recorder.record(execution_trace_id, "autonomy", "failure_escalation", status="error", data={"approval_id": approval_id, "reason": "mutation_failure", "automatic_retry": False})
             return failed
         if not observations:
             failed = self.approval_store.mark_failed(approval_id, "Write MCP tool returned no observation")
             if self.trace_recorder is not None and execution_trace_id:
                 self.trace_recorder.record(execution_trace_id, "mutation", item.tool_name, status="error", data={"approval_id": approval_id, "error": failed.error})
+                if item.authorization_mode == "auto":
+                    self.trace_recorder.record(execution_trace_id, "autonomy", "failure_escalation", status="error", data={"approval_id": approval_id, "reason": "mutation_failure", "automatic_retry": False})
             return failed
         observation = observations[0]
         if not observation.ok:
             failed = self.approval_store.mark_failed(approval_id, observation.error or "Write MCP tool failed")
             if self.trace_recorder is not None and execution_trace_id:
                 self.trace_recorder.record(execution_trace_id, "mutation", item.tool_name, status="error", data={"approval_id": approval_id, "error": failed.error})
+                if item.authorization_mode == "auto":
+                    self.trace_recorder.record(execution_trace_id, "autonomy", "failure_escalation", status="error", data={"approval_id": approval_id, "reason": "mutation_failure", "automatic_retry": False})
             return failed
         result = observation.data if isinstance(observation.data, dict) else {"data": observation.data}
         verification = await self.verifier.verify(action=item.tool_name, arguments=item.arguments, execution_result=result, baseline=item.verification_baseline)
@@ -245,6 +381,18 @@ class WriteActionCoordinator:
                         status=goal_verification.status,
                         data={"approval_id": approval_id, "result": goal_payload},
                     )
+                    if item.authorization_mode == "auto" and goal_verification.status != "satisfied":
+                        self.trace_recorder.record(
+                            execution_trace_id,
+                            "autonomy",
+                            "failure_escalation",
+                            status="escalate",
+                            data={
+                                "approval_id": approval_id,
+                                "reason": f"goal_verification_{goal_verification.status}",
+                                "automatic_retry": False,
+                            },
+                        )
             executed = self.approval_store.mark_executed(
                 approval_id,
                 result,
@@ -259,4 +407,6 @@ class WriteActionCoordinator:
         failed = self.approval_store.mark_verification_failed(approval_id, result, payload, f"Action executed but verification {verification.status}: {detail}")
         if self.trace_recorder is not None and execution_trace_id:
             self.trace_recorder.record(execution_trace_id, "approval", "approval_verification_failed", status="verification_failed", data={"approval_id": approval_id, "tool": item.tool_name, "error": failed.error})
+            if item.authorization_mode == "auto":
+                self.trace_recorder.record(execution_trace_id, "autonomy", "failure_escalation", status="error", data={"approval_id": approval_id, "reason": "action_verification_failure", "automatic_retry": False})
         return failed

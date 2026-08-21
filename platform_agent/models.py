@@ -195,6 +195,12 @@ class AgentResponse(BaseModel):
     adaptive_steps: list[dict[str, Any]] = Field(default_factory=list)
     goal: AgentGoal | None = None
     goal_progress: GoalProgress | None = None
+    # V1.7 write authorization/verification metadata is optional so V1.6.x
+    # responses and stored conversations remain loadable.
+    authorization_mode: str | None = None
+    policy_decision: dict[str, Any] | None = None
+    action_verification: dict[str, Any] | None = None
+    goal_verification_result: dict[str, Any] | None = None
 
 
 class ConversationTurn(BaseModel):

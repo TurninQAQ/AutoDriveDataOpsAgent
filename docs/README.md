@@ -23,6 +23,7 @@
 - [V1.0 Hardening/E2E](V1.0_HARDENING_E2E.md)
 - [V1.1 Evaluation Alignment](V1.1_EVALUATION_ALIGNMENT.md)
 - [V1.2 Gemini Provider](V1.2_GEMINI_PROVIDER.md)
+- [V1.7 Bounded Autonomy](evaluation/V1.7.0_BOUNDED_AUTONOMY.md)
 - [版本发布说明](version.md)
 
 ## 测试报告

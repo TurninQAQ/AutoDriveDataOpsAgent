@@ -53,6 +53,9 @@ class AgentSettings:
     trace_max_files: int
     audit_max_bytes: int
     audit_backup_count: int
+    autonomy_enabled: bool
+    auto_actions_per_request: int
+    auto_resume_max_datasets: int
 
     @classmethod
     def from_env(cls, platform_settings: PlatformSettings | None = None) -> "AgentSettings":
@@ -141,6 +144,9 @@ class AgentSettings:
         trace_max_files = int(os.environ.get("PLATFORM_AGENT_TRACE_MAX_FILES", "5000"))
         audit_max_bytes = int(os.environ.get("PLATFORM_AGENT_AUDIT_MAX_BYTES", str(20 * 1024 * 1024)))
         audit_backup_count = int(os.environ.get("PLATFORM_AGENT_AUDIT_BACKUP_COUNT", "5"))
+        autonomy_enabled = _env_bool("PLATFORM_AGENT_AUTONOMY_ENABLED", False)
+        auto_actions_per_request = int(os.environ.get("PLATFORM_AGENT_AUTO_ACTIONS_PER_REQUEST", "1"))
+        auto_resume_max_datasets = int(os.environ.get("PLATFORM_AGENT_AUTO_RESUME_MAX_DATASETS", "3"))
 
         return cls(
             provider=provider,
@@ -180,4 +186,7 @@ class AgentSettings:
             trace_max_files=max(0, trace_max_files),
             audit_max_bytes=max(0, audit_max_bytes),
             audit_backup_count=max(0, audit_backup_count),
+            autonomy_enabled=autonomy_enabled,
+            auto_actions_per_request=max(1, auto_actions_per_request),
+            auto_resume_max_datasets=max(1, auto_resume_max_datasets),
         )

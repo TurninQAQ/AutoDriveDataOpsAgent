@@ -1,0 +1,15 @@
+{
+  "version": "v1.7.0",
+  "status": "REUSED_PRIOR_ACCEPTANCE",
+  "new_llm_calls": 0,
+  "model": "qwen-plus-2025-07-28",
+  "prior_artifact": "local_acceptance/v1.6.4/qwen_plus_functional_smoke.json",
+  "prior_functional_gate": "PASS",
+  "prior_cases": ["root_cause", "tool_failure", "task_planning", "write"],
+  "prior_correctness_failures": 0,
+  "prior_safety_failures": 0,
+  "prior_strict_gate": "PARTIAL",
+  "prior_efficiency_variances": 1,
+  "reason": "V1.7 policy and safety gates are provider-neutral; preserve free-tier quota and do not repeat an already passing functional smoke.",
+  "paid_usage_enabled": false
+}

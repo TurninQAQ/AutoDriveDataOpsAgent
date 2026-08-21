@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any, TypedDict
 
 from platform_mcp.server import READ_ONLY_TOOL_NAMES
 
 from .actions import WRITE_INTENT_TO_TOOL, WriteActionCoordinator
 from .adaptive import AdaptiveLimits, AdaptiveLoopController, READ_ONLY_INTENTS
+from .autonomy import AutonomyMode, BoundedAutonomyPolicy
 from .memory import ConversationStore
 from .models import (
     AgentIntent,
@@ -111,6 +113,7 @@ class AgentGraphState(TypedDict, total=False):
     response: dict[str, Any]
     task_planning: dict[str, Any]
     trace_id: str
+    request_id: str
     adaptive_steps: list[dict[str, Any]]
     adaptive_step_count: int
     tool_call_count: int
@@ -130,8 +133,9 @@ class ReadOnlyAgentNodes:
     """Agent nodes shared by sequential and LangGraph runtimes.
 
     The historical class name is retained for compatibility. In V0.8 normal model
-    tool calls are still read-only; state-changing calls can only be executed by the
-    separate WriteActionCoordinator after persisted HITL approval.
+    tool calls are still read-only; state-changing calls can only be executed by
+    the separate guarded WriteActionCoordinator after persisted HITL approval or
+    the deterministic V1.7 resume policy.
     """
 
     def __init__(
@@ -147,6 +151,7 @@ class ReadOnlyAgentNodes:
         max_steps: int = 8,
         max_identical_tool_calls: int = 2,
         max_consecutive_tool_failures: int = 2,
+        autonomy_policy: BoundedAutonomyPolicy | None = None,
     ):
         self.model = model
         self.tool_client = tool_client
@@ -155,6 +160,7 @@ class ReadOnlyAgentNodes:
         self.knowledge_top_k = max(1, knowledge_top_k)
         self.task_planning_service = task_planning_service
         self.action_coordinator = action_coordinator
+        self.autonomy_policy = autonomy_policy
         self.trace_recorder = trace_recorder
         self.adaptive_limits = AdaptiveLimits(
             max_steps=max_steps,
@@ -513,13 +519,14 @@ class ReadOnlyAgentNodes:
             )
 
         try:
-            pending = await self.action_coordinator.prepare(
+            request_id = state.get("trace_id") or state.get("request_id") or state.get("thread_id", "default")
+            decision, pending = await self.action_coordinator.prepare_with_autonomy(
                 state_user_text=state.get("user_text", ""),
                 thread_id=state.get("thread_id", "default"),
                 plan=plan,
                 observations=observations,
                 task_plan=task_plan_dict,
-                trace_id=state.get("trace_id", ""),
+                trace_id=request_id,
             )
         except Exception as exc:
             return AgentResponse(
@@ -528,6 +535,118 @@ class ReadOnlyAgentNodes:
                 confidence="high",
                 blocked=True,
                 errors=[str(exc)],
+                task_plan=task_plan_dict,
+                tool_trace=self._trace(observations),
+            )
+
+        decision_payload = decision.model_dump(mode="json")
+        if self.trace_recorder is not None and state.get("trace_id", ""):
+            self.trace_recorder.record(
+                state.get("trace_id", ""),
+                "autonomy",
+                "autonomy_policy",
+                status=decision.mode.value.lower(),
+                data=decision_payload,
+            )
+            self.trace_recorder.record(
+                state.get("trace_id", ""),
+                "autonomy",
+                "autonomy_budget",
+                status="ok",
+                data=decision.budget,
+            )
+
+        if decision.mode == AutonomyMode.DENY:
+            return AgentResponse(
+                intent=plan.intent,
+                summary=f"{decision.action} was denied by the deterministic autonomy policy; no mutation was executed.",
+                evidence=list(decision.reasons),
+                recommended_next_actions=["Review the current target/state evidence and request a guarded action again."],
+                confidence="high",
+                blocked=True,
+                errors=list(decision.reasons),
+                policy_decision=decision_payload,
+                authorization_mode="hitl",
+                task_plan=task_plan_dict,
+                tool_trace=self._trace(observations),
+            )
+
+        if decision.mode == AutonomyMode.AUTO:
+            if pending is None:
+                return AgentResponse(
+                    intent=plan.intent,
+                    summary="Autonomy policy allowed resume_task but no execution record was created; no mutation was executed.",
+                    confidence="low",
+                    blocked=True,
+                    errors=["auto execution record missing"],
+                    policy_decision=decision_payload,
+                    authorization_mode="auto",
+                    task_plan=task_plan_dict,
+                    tool_trace=self._trace(observations),
+                )
+            if self.trace_recorder is not None and state.get("trace_id", ""):
+                self.trace_recorder.record(
+                    state.get("trace_id", ""), "autonomy", "autonomous_execution", status="started",
+                    data={"approval_id": pending.approval_id, "frozen_arguments": pending.arguments, "automatic_retry": False},
+                )
+            try:
+                executed = await self.action_coordinator.execute_approval(
+                    pending.approval_id,
+                    execution_trace_id=state.get("trace_id", ""),
+                )
+            except Exception as exc:
+                return AgentResponse(
+                    intent=plan.intent,
+                    summary="Autonomous resume execution could not be completed; operator review is required.",
+                    confidence="low",
+                    blocked=True,
+                    errors=[str(exc)],
+                    approval_id=pending.approval_id,
+                    pending_action=pending.model_dump(mode="json"),
+                    authorization_mode="auto",
+                    policy_decision=decision_payload,
+                    task_plan=task_plan_dict,
+                    tool_trace=self._trace(observations),
+                )
+
+            goal_payload = executed.goal_verification_result or {}
+            goal_status = str(goal_payload.get("status") or "")
+            if executed.status == "executed" and goal_status == "satisfied":
+                summary = "Autonomous resume completed and the user goal was deterministically verified."
+                termination_reason = "goal_satisfied"
+                blocked = False
+                confidence = "high"
+            elif executed.status == "executed" and goal_status == "in_progress":
+                summary = "Autonomous resume executed, but post-action evidence is still incomplete; no automatic retry was performed."
+                termination_reason = "goal_incomplete"
+                blocked = True
+                confidence = "medium"
+            elif executed.status == "executed" and goal_status in {"failed", "inconclusive"}:
+                summary = f"Autonomous resume executed, but Goal Verification is {goal_status}; operator review is required."
+                termination_reason = "goal_blocked"
+                blocked = True
+                confidence = "low"
+            else:
+                summary = "Autonomous resume did not pass the guarded execution chain; operator review is required."
+                termination_reason = "action_verification_failed"
+                blocked = True
+                confidence = "low"
+            return AgentResponse(
+                intent=plan.intent,
+                summary=summary,
+                evidence=list(pending.impact_details),
+                recommended_next_actions=([] if not blocked else ["Review the deterministic verification and escalation record; do not retry automatically."]),
+                confidence=confidence,
+                blocked=blocked,
+                approval_required=False,
+                approval_id=executed.approval_id,
+                pending_action=executed.model_dump(mode="json"),
+                action_result=executed.execution_result,
+                termination_reason=termination_reason,
+                authorization_mode="auto",
+                policy_decision=decision_payload,
+                action_verification=executed.verification_result,
+                goal_verification_result=goal_payload,
                 task_plan=task_plan_dict,
                 tool_trace=self._trace(observations),
             )
@@ -549,6 +668,8 @@ class ReadOnlyAgentNodes:
             approval_required=True,
             approval_id=pending.approval_id,
             pending_action=pending_payload,
+            authorization_mode="hitl",
+            policy_decision=decision_payload,
             task_plan=task_plan_dict,
             tool_trace=self._trace(observations),
         )
@@ -601,25 +722,50 @@ class ReadOnlyAgentNodes:
 
         if plan.intent in WRITE_INTENTS:
             response = await self._write_answer(state, plan, observations)
-            state["goal_progress"] = (
-                GoalProgress.SATISFIED.value
-                if response.approval_required
-                else GoalProgress.BLOCKED.value
-            )
-            state["goal_evaluation"] = GoalEvaluation(
-                state=GoalProgress.SATISFIED if response.approval_required else GoalProgress.BLOCKED,
-                satisfied_conditions=(
-                    ["WRITE_PLAN_PREPARED"] if response.approval_required else []
-                ),
-                missing_conditions=(
-                    [] if response.approval_required else ["WRITE_PLAN_PREPARED"]
-                ),
-                summary=(
-                    "Write plan is prepared and awaiting HITL approval."
+            if response.authorization_mode == "auto":
+                goal_status = str((response.goal_verification_result or {}).get("status") or "")
+                if goal_status == "satisfied":
+                    write_state = GoalProgress.SATISFIED
+                    satisfied = ["RESUME_GOAL_VERIFIED"]
+                    missing = []
+                    summary = "Resume action and user goal were deterministically verified."
+                elif goal_status == "in_progress":
+                    write_state = GoalProgress.IN_PROGRESS
+                    satisfied = ["RESUME_ACTION_EXECUTED"]
+                    missing = ["RESUME_GOAL_VERIFIED"]
+                    summary = "Resume action executed, but the user goal remains in progress."
+                else:
+                    write_state = GoalProgress.BLOCKED
+                    satisfied = ["RESUME_ACTION_EXECUTED"] if response.action_result else []
+                    missing = ["RESUME_GOAL_VERIFIED"]
+                    summary = "Autonomous resume did not complete the user goal."
+                state["goal_progress"] = write_state.value
+                state["goal_evaluation"] = GoalEvaluation(
+                    state=write_state,
+                    satisfied_conditions=satisfied,
+                    missing_conditions=missing,
+                    summary=summary,
+                ).model_dump(mode="json")
+            else:
+                state["goal_progress"] = (
+                    GoalProgress.SATISFIED.value
                     if response.approval_required
-                    else "Write plan could not be prepared."
-                ),
-            ).model_dump(mode="json")
+                    else GoalProgress.BLOCKED.value
+                )
+                state["goal_evaluation"] = GoalEvaluation(
+                    state=GoalProgress.SATISFIED if response.approval_required else GoalProgress.BLOCKED,
+                    satisfied_conditions=(
+                        ["WRITE_PLAN_PREPARED"] if response.approval_required else []
+                    ),
+                    missing_conditions=(
+                        [] if response.approval_required else ["WRITE_PLAN_PREPARED"]
+                    ),
+                    summary=(
+                        "Write plan is prepared and awaiting HITL approval."
+                        if response.approval_required
+                        else "Write plan could not be prepared."
+                    ),
+                ).model_dump(mode="json")
             return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
 
         if plan.intent == AgentIntent.TASK_PLANNING:
@@ -797,6 +943,7 @@ class BaseReadOnlyAgent:
             "evidence_sufficient": False,
             "evidence_records": [],
             "trace_id": trace_id,
+            "request_id": trace_id or uuid.uuid4().hex,
         }
 
     def _commit(self, thread_id: str, user_text: str, response: AgentResponse) -> None:
@@ -962,10 +1109,25 @@ def build_agent_runtime(
     approval_store=None,
     action_verifier=None,
     trace_recorder=None,
+    autonomy_enabled: bool = False,
+    auto_actions_per_request: int = 1,
+    auto_resume_max_datasets: int = 3,
 ):
     policy = AgentPolicyEngine(max_tool_calls=max_tool_calls)
+    autonomy_policy = BoundedAutonomyPolicy(
+        enabled=autonomy_enabled,
+        max_actions_per_request=auto_actions_per_request,
+        max_resume_datasets=auto_resume_max_datasets,
+    )
     action_coordinator = (
-        WriteActionCoordinator(tool_client, policy, approval_store, verifier=action_verifier, trace_recorder=trace_recorder)
+        WriteActionCoordinator(
+            tool_client,
+            policy,
+            approval_store,
+            verifier=action_verifier,
+            trace_recorder=trace_recorder,
+            autonomy_policy=autonomy_policy,
+        )
         if approval_store is not None
         else None
     )
@@ -981,6 +1143,7 @@ def build_agent_runtime(
         max_steps=max_steps,
         max_identical_tool_calls=max_identical_tool_calls,
         max_consecutive_tool_failures=max_consecutive_tool_failures,
+        autonomy_policy=autonomy_policy,
     )
     runtime = (runtime or "langgraph").strip().lower()
     if runtime in {"sequential", "test"}:

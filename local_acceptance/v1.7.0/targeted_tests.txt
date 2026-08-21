@@ -1,0 +1,26 @@
+Baseline targeted tests:
+PYTHONPATH=. /home/ubuntu/project/autodrive_dataops_runtime/venv/bin/pytest -q tests/test_write_agent_v07.py tests/test_action_verification_v08.py tests/test_goal_verification_v164.py tests/test_evidence_invariants_v164.py tests/test_goal_write_boundary_v160.py
+Result: 52 passed in 0.34s
+
+V1.7.0 autonomy policy/integration tests:
+PYTHONPATH=. /home/ubuntu/project/autodrive_dataops_runtime/venv/bin/pytest -q tests/test_autonomy_policy_v170.py tests/test_bounded_autonomy_v170.py tests/test_write_agent_v07.py tests/test_goal_verification_v164.py tests/test_action_verification_v08.py
+Result: 68 passed in 0.40s
+
+Related risk-based regression:
+PYTHONPATH=. /home/ubuntu/project/autodrive_dataops_runtime/venv/bin/pytest -q tests/test_autonomy_policy_v170.py tests/test_bounded_autonomy_v170.py tests/test_goal_verification_v164.py tests/test_evidence_invariants_v164.py tests/test_goal_entity_binding_v162.py tests/test_goal_evaluation_v160.py tests/test_goal_model_v160.py tests/test_goal_contract_v161.py tests/test_goal_state_sync_v161.py tests/test_goal_write_boundary_v160.py tests/test_goal_adaptive_v160.py tests/test_adaptive_evidence_v15x.py tests/test_action_verification_v08.py tests/test_write_agent_v07.py tests/test_task_planning_v06.py tests/test_task_planning_merge_v161.py tests/test_task_planning_merge_v162.py tests/test_task_planning_multidataset_v163.py tests/test_goal_smoke_contract_v162.py tests/test_smoke_evaluator_v164.py tests/test_observability_eval_v09.py
+Result: 158 passed in 1.41s
+
+Additional local hardening regression:
+PYTHONPATH=. /home/ubuntu/project/autodrive_dataops_runtime/venv/bin/pytest -q tests/test_hardening_v10.py
+Result: 7 passed in 0.39s
+
+compileall:
+PYTHONPATH=. /home/ubuntu/project/autodrive_dataops_runtime/venv/bin/python -m compileall -q platform_agent
+PASS
+
+git diff --check:
+git diff --check
+PASS
+
+Local E2E:
+PASS (existing local hardening E2E; AUTO/HITL bounded-autonomy paths are covered by test_bounded_autonomy_v170.py)

@@ -153,7 +153,7 @@ def test_frozen_contract_survives_adaptive_intent_revision():
     assert revised_intent_result.missing_conditions == ["DIAGNOSTIC_CONTEXT"]
 
 
-def test_production_diagnose_context_does_not_require_fake_reason():
+def test_production_diagnose_context_requires_a_real_fact_field():
     goal = goal_for_intent(AgentIntent.TASK_DIAGNOSIS, target="release_demo")
     state_only = observation(
         "diagnose_task",
@@ -163,5 +163,7 @@ def test_production_diagnose_context_does_not_require_fake_reason():
 
     result = evaluate_goal_progress(goal, records_for(state_only), [state_only])
 
-    assert result.state == GoalProgress.SATISFIED
-    assert EvidenceType.DIAGNOSTIC_CONTEXT.value in result.satisfied_conditions
+    # ``task_name`` and ``evidence_complete`` are metadata only.  The
+    # production-shaped contract requires at least one fact-bearing field.
+    assert result.state == GoalProgress.IN_PROGRESS
+    assert EvidenceType.DIAGNOSTIC_CONTEXT.value in result.missing_conditions

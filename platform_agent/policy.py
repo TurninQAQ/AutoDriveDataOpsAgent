@@ -80,8 +80,9 @@ class AgentPolicyEngine:
         return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in PLANNING_PATTERNS)
 
     def validate_tool_name(self, name: str) -> None:
-        # Normal model-planned calls remain read-only. A write tool is only executed
-        # by WriteActionCoordinator after a persisted HITL approval.
+        # Normal model-planned calls remain read-only. A write tool is only
+        # executed by the guarded WriteActionCoordinator after HITL or the
+        # separate deterministic V1.7 autonomy policy authorizes resume_task.
         if name not in self.allowed_read_tools:
             raise PermissionError(f"Tool is not allowed before HITL approval: {name}")
 

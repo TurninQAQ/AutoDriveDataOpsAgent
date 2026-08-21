@@ -95,7 +95,7 @@ Hard constraints:
 - Only use tools present in AVAILABLE_TOOLS.
 - Never invent a tool.
 - Local task planning/YAML generation is allowed and must use intent=task_planning with tool_calls=[] and task_draft containing only values explicitly present in the user request. Do not invent defaults in task_draft.
-- submit_task, resume_task, set_task_priority, stop_task and delete_task are write intents and are only executed later through HITL.
+- Only resume_task can be AUTO when the deterministic V1.7 policy explicitly allows it; submit_task, set_task_priority, stop_task and delete_task remain HITL-only. The model never selects AUTO.
 - For write requests, NEVER put a write tool into tool_calls. tool_calls may contain only read-only evidence tools.
 - Put frozen mutation arguments into write_action and choose the matching write intent.
 - For submit_task, also produce task_draft containing only explicit user values; the workflow will run deterministic TaskPlanningService and validate_task_spec.

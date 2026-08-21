@@ -49,7 +49,17 @@ def _print_response(response: AgentResponse, as_json: bool = False) -> None:
         if plan.get("yaml_text"):
             print("\nGenerated YAML:\n")
             print(plan["yaml_text"].rstrip())
-    if response.approval_required:
+    if response.authorization_mode == "auto":
+        print("\nAutonomous execution:")
+        print("- authorization_mode=auto")
+        if response.policy_decision:
+            print(f"- policy_mode={response.policy_decision.get('mode')}")
+            print(f"- frozen_arguments={json.dumps(response.policy_decision.get('frozen_arguments') or {}, ensure_ascii=False, default=str)}")
+        if response.action_verification:
+            print(f"- action_verification={response.action_verification.get('status')}")
+        if response.goal_verification_result:
+            print(f"- goal_verification={response.goal_verification_result.get('status')}")
+    elif response.approval_required:
         print("\nApproval:")
         print(f"- approval_id={response.approval_id}")
         if response.pending_action:
@@ -238,7 +248,11 @@ def _print_approval(item, as_json: bool = False) -> None:
     if as_json:
         print(item.model_dump_json(indent=2))
         return
-    print(f"approval_id={item.approval_id} status={item.status} risk={item.risk_level} tool={item.tool_name}")
+    print(f"approval_id={item.approval_id} status={item.status} authorization_mode={item.authorization_mode} risk={item.risk_level} tool={item.tool_name}")
+    if item.authorization_mode == "auto":
+        print("authorization=deterministic_policy (not human approval)")
+        if item.policy_decision:
+            print(f"policy_mode={item.policy_decision.get('mode')} reasons={','.join(item.policy_decision.get('reasons') or [])}")
     print(f"impact={item.impact_summary}")
     for detail in item.impact_details:
         print(f"- {detail}")

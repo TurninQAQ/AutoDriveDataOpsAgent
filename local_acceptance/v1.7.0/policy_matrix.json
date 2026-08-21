@@ -1,0 +1,23 @@
+{
+  "version": "v1.7.0",
+  "source": "tests/test_autonomy_policy_v170.py",
+  "policy_version": "v1.7.0",
+  "cases": [
+    {"case": "safe_resume_single_dataset", "action": "resume_task", "expected": "AUTO", "actual": "AUTO"},
+    {"case": "safe_resume_explicit_multi_dataset", "action": "resume_task", "expected": "AUTO", "actual": "AUTO"},
+    {"case": "safe_resume_derived_dataset_scope", "action": "resume_task", "expected": "AUTO", "actual": "AUTO", "frozen_datasets": ["A", "B"]},
+    {"case": "autonomy_disabled", "action": "resume_task", "expected": "HITL", "actual": "HITL"},
+    {"case": "requested_non_failed_dataset", "action": "resume_task", "expected": "HITL", "actual": "HITL"},
+    {"case": "dataset_budget_exceeded", "action": "resume_task", "expected": "HITL", "actual": "HITL"},
+    {"case": "cross_task_preemption", "action": "resume_task", "expected": "HITL", "actual": "HITL"},
+    {"case": "missing_target", "action": "resume_task", "expected": "DENY", "actual": "DENY"},
+    {"case": "unknown_dataset", "action": "resume_task", "expected": "DENY", "actual": "DENY"},
+    {"case": "task_missing", "action": "resume_task", "expected": "DENY", "actual": "DENY"},
+    {"case": "critical_evidence_unavailable", "action": "resume_task", "expected": "DENY", "actual": "DENY"},
+    {"case": "submit_always_hitl", "action": "submit_task", "expected": "HITL", "actual": "HITL"},
+    {"case": "priority_always_hitl", "action": "set_task_priority", "expected": "HITL", "actual": "HITL"},
+    {"case": "stop_always_hitl", "action": "stop_task", "expected": "HITL", "actual": "HITL"},
+    {"case": "delete_always_hitl", "action": "delete_task", "expected": "HITL", "actual": "HITL"}
+  ],
+  "policy_matrix_pass": true
+}

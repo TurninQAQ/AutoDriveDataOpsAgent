@@ -23,6 +23,8 @@ class PendingApproval(BaseModel):
     thread_id: str = "default"
     trace_id: str = ""
     execution_trace_id: str = ""
+    authorization_mode: str = Field(default="hitl", pattern="^(hitl|auto)$")
+    policy_decision: dict[str, Any] | None = None
     user_request: str
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -96,6 +98,9 @@ class ApprovalStore:
         impact_details: list[str] | None = None,
         verification_baseline: dict[str, Any] | None = None,
         trace_id: str = "",
+        authorization_mode: str = "hitl",
+        policy_decision: dict[str, Any] | None = None,
+        initial_status: str = "pending",
     ) -> PendingApproval:
         now = time.time()
         item = PendingApproval(
@@ -104,6 +109,8 @@ class ApprovalStore:
             expires_at=now + self.ttl_sec,
             thread_id=thread_id,
             trace_id=trace_id,
+            authorization_mode=authorization_mode,
+            policy_decision=dict(policy_decision or {}) or None,
             user_request=user_request,
             tool_name=tool_name,
             arguments=dict(arguments),
@@ -112,10 +119,57 @@ class ApprovalStore:
             impact_summary=impact_summary,
             impact_details=list(impact_details or []),
             verification_baseline=dict(verification_baseline or {}),
+            status=initial_status,
         )
         with self._locked(item.approval_id):
             self._write_unlocked(item)
         return item
+
+    def create_auto_execution(
+        self,
+        *,
+        thread_id: str,
+        user_request: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        precondition: dict[str, Any],
+        risk_level: str,
+        impact_summary: str,
+        impact_details: list[str] | None = None,
+        verification_baseline: dict[str, Any] | None = None,
+        trace_id: str = "",
+        policy_decision: dict[str, Any] | None = None,
+    ) -> PendingApproval:
+        """Persist a policy-authorized action already in execution state.
+
+        This is not a fake human approval.  The record explicitly carries
+        ``authorization_mode=auto`` and uses the same execution path as HITL.
+        """
+
+        return self.create(
+            thread_id=thread_id,
+            user_request=user_request,
+            tool_name=tool_name,
+            arguments=arguments,
+            precondition=precondition,
+            risk_level=risk_level,
+            impact_summary=impact_summary,
+            impact_details=impact_details,
+            verification_baseline=verification_baseline,
+            trace_id=trace_id,
+            authorization_mode="auto",
+            policy_decision=policy_decision,
+            initial_status="executing",
+        )
+
+    def count_auto_actions(self, trace_id: str) -> int:
+        if not trace_id:
+            return 0
+        return sum(
+            1
+            for item in self.list(status="")
+            if item.authorization_mode == "auto" and item.trace_id == trace_id
+        )
 
     def get(self, approval_id: str) -> PendingApproval:
         # Pending expiration is a mutation, so take an exclusive lock.

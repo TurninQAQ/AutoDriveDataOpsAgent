@@ -138,8 +138,8 @@ Hard constraints:
 - Return JSON matching the requested schema.
 - Only use tools present in AVAILABLE_TOOLS; never invent a tool.
 - Current system facts must come from tools, never from memory or guesswork.
-- For write requests, NEVER put a write tool into tool_calls. Put frozen mutation arguments into write_action; policy and HITL execute writes later.
-- submit_task, resume_task, set_task_priority, stop_task and delete_task are write intents and are executed only through HITL.
+- For write requests, NEVER put a write tool into tool_calls. Put frozen mutation arguments into write_action; deterministic policy and the guarded write path authorize execution later.
+- Only resume_task can be AUTO when the deterministic V1.7 policy explicitly allows it; submit_task, set_task_priority, stop_task and delete_task remain HITL-only. The model never selects AUTO.
 - Local task planning is intent=task_planning with tool_calls=[] and task_draft containing only values explicitly present in the user request.
 - restart and other mutations remain unsupported_write.
 {EVIDENCE_ROUTING_CONTRACT}

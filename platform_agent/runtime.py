@@ -113,4 +113,7 @@ def build_default_agent():
         approval_store=approval_store,
         action_verifier=ActionVerifier(tool_client, attempts=agent_settings.verification_attempts, interval_sec=agent_settings.verification_interval_sec),
         trace_recorder=trace_recorder,
+        autonomy_enabled=agent_settings.autonomy_enabled,
+        auto_actions_per_request=agent_settings.auto_actions_per_request,
+        auto_resume_max_datasets=agent_settings.auto_resume_max_datasets,
     )

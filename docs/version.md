@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.7.0 Bounded Autonomy — 2026-08-21
+
+1. 新增 deterministic `AUTO/HITL/DENY` autonomy policy；只有满足当前失败 dataset、冻结 scope、完整 verification baseline、有效 Precondition、dataset/action budget 和无跨任务抢占条件的 `resume_task` 可以 AUTO。
+2. AUTO 默认关闭（`PLATFORM_AGENT_AUTONOMY_ENABLED=false`）；`submit_task`、`set_task_priority`、`stop_task` 和 `delete_task` 始终保持 HITL。
+3. AUTO 与 HITL 共用 `WriteActionCoordinator` 的 frozen arguments、Platform Core Precondition、Mutation、Action Verification 和 Goal Verification 链路；禁止 autonomous retry，并记录 failure escalation。
+4. 保持 V1.6.x entity-bound evidence、diagnostic context、multi-dataset Goal Verification 和 Frozen Golden 不变；详见 `docs/evaluation/V1.7.0_BOUNDED_AUTONOMY.md`。
+
 ### V1.6.4 Pre-Autonomy Gate Closure — 2026-08-21
 
 1. 收紧 Evidence entity provenance：request task/dataset 与 payload identity 冲突时不授予 target-bound evidence credit，保留旧 artifact 兼容读取。

@@ -15,6 +15,7 @@
 - V1.1：Evaluation Alignment，新增 chunk-level RAG Golden、Agent tool/task eval、Promptfoo 风格安全集、可选 Ragas/DeepEval/Promptfoo 集成与统一质量门禁。
 - V1.2：Gemini Provider，新增原生 google-genai Structured Output Agent Provider，并可选使用 gemini-embedding-2 + BM25 做真正语义 Hybrid RAG。
 - V1.3.3：Qwen Plus Primary Agent，保留 qwen3.7-flash 为 legacy/fallback，继续使用 qwen3.7-text-embedding。
+- V1.7.0：Policy-gated bounded autonomy，仅允许满足 deterministic 条件的 `resume_task` 进入 AUTO；其他写操作继续 HITL。
 
 无真实 GPU 的本地开发方式见：[docs/V0.2_GPU_SIMULATION.md](docs/V0.2_GPU_SIMULATION.md)。
 
@@ -136,6 +137,22 @@ dataops-agent eval-aligned --json
 ```
 
 Qwen dense sidecar 与历史 Gemini sidecar 分开保存；第一轮固定 lexical/dense=0.50/0.50，不启用 instruct 或 reranker。
+
+## V1.7 Bounded Autonomy
+
+Autonomy 默认关闭。开启后也只有 deterministic policy 允许的安全
+`resume_task` 可以 AUTO；`submit_task`、优先级、停止和删除继续要求 HITL。
+AUTO resume 会先冻结目标 task 和当前确实失败的 dataset 集合，再共同经过
+Precondition、Mutation、Action Verification 和 Goal Verification；没有自动重试，
+跨任务抢占、非失败 dataset、未知 dataset、关键读证据缺失或预算超限不会 AUTO。
+
+```bash
+export PLATFORM_AGENT_AUTONOMY_ENABLED=0
+export PLATFORM_AGENT_AUTO_ACTIONS_PER_REQUEST=1
+export PLATFORM_AGENT_AUTO_RESUME_MAX_DATASETS=3
+```
+
+实现与验收记录见：[V1.7.0 Bounded Autonomy](docs/evaluation/V1.7.0_BOUNDED_AUTONOMY.md)。
 
 
 ## Agent V0.9 Observability / Evaluation
