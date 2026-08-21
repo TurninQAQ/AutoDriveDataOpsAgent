@@ -1,11 +1,10 @@
-Commit: 1f6cfbd4477ef4b525af61693cbc5ba1b5e1c3dc
+Commit: 55fb4a3f4e63f4358f2e88ebd5c201c120bc571d
 Branch: main
-origin/main: 1f6cfbd4477ef4b525af61693cbc5ba1b5e1c3dc
+origin/main: 55fb4a3f4e63f4358f2e88ebd5c201c120bc571d
 Working tree: clean
 git diff --check: PASS
-Latest commit: 1f6cfbd fix: close pre-autonomy goal evidence invariants
+Latest commit: 55fb4a3 fix: require full dataset coverage for resume goals
 Status: ## main...origin/main
 
-Capture note: this state was captured after the implementation commit was
-pushed and before this acceptance-state file was added to the follow-up
-documentation commit.
+Capture note: this state was captured after the V1.6.4 multi-dataset follow-up
+commit was pushed and before this git-state metadata update was committed.
