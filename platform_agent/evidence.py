@@ -58,7 +58,6 @@ DIAGNOSTIC_FACT_KEYS = frozenset(
         "gpu_reservations",
         "gpu_devices",
         "errors",
-        "evidence_complete",
         "datasets",
     }
 )
@@ -85,14 +84,46 @@ def evidence_subject_from_observation(observation: ToolObservation) -> dict[str,
     result fields are only a fallback for production tool payloads that echo it.
     """
 
-    data = observation.data if isinstance(observation.data, dict) else {}
-    task_name = _subject_value(observation.arguments.get("task_name"))
-    if task_name is None:
-        task_name = _subject_value(data.get("task_name"))
-    dataset_name = _subject_value(observation.arguments.get("dataset_name"))
-    if dataset_name is None:
-        dataset_name = _subject_value(data.get("dataset_name"))
+    resolved = _subject_resolution(observation)
+    task_name = resolved["task_name"]
+    dataset_name = resolved["dataset_name"]
     return {"task_name": task_name, "dataset_name": dataset_name}
+
+
+def _subject_resolution(observation: ToolObservation) -> dict[str, Any]:
+    """Resolve structured subject provenance and detect response conflicts."""
+
+    data = observation.data if isinstance(observation.data, dict) else {}
+    argument_task = _subject_value(observation.arguments.get("task_name"))
+    payload_task = _subject_value(data.get("task_name"))
+    argument_dataset = _subject_value(observation.arguments.get("dataset_name"))
+    payload_dataset = _subject_value(data.get("dataset_name"))
+    task_conflict = bool(argument_task and payload_task and argument_task != payload_task)
+    dataset_conflict = bool(argument_dataset and payload_dataset and argument_dataset != payload_dataset)
+    return {
+        "task_name": None if task_conflict else argument_task or payload_task,
+        "dataset_name": None if dataset_conflict else argument_dataset or payload_dataset,
+        "task_conflict": task_conflict,
+        "dataset_conflict": dataset_conflict,
+        "requested_task": argument_task,
+        "observed_task": payload_task,
+        "requested_dataset": argument_dataset,
+        "observed_dataset": payload_dataset,
+    }
+
+
+def evidence_entity_conflict(observation: ToolObservation) -> dict[str, Any]:
+    """Return structured request/payload subject conflict metadata."""
+
+    resolved = _subject_resolution(observation)
+    return {
+        "task_conflict": resolved["task_conflict"],
+        "dataset_conflict": resolved["dataset_conflict"],
+        "requested_task": resolved["requested_task"],
+        "observed_task": resolved["observed_task"],
+        "requested_dataset": resolved["requested_dataset"],
+        "observed_dataset": resolved["observed_dataset"],
+    }
 
 
 def _observation_summary(observation: ToolObservation) -> str:
@@ -133,7 +164,22 @@ def is_diagnostic_context_payload(data: Any) -> bool:
 
     if not isinstance(data, dict):
         return False
-    return any(str(key).lower() in DIAGNOSTIC_FACT_KEYS for key in data)
+    return any(
+        str(key).lower() in DIAGNOSTIC_FACT_KEYS and _has_meaningful_value(value)
+        for key, value in data.items()
+    )
+
+
+def _has_meaningful_value(value: Any) -> bool:
+    """Return whether a facts field contains actual, non-empty information."""
+
+    if value is None or value is False:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return bool(value)
+    return True
 
 
 @dataclass
@@ -179,7 +225,8 @@ class EvidenceTracker:
         if not observation.ok:
             return []
         created: list[EvidenceRecord] = []
-        subject = evidence_subject_from_observation(observation)
+        resolution = _subject_resolution(observation)
+        subject = {"task_name": resolution["task_name"], "dataset_name": resolution["dataset_name"]}
         task_name = subject["task_name"] if observation.tool_name in TASK_SCOPED_TOOLS else None
         dataset_name = subject["dataset_name"] if task_name else None
         for evidence_type in evidence_types_for_tool(observation.tool_name):
@@ -201,6 +248,7 @@ class EvidenceTracker:
             observation.tool_name == "diagnose_task"
             and isinstance(observation.data, dict)
             and task_name is not None
+            and not resolution["task_conflict"]
             and is_diagnostic_context_payload(observation.data)
         )
         if observation.tool_name == "get_stage_logs":
@@ -302,6 +350,7 @@ __all__ = [
     "TARGET_AWARE_EVIDENCE_TYPES",
     "DIAGNOSTIC_FACT_KEYS",
     "evidence_subject_from_observation",
+    "evidence_entity_conflict",
     "is_diagnostic_context_payload",
     "evidence_types_for_tool",
 ]

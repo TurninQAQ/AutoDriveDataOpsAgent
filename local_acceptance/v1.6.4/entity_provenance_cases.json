@@ -1,0 +1,49 @@
+{
+  "version": "v1.6.4",
+  "cases": [
+    {
+      "case": "argument_payload_conflict",
+      "requested_task": "release_demo",
+      "payload_task": "other_task",
+      "expected_goal_state": "IN_PROGRESS",
+      "actual_goal_state": "IN_PROGRESS",
+      "created_evidence": ["LIVE_TASK"],
+      "target_bound_diagnostic_context": false,
+      "entity_conflict_detected": true
+    },
+    {
+      "case": "matching_entity",
+      "requested_task": "release_demo",
+      "payload_task": "release_demo",
+      "expected": "target-bound DIAGNOSTIC_CONTEXT",
+      "actual": "target-bound DIAGNOSTIC_CONTEXT",
+      "entity_conflict_detected": false
+    },
+    {
+      "case": "argument_only",
+      "requested_task": "release_demo",
+      "payload_task": null,
+      "expected": "argument fallback accepted",
+      "actual": "argument fallback accepted",
+      "entity_conflict_detected": false
+    },
+    {
+      "case": "payload_only",
+      "requested_task": null,
+      "payload_task": "release_demo",
+      "expected": "payload fallback accepted",
+      "actual": "payload fallback accepted",
+      "entity_conflict_detected": false
+    },
+    {
+      "case": "wrong_target_plus_knowledge",
+      "requested_task": "release_demo",
+      "payload_task": "other_task",
+      "knowledge_added": true,
+      "expected_goal_state": "IN_PROGRESS",
+      "actual_goal_state": "IN_PROGRESS",
+      "target_bound_diagnostic_context": false,
+      "entity_conflict_detected": true
+    }
+  ]
+}

@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.6.4 Pre-Autonomy Gate Closure — 2026-08-21
+
+1. 收紧 Evidence entity provenance：request task/dataset 与 payload identity 冲突时不授予 target-bound evidence credit，保留旧 artifact 兼容读取。
+2. 收紧 `DIAGNOSTIC_CONTEXT`：空诊断 metadata 不再计为 facts，partial real facts 与 `evidence_complete=false` 仍可作为诊断上下文。
+3. 为 `resume_task` 增加独立、只读、deterministic Goal Verification；Action Verification 成功不再隐式等于用户 Goal 成功，Approval mutation lifecycle 保持兼容。
+4. Smoke evaluator 增加 Functional/Strict gates、case selection 与真实 Task Planning/Write Goal parity recomputation；qwen-plus 四 case functional smoke 4/4，qwen3.7-plus 因 FreeTierOnly 预检 403 停止。
+
 ### V1.6.3 Final Deterministic Invariant Closure — 2026-08-21
 
 1. 收紧 `DIAGNOSTIC_CONTEXT`：只有 target-bound `diagnose_task` 返回真实 DiagnosisService facts 字段时才生成；空 payload、任意 message 和 task_name-only payload 不再满足诊断 Evidence，`evidence_complete=false` 的 partial facts 仍然有效。

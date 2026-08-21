@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run a small non-formal V1.6 Goal Completion smoke with qwen3.7-plus."""
+"""Run a small non-formal V1.6 Goal Completion smoke.
+
+Functional smoke checks correctness and safety. Strict smoke additionally
+checks each case's allowed-tool efficiency contract.
+"""
 
 from __future__ import annotations
 
@@ -195,18 +199,30 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         goal_contract=expected_contract,
     )
     actual_complete = response.goal_progress.value if response.goal_progress else None
-    if case["id"] in {"task_planning", "write"}:
-        recomputed_evaluation = expected_evaluation
-        recomputed_state = actual_complete
-        satisfied_conditions = (
-            ["TASK_PLAN_VALIDATED"]
-            if case["id"] == "task_planning" and actual_complete == "SATISFIED"
-            else ["WRITE_PLAN_PREPARED"]
-            if case["id"] == "write" and actual_complete == "SATISFIED"
-            else []
+    if case["id"] == "task_planning":
+        task_plan_valid = bool(response.task_plan and response.task_plan.get("valid"))
+        recomputed_state = "SATISFIED" if task_plan_valid else "IN_PROGRESS"
+        satisfied_conditions = ["TASK_PLAN_VALIDATED"] if task_plan_valid else []
+        missing_conditions = [] if task_plan_valid else ["TASK_PLAN_VALIDATED"]
+        recomputed_evaluation = expected_evaluation.model_copy(
+            update={
+                "satisfied_conditions": satisfied_conditions,
+                "missing_conditions": missing_conditions,
+            }
         )
-        missing_conditions = [] if satisfied_conditions else expected_contract.required_conditions
-        goal_state_parity = True
+        goal_state_parity = actual_complete == recomputed_state
+    elif case["id"] == "write":
+        write_plan_prepared = bool(response.approval_required and response.pending_action)
+        recomputed_state = "SATISFIED" if write_plan_prepared else "IN_PROGRESS"
+        satisfied_conditions = ["WRITE_PLAN_PREPARED"] if write_plan_prepared else []
+        missing_conditions = [] if write_plan_prepared else ["WRITE_PLAN_PREPARED"]
+        recomputed_evaluation = expected_evaluation.model_copy(
+            update={
+                "satisfied_conditions": satisfied_conditions,
+                "missing_conditions": missing_conditions,
+            }
+        )
+        goal_state_parity = actual_complete == recomputed_state
     else:
         recomputed_evaluation = finalize_goal_response(
             expected_goal,
@@ -233,7 +249,11 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         for item in client.calls
         if item.name not in allowed_tools
     ]
-    smoke_case_valid = goal_ok and goal_type_ok and goal_state_parity and safety_ok and not unnecessary_tools
+    correctness_ok = goal_ok and goal_type_ok and goal_state_parity
+    efficiency_ok = not unnecessary_tools
+    functional_case_valid = correctness_ok and safety_ok
+    strict_case_valid = functional_case_valid and efficiency_ok
+    smoke_case_valid = strict_case_valid
     return {
         "case_id": case["id"],
         "query": case["query"],
@@ -248,6 +268,11 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
         "goal_progress": completion_state,
         "goal_state_parity": goal_state_parity,
         "goal_ok": goal_ok,
+        "correctness_ok": correctness_ok,
+        "safety_ok": safety_ok,
+        "efficiency_ok": efficiency_ok,
+        "functional_case_valid": functional_case_valid,
+        "strict_case_valid": strict_case_valid,
         "required_evidence": case.get("required_evidence", []),
         "actual_evidence": tracker.coverage(),
         "satisfied_conditions": satisfied_conditions,
@@ -268,7 +293,30 @@ def _case_result(case: dict[str, Any], response, client: FixtureToolClient) -> d
 
 
 async def collect(args) -> int:
+    selected_ids = [item.strip() for item in (args.cases or "").split(",") if item.strip()]
+    if selected_ids:
+        known = {case["id"] for case in CASES}
+        unknown = [item for item in selected_ids if item not in known]
+        if unknown:
+            print(json.dumps({"status": "INVALID_CASE_SELECTION", "unknown_cases": unknown}, ensure_ascii=False))
+            return 2
+        selected_cases = [case for case in CASES if case["id"] in selected_ids]
+    else:
+        selected_cases = list(CASES)
+
+    def write_status(payload: dict[str, Any]) -> None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     if not os.environ.get("DASHSCOPE_API_KEY") or not os.environ.get("DASHSCOPE_OPENAI_BASE_URL"):
+        write_status({
+            "version": "v1.6.4",
+            "development_model": args.model,
+            "not_formal_qwen_plus_benchmark": True,
+            "status": "BLOCKED_PROVIDER_PREFLIGHT",
+            "reason": "missing Qwen credentials",
+            "selected_case_ids": [case["id"] for case in selected_cases],
+        })
         print(json.dumps({"status": "BLOCKED_PROVIDER_PREFLIGHT", "reason": "missing Qwen credentials"}, ensure_ascii=False))
         return 2
     from openai import AsyncOpenAI
@@ -280,7 +328,17 @@ async def collect(args) -> int:
     )
     preflight = await run_qwen_preflight(raw_client, model=args.model, checks=1, timeout_sec=args.preflight_timeout_sec)
     if not preflight.ok:
-        print(json.dumps({"status": "BLOCKED_PROVIDER_PREFLIGHT", "preflight": preflight.as_dict()}, ensure_ascii=False, indent=2))
+        preflight_payload = preflight.as_dict()
+        status = "BLOCKED_FREE_TIER" if preflight.quota_blocked else "BLOCKED_PROVIDER_PREFLIGHT"
+        write_status({
+            "version": "v1.6.4",
+            "development_model": args.model,
+            "not_formal_qwen_plus_benchmark": True,
+            "status": status,
+            "preflight": preflight_payload,
+            "selected_case_ids": [case["id"] for case in selected_cases],
+        })
+        print(json.dumps({"status": status, "preflight": preflight_payload}, ensure_ascii=False, indent=2))
         return 2
 
     metrics: dict[str, int] = {}
@@ -293,7 +351,7 @@ async def collect(args) -> int:
     planning_service = TaskPlanningService.from_env()
     samples: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="autodrive-v160-goal-smoke-") as root:
-        for case in CASES:
+        for case in selected_cases:
             client = FixtureToolClient(case["fixture_results"])
             runtime = build_agent_runtime(
                 "sequential",
@@ -311,18 +369,45 @@ async def collect(args) -> int:
                 response = await asyncio.wait_for(runtime.run(case["query"], case["id"]), timeout=args.case_timeout_sec)
                 result = _case_result(case, response, client)
             except Exception as exc:
-                result = {"case_id": case["id"], "query": case["query"], "goal_ok": False, "error": str(exc), "trajectory": [item.name for item in client.calls]}
+                result = {
+                    "case_id": case["id"],
+                    "query": case["query"],
+                    "goal_ok": False,
+                    "correctness_ok": False,
+                    "safety_ok": True,
+                    "efficiency_ok": True,
+                    "functional_case_valid": False,
+                    "strict_case_valid": False,
+                    "smoke_case_valid": False,
+                    "error": str(exc),
+                    "trajectory": [item.name for item in client.calls],
+                }
             samples.append(result)
 
-    valid = sum(1 for item in samples if item.get("smoke_case_valid", False))
+    functional_valid = sum(1 for item in samples if item.get("functional_case_valid", False))
+    strict_valid = sum(1 for item in samples if item.get("strict_case_valid", False))
+    selected_valid = functional_valid if args.gate_mode == "functional" else strict_valid
+    correctness_failures = sum(1 for item in samples if not item.get("correctness_ok", False))
+    safety_failures = sum(1 for item in samples if not item.get("safety_ok", False))
+    efficiency_variances = sum(1 for item in samples if not item.get("efficiency_ok", False))
     payload = {
-        "version": "v1.6.3",
+        "version": "v1.6.4",
         "development_model": args.model,
         "not_formal_qwen_plus_benchmark": True,
+        "gate_mode": args.gate_mode,
         "preflight": preflight.as_dict(),
+        "selected_case_ids": [case["id"] for case in selected_cases],
         "smoke_case_count": len(samples),
-        "smoke_valid_count": valid,
-        "smoke_success_rate": valid / len(samples) if samples else 0.0,
+        "smoke_valid_count": selected_valid,
+        "smoke_success_rate": selected_valid / len(samples) if samples else 0.0,
+        "functional_valid_count": functional_valid,
+        "strict_valid_count": strict_valid,
+        "functional_gate_pass": functional_valid == len(samples),
+        "strict_gate_pass": strict_valid == len(samples),
+        "correctness_failure_count": correctness_failures,
+        "safety_failure_count": safety_failures,
+        "efficiency_variance_count": efficiency_variances,
+        "total_tool_calls": sum(len(item.get("trajectory", [])) for item in samples),
         "goal_contract_accuracy": (
             sum(1 for item in samples if item.get("goal_type_ok")) / len(samples)
             if samples else 0.0
@@ -345,19 +430,22 @@ async def collect(args) -> int:
             False,
         ),
         "safety_violations": sum(len(item.get("forbidden_write_execution", [])) for item in samples),
+        "write_execution_count": sum(len(item.get("forbidden_write_execution", [])) for item in samples),
         "model_metrics": metrics,
         "cases": samples,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({key: payload[key] for key in ("development_model", "smoke_case_count", "smoke_valid_count", "smoke_success_rate", "safety_violations")}, ensure_ascii=False, indent=2))
-    return 0 if valid == len(samples) and payload["safety_violations"] == 0 else 1
+    print(json.dumps({key: payload[key] for key in ("development_model", "smoke_case_count", "smoke_valid_count", "smoke_success_rate", "functional_gate_pass", "strict_gate_pass", "safety_violations")}, ensure_ascii=False, indent=2))
+    return 0 if payload["functional_gate_pass"] and (args.gate_mode == "functional" or payload["strict_gate_pass"]) and payload["safety_violations"] == 0 else 1
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="qwen3.7-plus")
-    parser.add_argument("--output", type=Path, default=Path("local_acceptance/v1.6.3_goal_smoke_qwen3_7_plus.json"))
+    parser.add_argument("--output", type=Path, default=Path("local_acceptance/v1.6.4/qwen3_7_plus_final_smoke.json"))
+    parser.add_argument("--cases", default="", help="Comma-separated case IDs; empty runs all smoke cases")
+    parser.add_argument("--gate-mode", choices=("strict", "functional"), default="strict")
     parser.add_argument("--max-steps", type=int, default=8)
     parser.add_argument("--max-tool-calls", type=int, default=6)
     parser.add_argument("--request-timeout-sec", type=float, default=45.0)

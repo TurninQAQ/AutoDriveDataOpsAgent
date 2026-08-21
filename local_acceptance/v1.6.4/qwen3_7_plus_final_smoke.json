@@ -1,0 +1,26 @@
+{
+  "version": "v1.6.4",
+  "development_model": "qwen3.7-plus",
+  "not_formal_qwen_plus_benchmark": true,
+  "status": "BLOCKED_FREE_TIER",
+  "preflight": {
+    "status": "FAIL",
+    "model": "qwen3.7-plus",
+    "checks_requested": 1,
+    "requests_attempted": 1,
+    "requests_completed": 0,
+    "timeout_count": 0,
+    "error_count": 1,
+    "failure_types": [
+      "provider_auth_error"
+    ],
+    "latencies_sec": [],
+    "http_statuses": [
+      403
+    ],
+    "quota_blocked": true
+  },
+  "selected_case_ids": [
+    "tool_failure"
+  ]
+}

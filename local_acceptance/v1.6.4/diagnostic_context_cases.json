@@ -1,0 +1,22 @@
+{
+  "version": "v1.6.4",
+  "cases": [
+    {"case": "empty_payload", "input": {}, "expected": false, "actual": false},
+    {"case": "task_name_only", "input": {"task_name": "release_demo"}, "expected": false, "actual": false},
+    {"case": "evidence_complete_only", "input": {"evidence_complete": false}, "expected": false, "actual": false},
+    {"case": "evidence_complete_true_only", "input": {"evidence_complete": true}, "expected": false, "actual": false},
+    {"case": "queue_null", "input": {"queue": null}, "expected": false, "actual": false},
+    {"case": "queue_empty", "input": {"queue": {}}, "expected": false, "actual": false},
+    {"case": "errors_empty", "input": {"errors": []}, "expected": false, "actual": false},
+    {"case": "datasets_empty", "input": {"datasets": []}, "expected": false, "actual": false},
+    {"case": "real_queue_fact", "input": {"queue": {"location": "queued"}}, "expected": true, "actual": true},
+    {"case": "real_error_fact", "input": {"errors": [{"source": "airflow", "error": "unavailable"}]}, "expected": true, "actual": true},
+    {"case": "partial_real_fact", "input": {"queue": {"location": "queued"}, "evidence_complete": false}, "expected": true, "actual": true},
+    {
+      "case": "production_shaped",
+      "input": {"task_name": "release_demo", "datasets": ["clip_001"], "queue": {"location": "draining"}, "airflow": {}, "containers": [], "gpu_reservations": [], "gpu_devices": [], "errors": [], "evidence_complete": true},
+      "expected": true,
+      "actual": true
+    }
+  ]
+}

@@ -56,6 +56,8 @@ class ProviderPreflightResult:
     error_count: int = 0
     failure_types: list[str] = field(default_factory=list)
     latencies_sec: list[float] = field(default_factory=list)
+    http_statuses: list[int] = field(default_factory=list)
+    quota_blocked: bool = False
 
     @property
     def ok(self) -> bool:
@@ -72,6 +74,8 @@ class ProviderPreflightResult:
             "error_count": self.error_count,
             "failure_types": list(self.failure_types),
             "latencies_sec": [round(item, 4) for item in self.latencies_sec],
+            "http_statuses": list(self.http_statuses),
+            "quota_blocked": self.quota_blocked,
         }
 
 
@@ -119,6 +123,11 @@ async def run_qwen_preflight(
             failure_type = classify_provider_failure(exc)
             result.error_count += 1
             result.failure_types.append(failure_type)
+            failure_info = classify_exception(exc)
+            if failure_info.status_code is not None:
+                result.http_statuses.append(int(failure_info.status_code))
+            if "AllocationQuota.FreeTierOnly" in str(exc):
+                result.quota_blocked = True
             if failure_type == "provider_timeout":
                 result.timeout_count += 1
     result.status = "PASS" if result.requests_completed == checks else "FAIL"

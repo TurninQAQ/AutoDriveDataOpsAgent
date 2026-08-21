@@ -33,6 +33,9 @@ class PendingApproval(BaseModel):
     execution_result: dict[str, Any] | None = None
     verification_baseline: dict[str, Any] = Field(default_factory=dict)
     verification_result: dict[str, Any] | None = None
+    # Optional user-goal lifecycle result.  Approval status continues to model
+    # mutation lifecycle; this field separately records post-action Goal state.
+    goal_verification_result: dict[str, Any] | None = None
     error: str | None = None
 
     @property
@@ -167,7 +170,13 @@ class ApprovalStore:
             self._write_unlocked(item)
             return item
 
-    def mark_executed(self, approval_id: str, result: dict[str, Any], verification_result: dict[str, Any] | None = None) -> PendingApproval:
+    def mark_executed(
+        self,
+        approval_id: str,
+        result: dict[str, Any],
+        verification_result: dict[str, Any] | None = None,
+        goal_verification_result: dict[str, Any] | None = None,
+    ) -> PendingApproval:
         with self._locked(approval_id):
             item = self._read_unlocked(approval_id)
             if item.status != "executing":
@@ -175,6 +184,7 @@ class ApprovalStore:
             item.status = "executed"
             item.execution_result = result
             item.verification_result = dict(verification_result or {}) or None
+            item.goal_verification_result = dict(goal_verification_result or {}) or None
             item.error = None
             self._write_unlocked(item)
             return item

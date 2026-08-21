@@ -252,6 +252,11 @@ def _print_approval(item, as_json: bool = False) -> None:
         print(f"verification_status={verification.get('status')} attempts={verification.get('attempts')}")
         for check in verification.get("checks") or []:
             print(f"- {check.get('name')} passed={str(bool(check.get('passed'))).lower()} expected={check.get('expected')} actual={check.get('actual')}")
+    if item.goal_verification_result is not None:
+        goal_verification = item.goal_verification_result
+        print(f"goal_verification_status={goal_verification.get('status')} attempts={goal_verification.get('attempts')}")
+        for check in goal_verification.get("checks") or []:
+            print(f"- goal:{check.get('name')} passed={str(bool(check.get('passed'))).lower()} expected={check.get('expected')} actual={check.get('actual')}")
 
 
 async def _approve(args) -> int:

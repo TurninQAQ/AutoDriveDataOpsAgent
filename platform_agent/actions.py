@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .approval import ApprovalStore, PendingApproval
+from .goal_verification import GoalVerifier
 from .models import AgentIntent, AgentPlan, ToolCallSpec, ToolObservation
 from .policy import AgentPolicyEngine
 from .verification import ActionVerifier
@@ -24,12 +25,14 @@ class WriteActionCoordinator:
         policy: AgentPolicyEngine,
         approval_store: ApprovalStore,
         verifier: ActionVerifier | None = None,
+        goal_verifier: GoalVerifier | None = None,
         trace_recorder=None,
     ):
         self.tool_client = tool_client
         self.policy = policy
         self.approval_store = approval_store
         self.verifier = verifier or ActionVerifier(tool_client)
+        self.goal_verifier = goal_verifier or GoalVerifier(tool_client)
         self.trace_recorder = trace_recorder
 
     @staticmethod
@@ -226,7 +229,28 @@ class WriteActionCoordinator:
                 data={"approval_id": approval_id, "result": payload},
             )
         if verification.verified:
-            executed = self.approval_store.mark_executed(approval_id, result, verification_result=payload)
+            goal_payload = None
+            if item.tool_name == "resume_task":
+                goal_verification = await self.goal_verifier.verify_resume(
+                    arguments=item.arguments,
+                    action_verification=verification,
+                    baseline=item.verification_baseline,
+                )
+                goal_payload = goal_verification.model_dump(mode="json")
+                if self.trace_recorder is not None and execution_trace_id:
+                    self.trace_recorder.record(
+                        execution_trace_id,
+                        "goal_verification",
+                        item.tool_name,
+                        status=goal_verification.status,
+                        data={"approval_id": approval_id, "result": goal_payload},
+                    )
+            executed = self.approval_store.mark_executed(
+                approval_id,
+                result,
+                verification_result=payload,
+                goal_verification_result=goal_payload,
+            )
             if self.trace_recorder is not None and execution_trace_id:
                 self.trace_recorder.record(execution_trace_id, "approval", "approval_executed", status="executed", data={"approval_id": approval_id, "tool": item.tool_name})
             return executed
