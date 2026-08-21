@@ -19,6 +19,7 @@ from .models import (
     ToolObservation,
     KnowledgeObservation,
     EvidenceRecord,
+    GoalContract,
     GoalEvaluation,
 )
 from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
@@ -51,6 +52,7 @@ class ReadOnlyAgentModel(Protocol):
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
         goal: AgentGoal | dict[str, Any] | None = None,
+        goal_contract: GoalContract | dict[str, Any] | None = None,
         goal_evaluation: GoalEvaluation | dict[str, Any] | None = None,
     ) -> AgentStepDecision:
         ...
@@ -134,6 +136,7 @@ def build_adaptive_evidence_prompt(
     adaptive_steps: list[dict[str, Any]] | None = None,
     evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
     goal: AgentGoal | dict[str, Any] | None = None,
+    goal_contract: GoalContract | dict[str, Any] | None = None,
     goal_evaluation: GoalEvaluation | dict[str, Any] | None = None,
 ) -> str:
     """Build the provider-neutral next-evidence prompt.
@@ -194,6 +197,11 @@ def build_adaptive_evidence_prompt(
         if isinstance(goal_evaluation, GoalEvaluation)
         else goal_evaluation
     )
+    goal_contract_payload = (
+        goal_contract.model_dump(mode="json")
+        if isinstance(goal_contract, GoalContract)
+        else goal_contract
+    )
 
     return f"""You are the adaptive evidence decision node of a guarded DataOps Agent.
 
@@ -218,6 +226,9 @@ REQUEST_GOAL (fixed for this request):
 
 GOAL_PROGRESS:
 {json.dumps(goal_evaluation_payload, ensure_ascii=False, indent=2, default=str)}
+
+FROZEN_GOAL_CONTRACT (completion conditions only; not a tool-routing instruction):
+{json.dumps(goal_contract_payload, ensure_ascii=False, indent=2, default=str)}
 
 CURRENT_EVIDENCE_COVERAGE:
 {json.dumps(evidence_types, ensure_ascii=False)}
@@ -826,6 +837,7 @@ USER_REQUEST:
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
         goal: AgentGoal | dict[str, Any] | None = None,
+        goal_contract: GoalContract | dict[str, Any] | None = None,
         goal_evaluation: GoalEvaluation | dict[str, Any] | None = None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
@@ -841,6 +853,7 @@ USER_REQUEST:
             adaptive_steps=adaptive_steps,
             evidence_records=evidence_records,
             goal=goal,
+            goal_contract=goal_contract,
             goal_evaluation=goal_evaluation,
         )
         result = await self.step_llm.ainvoke(prompt)

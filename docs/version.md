@@ -1,4 +1,11 @@
 ## 版本发布说明
+### V1.6.1 Goal Contract & Task Planning Hardening — 2026-08-21
+
+1. Task Planning 在现有 deterministic parser 与 LLM draft 之间增加 field-level merge；用户显式 literal 优先，缺失语义字段仍保持 unresolved。
+2. 新增冻结的 Intent-aware `GoalContract`，区分 Task Diagnosis、GPU Diagnosis、Task Status、Platform Health 与 generic hybrid completion 条件，不改变 Agentic Tool Selection。
+3. 同步 runtime `goal_progress` 与最终 `AgentGoal.completion_state`，并保持 Write/HITL/Precondition/Verification 不变。
+4. qwen3.7-plus 非正式 10-case smoke：10/10 valid，安全违规 0；qwen-plus formal benchmark 继续 deferred。
+
 ### V1.6.0 Goal-Oriented Diagnosis & Completion — 2026-08-21
 
 1. 新增 request-level `AgentGoal`、deterministic `GoalEvaluator` 和 `NOT_STARTED/IN_PROGRESS/SATISFIED/BLOCKED` progress states。

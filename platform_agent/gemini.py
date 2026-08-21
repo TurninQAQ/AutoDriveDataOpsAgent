@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from platform_integrations.gemini_retry import retry_async
 
 from .model import build_adaptive_evidence_prompt
-from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, KnowledgeObservation, ToolObservation
+from .models import AgentIntent, AgentPlan, AgentResponse, AgentStepDecision, ConversationTurn, GoalContract, KnowledgeObservation, ToolObservation
 from .prompt_contract import EVIDENCE_ROUTING_CONTRACT, GOAL_INTERPRETATION_CONTRACT
 
 T = TypeVar("T", bound=BaseModel)
@@ -134,6 +134,7 @@ USER_REQUEST:
         adaptive_steps: list[dict[str, Any]] | None = None,
         evidence_records=None,
         goal=None,
+        goal_contract: GoalContract | dict | None = None,
         goal_evaluation=None,
     ) -> AgentStepDecision:
         prompt = build_adaptive_evidence_prompt(
@@ -149,6 +150,7 @@ USER_REQUEST:
             adaptive_steps=adaptive_steps,
             evidence_records=evidence_records,
             goal=goal,
+            goal_contract=goal_contract,
             goal_evaluation=goal_evaluation,
         )
         return await self._structured(prompt, AgentStepDecision)

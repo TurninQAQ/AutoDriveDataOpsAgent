@@ -23,6 +23,64 @@ from .heuristic import HeuristicTaskDraftParser, derive_dataset_name
 from .models import DatasetSpec, TaskPlanningResult, TaskSpec, ValidationIssue
 
 
+_DETERMINISTIC_DRAFT_FIELDS = (
+    "task_type",
+    "task_prefix",
+    "priority",
+    "dataset_paths",
+    "dataset_names",
+    "pipeline_stages",
+    "pipeline_mode",
+    "timeout_min",
+    "max_active_runs",
+    "gpu_ids",
+    "gpu_stage_memory_mb",
+    "exclusive_gpu_stages",
+    "shared_gpu_stages",
+    "images",
+)
+
+
+def _has_draft_value(value: Any) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def merge_task_drafts(
+    deterministic_draft: dict[str, Any] | None,
+    model_draft: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge explicit user literals into the model's semantic task draft.
+
+    The deterministic parser is authoritative only for fields it actually
+    extracted.  It never supplies defaults or invents values; unresolved fields
+    remain unresolved for the existing TaskPlanningService validation path.
+    """
+
+    deterministic = dict(deterministic_draft or {})
+    merged = deepcopy(dict(model_draft or {}))
+    for field in _DETERMINISTIC_DRAFT_FIELDS:
+        value = deterministic.get(field)
+        if not _has_draft_value(value):
+            continue
+        if isinstance(value, dict):
+            current = merged.get(field)
+            current = dict(current) if isinstance(current, dict) else {}
+            current.update(deepcopy(value))
+            merged[field] = current
+        else:
+            merged[field] = deepcopy(value)
+
+    explicit_fields: list[str] = []
+    for source in (merged.get("explicit_fields"), deterministic.get("explicit_fields")):
+        for field in source or []:
+            field = str(field)
+            if field not in explicit_fields:
+                explicit_fields.append(field)
+    if explicit_fields:
+        merged["explicit_fields"] = explicit_fields
+    return merged
+
+
 class TaskPlanningService:
     """Natural language -> TaskSpec -> existing platform validation -> YAML.
 
@@ -176,7 +234,19 @@ class TaskPlanningService:
                 unresolved_fields=["request"],
                 issues=[self._issue("EMPTY_REQUEST", "request", "Task planning request must not be empty.")],
             )
-        draft = dict(draft or {})
+        try:
+            deterministic_draft = HeuristicTaskDraftParser().parse(text)
+        except Exception:
+            # The explicit parser is deliberately best-effort.  Its failure must
+            # leave the model draft untouched and let normal validation report
+            # unresolved fields.
+            deterministic_draft = {}
+        draft = merge_task_drafts(deterministic_draft, draft)
+        derived_prefix_from_type = (
+            _has_draft_value(deterministic_draft.get("task_prefix"))
+            and "task_prefix" not in (deterministic_draft.get("explicit_fields") or [])
+            and _has_draft_value(deterministic_draft.get("task_type"))
+        )
         try:
             defaults = self.defaults_loader.load()
         except Exception as exc:
@@ -190,6 +260,8 @@ class TaskPlanningService:
         explicit_fields = list(dict.fromkeys(draft.get("explicit_fields") or []))
 
         task_prefix = str(draft.get("task_prefix") or "").strip()
+        if derived_prefix_from_type:
+            defaults_used.append("task_prefix_from_task_type")
         if not task_prefix and str(draft.get("task_type") or "").strip():
             task_prefix = str(draft.get("task_type")).strip().lower()
             defaults_used.append("task_prefix_from_task_type")

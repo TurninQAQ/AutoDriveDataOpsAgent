@@ -13,11 +13,13 @@ from .models import (
     AgentPlan,
     AgentResponse,
     ConversationTurn,
+    GoalContract,
+    GoalEvaluation,
     KnowledgeObservation,
     GoalProgress,
     ToolObservation,
 )
-from .goal import evaluate_goal_progress, normalize_plan_goal
+from .goal import evaluate_goal_progress, normalize_plan_goal, resolve_goal_contract
 from .policy import AgentPolicyEngine
 
 
@@ -113,6 +115,7 @@ class AgentGraphState(TypedDict, total=False):
     adaptive_errors: list[str]
     evidence_records: list[dict[str, Any]]
     goal: dict[str, Any]
+    goal_contract: dict[str, Any]
     goal_evaluation: dict[str, Any]
     goal_progress: str
     goal_explicit: bool
@@ -194,13 +197,17 @@ class ReadOnlyAgentNodes:
                 decision_summary="Read-only compatibility policy blocked mutation before model/tool execution.",
             )
             plan = normalize_plan_goal(plan)
+            goal_contract = resolve_goal_contract(plan.goal.goal_type, plan.intent)
             self.validate_plan(plan)
             if self.trace_recorder is not None:
                 self.trace_recorder.record(
                     state.get("trace_id", ""), "plan", "agent_plan", duration_ms=(time.perf_counter() - started) * 1000,
                     data={"intent": plan.intent.value, "goal": plan.goal.model_dump(mode="json") if plan.goal else None, "tool_calls": [item.model_dump(mode="json") for item in plan.tool_calls], "decision_summary": plan.decision_summary},
                 )
-            return {"plan": plan.model_dump(mode="json")}
+            return {
+                "plan": plan.model_dump(mode="json"),
+                "goal_contract": goal_contract.model_dump(mode="json"),
+            }
         needs_tools = (
             getattr(self.model, "requires_tool_descriptions", True)
             and not self.policy.is_task_planning_request(user_text)
@@ -209,6 +216,7 @@ class ReadOnlyAgentNodes:
         plan = await self.model.plan(user_text, tools, self._history(state))
         goal_explicit = plan.goal is not None
         plan = normalize_plan_goal(plan)
+        goal_contract = resolve_goal_contract(plan.goal.goal_type, plan.intent)
         self.validate_plan(plan)
         if self.trace_recorder is not None:
             self.trace_recorder.record(
@@ -216,6 +224,7 @@ class ReadOnlyAgentNodes:
                 data={
                     "intent": plan.intent.value,
                     "goal": plan.goal.model_dump(mode="json") if plan.goal else None,
+                    "goal_contract": goal_contract.model_dump(mode="json"),
                     "task_name": plan.task_name,
                     "dataset_name": plan.dataset_name,
                     "stage": plan.stage,
@@ -224,7 +233,11 @@ class ReadOnlyAgentNodes:
                     "decision_summary": plan.decision_summary,
                 },
             )
-        return {"plan": plan.model_dump(mode="json"), "goal_explicit": goal_explicit}
+        return {
+            "plan": plan.model_dump(mode="json"),
+            "goal_contract": goal_contract.model_dump(mode="json"),
+            "goal_explicit": goal_explicit,
+        }
 
     @staticmethod
     def _retrieval_query(user_text: str, plan: AgentPlan) -> str:
@@ -339,6 +352,7 @@ class ReadOnlyAgentNodes:
             initial_intent=plan.intent,
             evidence_records=evidence_records,
             goal=plan.goal,
+            goal_contract=state.get("goal_contract"),
             goal_aware=bool(state.get("goal_explicit", False)),
         )
         return {
@@ -353,6 +367,7 @@ class ReadOnlyAgentNodes:
             "adaptive_errors": result.errors,
             "evidence_records": [item.as_dict() for item in result.evidence_records],
             "goal": result.goal.model_dump(mode="json") if result.goal else None,
+            "goal_contract": result.goal_contract.model_dump(mode="json") if result.goal_contract else None,
             "goal_evaluation": result.goal_evaluation.model_dump(mode="json") if result.goal_evaluation else None,
             "goal_progress": result.goal_evaluation.state.value if result.goal_evaluation else None,
         }
@@ -381,6 +396,9 @@ class ReadOnlyAgentNodes:
         if state.get("goal_progress"):
             try:
                 response.goal_progress = GoalProgress(state["goal_progress"])
+                response.goal = plan.goal.model_copy(
+                    update={"completion_state": response.goal_progress}
+                )
             except ValueError:
                 response.goal_progress = None
         if state.get("adaptive_step_count", 0):
@@ -544,11 +562,17 @@ class ReadOnlyAgentNodes:
             for item in normalize_search_knowledge(observation)
         ]
         knowledge = merge_knowledge_observations(legacy_knowledge, tool_knowledge)
+        goal_contract = (
+            GoalContract.model_validate(state["goal_contract"])
+            if state.get("goal_contract")
+            else resolve_goal_contract(plan.goal.goal_type, plan.intent)
+        )
         goal_evaluation = evaluate_goal_progress(
             plan.goal,
             state.get("evidence_records", []),
             observations,
             knowledge,
+            goal_contract=goal_contract,
         )
         state.setdefault("goal_evaluation", goal_evaluation.model_dump(mode="json"))
         state.setdefault("goal_progress", goal_evaluation.state.value)
@@ -560,11 +584,31 @@ class ReadOnlyAgentNodes:
                 if response.approval_required
                 else GoalProgress.BLOCKED.value
             )
+            state["goal_evaluation"] = GoalEvaluation(
+                state=GoalProgress.SATISFIED if response.approval_required else GoalProgress.BLOCKED,
+                satisfied_conditions=(
+                    ["WRITE_PLAN_PREPARED"] if response.approval_required else []
+                ),
+                missing_conditions=(
+                    [] if response.approval_required else ["WRITE_PLAN_PREPARED"]
+                ),
+                summary=(
+                    "Write plan is prepared and awaiting HITL approval."
+                    if response.approval_required
+                    else "Write plan could not be prepared."
+                ),
+            ).model_dump(mode="json")
             return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
 
         if plan.intent == AgentIntent.TASK_PLANNING:
             planning = await self._task_planning_result(state, plan)
             if planning is None:
+                state["goal_progress"] = GoalProgress.BLOCKED.value
+                state["goal_evaluation"] = GoalEvaluation(
+                    state=GoalProgress.BLOCKED,
+                    missing_conditions=["TASK_PLAN_VALIDATED"],
+                    summary="Task planning service is unavailable.",
+                ).model_dump(mode="json")
                 response = AgentResponse(
                     intent=plan.intent,
                     summary="Task planning service is unavailable.",
@@ -609,6 +653,16 @@ class ReadOnlyAgentNodes:
             state["goal_progress"] = (
                 GoalProgress.SATISFIED.value if planning.valid else GoalProgress.IN_PROGRESS.value
             )
+            state["goal_evaluation"] = GoalEvaluation(
+                state=GoalProgress.SATISFIED if planning.valid else GoalProgress.IN_PROGRESS,
+                satisfied_conditions=["TASK_PLAN_VALIDATED"] if planning.valid else [],
+                missing_conditions=[] if planning.valid else ["TASK_PLAN_VALIDATED"],
+                summary=(
+                    "Task plan passed deterministic validation."
+                    if planning.valid
+                    else "Task plan remains incomplete or invalid."
+                ),
+            ).model_dump(mode="json")
             return {"response": self._attach_response_metadata(response, plan, state).model_dump(mode="json")}
 
         final_intent = plan.intent

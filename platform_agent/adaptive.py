@@ -24,6 +24,7 @@ from .models import (
     AgentStepAction,
     AgentStepDecision,
     ConversationTurn,
+    GoalContract,
     GoalEvaluation,
     GoalProgress,
     KnowledgeObservation,
@@ -31,7 +32,7 @@ from .models import (
     ToolObservation,
 )
 from .evidence import EvidenceRecord, EvidenceTracker
-from .goal import evaluate_goal_progress, normalize_goal
+from .goal import evaluate_goal_progress, normalize_goal, resolve_goal_contract
 
 
 READ_ONLY_INTENTS = frozenset(
@@ -75,6 +76,7 @@ class AdaptiveLoopResult:
     errors: list[str] = field(default_factory=list)
     repetition_warnings: list[str] = field(default_factory=list)
     goal: AgentGoal | None = None
+    goal_contract: GoalContract | None = None
     goal_evaluation: GoalEvaluation | None = None
 
 
@@ -211,6 +213,7 @@ class AdaptiveLoopController:
         initial_intent: AgentIntent | None = None,
         evidence_records: list[EvidenceRecord | dict[str, Any]] | None = None,
         goal: AgentGoal | dict[str, Any] | None = None,
+        goal_contract: GoalContract | dict[str, Any] | None = None,
         goal_aware: bool | None = None,
     ) -> AdaptiveLoopResult:
         tracker = (
@@ -228,18 +231,27 @@ class AdaptiveLoopController:
             initial_plan.intent,
             target=initial_plan.task_name,
         )
+        request_goal_contract = (
+            goal_contract
+            if isinstance(goal_contract, GoalContract)
+            else GoalContract.model_validate(goal_contract)
+            if goal_contract is not None
+            else resolve_goal_contract(request_goal.goal_type, initial_intent or initial_plan.intent)
+        )
         goal_evaluation = evaluate_goal_progress(
             request_goal,
             tracker.records,
             observations,
             knowledge,
+            goal_contract=request_goal_contract,
         )
         result = AdaptiveLoopResult(
             observations=list(observations),
             knowledge=list(knowledge),
             evidence_records=list(tracker.records),
             current_intent=initial_intent or initial_plan.intent,
-            goal=request_goal,
+            goal=request_goal.model_copy(update={"completion_state": goal_evaluation.state}),
+            goal_contract=request_goal_contract,
             goal_evaluation=goal_evaluation,
         )
         available_tools = {
@@ -272,6 +284,7 @@ class AdaptiveLoopController:
                     adaptive_steps=list(result.steps[-8:]),
                     evidence_records=tracker.summary(),
                     goal=request_goal.model_dump(mode="json"),
+                    goal_contract=request_goal_contract.model_dump(mode="json"),
                     goal_evaluation=goal_evaluation.model_dump(mode="json"),
                 )
                 if not isinstance(decision, AgentStepDecision):
@@ -335,8 +348,10 @@ class AdaptiveLoopController:
                     tracker.records,
                     result.observations,
                     result.knowledge,
+                    goal_contract=request_goal_contract,
                 )
                 result.goal_evaluation = goal_evaluation
+                result.goal = request_goal.model_copy(update={"completion_state": goal_evaluation.state})
                 result.evidence_sufficient = goal_evaluation.state == GoalProgress.SATISFIED
                 result.termination_reason = (
                     ("goal_satisfied" if result.evidence_sufficient else "goal_incomplete")
@@ -433,8 +448,10 @@ class AdaptiveLoopController:
                 tracker.records,
                 result.observations,
                 result.knowledge,
+                goal_contract=request_goal_contract,
             )
             result.goal_evaluation = goal_evaluation
+            result.goal = request_goal.model_copy(update={"completion_state": goal_evaluation.state})
             decision_data["evidence_after"] = tracker.coverage()
             decision_data["goal_state_after"] = goal_evaluation.state.value
             decision_data["goal_satisfied_conditions"] = list(goal_evaluation.satisfied_conditions)
@@ -506,6 +523,9 @@ class AdaptiveLoopController:
                     "state": GoalProgress.BLOCKED,
                     "summary": f"Goal blocked by adaptive termination: {result.termination_reason}.",
                 }
+            )
+            result.goal = request_goal.model_copy(
+                update={"completion_state": result.goal_evaluation.state}
             )
         self._trace(
             "adaptive_termination",

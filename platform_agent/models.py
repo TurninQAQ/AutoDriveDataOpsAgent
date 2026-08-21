@@ -73,6 +73,15 @@ class GoalProgress(str, Enum):
     BLOCKED = "BLOCKED"
 
 
+class GoalContract(BaseModel):
+    """Frozen, evidence-level completion contract for one request."""
+
+    goal_type: GoalType
+    domain_intent: AgentIntent
+    required_conditions: list[str] = Field(default_factory=list)
+    schema_version: str = "v1.6.1"
+
+
 class AgentGoal(BaseModel):
     """A request-level user outcome, not a tool-routing instruction."""
 
