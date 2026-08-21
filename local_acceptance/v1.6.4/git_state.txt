@@ -1,0 +1,11 @@
+Commit: 1f6cfbd4477ef4b525af61693cbc5ba1b5e1c3dc
+Branch: main
+origin/main: 1f6cfbd4477ef4b525af61693cbc5ba1b5e1c3dc
+Working tree: clean
+git diff --check: PASS
+Latest commit: 1f6cfbd fix: close pre-autonomy goal evidence invariants
+Status: ## main...origin/main
+
+Capture note: this state was captured after the implementation commit was
+pushed and before this acceptance-state file was added to the follow-up
+documentation commit.
