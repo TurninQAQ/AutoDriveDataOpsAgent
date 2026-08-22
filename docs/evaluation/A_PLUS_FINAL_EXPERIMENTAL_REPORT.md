@@ -171,10 +171,10 @@ dbd338133139da7785722b0efa1a5718461e62c4df6f888bb133c0ea78199e42
 
 ## Current Status
 
-Evaluation harness status: READY_FOR_DEV_LIVE_PILOT. Formal model attempts:
+Evaluation harness status: READY_FOR_PROVIDER_PREFLIGHT. Formal model attempts:
 NOT RUN. External model calls during this gate: 0. The 324-attempt scripted
 dry-run remains plumbing validation only. The live readiness path now has
 separate FULL/B1/B0 runners, ground-truth-isolated execution inputs, a
-production-like deterministic fixture tool client, and a dry-only CLI. The
-next action is a deliberate 12-case development live pilot; the frozen 36 × 3
-formal test protocol must not start before that pilot is reviewed.
+production-like deterministic fixture tool client, and an immutable live CLI.
+The next permitted action is provider preflight only; the 12-case development
+pilot and frozen 36 × 3 formal test protocol remain operator-triggered.

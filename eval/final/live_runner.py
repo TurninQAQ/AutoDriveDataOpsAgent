@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import tempfile
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -29,10 +31,20 @@ from platform_planning.service import TaskPlanningService
 
 from .fixture_registry import Fixture, resolve_fixture
 from .schema import Scenario, load_scenarios
-from .collector import QuotaBlockedError, translate_provider_exception
+from .collector import (
+    CollectorConfig,
+    QuotaBlockedError,
+    adapter_for,
+    collect_trajectories_with_status,
+    prepare_run_directory,
+    translate_provider_exception,
+    write_raw_trajectories,
+)
+from .runner import EVALUATOR_VERSION, run_evaluation
+from .schema import file_sha256
 
 
-LIVE_RUNNER_VERSION = "a-plus-final-live-runner-v1"
+LIVE_RUNNER_VERSION = "a-plus-final-live-runner-v2"
 
 
 @dataclass(frozen=True)
@@ -120,6 +132,13 @@ class FixtureToolClient:
         self.snapshot_calls = 0
         self._new_runs: list[dict[str, Any]] = []
         self.observations: list[ToolObservation] = []
+        self._task_exists = fixture.task_exists
+        self._config_exists = fixture.config_exists
+        self._dag_exists = fixture.dag_exists
+        self._priority: int | None = None
+        self._stopped = False
+        self._submitted = False
+        self._deleted = False
 
     async def describe_tools(self) -> list[dict[str, Any]]:
         from platform_agent.tool_catalog import build_read_only_tool_catalog
@@ -130,27 +149,38 @@ class FixtureToolClient:
         ]
 
     def _runs(self) -> list[dict[str, Any]]:
+        if self._deleted:
+            return []
         runs: list[dict[str, Any]] = []
         for dataset, state in self.fixture.latest_dataset_states.items():
-            runs.append({"run_id": f"old-{dataset}", "dataset_name": dataset, "state": state})
+            runs.append({"run_id": f"old-{dataset}", "dataset_name": dataset, "state": "stopped" if self._stopped and state in {"queued", "running", "scheduled"} else state})
         return runs + list(self._new_runs)
 
     def _snapshot(self, task_name: str) -> dict[str, Any]:
         observed_task = "other_task" if self.fixture.provenance_conflict else task_name
+        queue_active = not self._deleted and not self._stopped and (
+            self.fixture.task_exclusive or self._submitted or self.fixture.active_task_name
+        )
+        queue_entry = None
+        if queue_active:
+            queue_entry = {"task_name": task_name}
+            if self._priority is not None:
+                queue_entry["priority"] = self._priority
         return {
             "task_name": observed_task,
-            "task_exists": self.fixture.task_exists,
-            "config_file_exists": self.fixture.config_exists,
-            "dag_file_exists": self.fixture.dag_exists,
-            "airflow_dag_exists": self.fixture.dag_exists,
+            "task_exists": self._task_exists,
+            "config_file_exists": self._config_exists,
+            "dag_file_exists": self._dag_exists,
+            "airflow_dag_exists": self._dag_exists,
             "available_datasets": list(self.fixture.available_datasets),
             "task_exclusive": self.fixture.task_exclusive,
             "queue": {
-                "location": "queued" if self.fixture.task_exclusive else "not_found",
-                "position": 0 if self.fixture.task_exclusive else -1,
-                "entry": {"task_name": task_name} if self.fixture.task_exclusive else None,
+                "location": "queued" if queue_active else "not_found",
+                "position": 0 if queue_active else -1,
+                "entry": queue_entry,
             },
-            "active_task_name": self.fixture.active_task_name or "",
+            "active_task_name": "" if self._stopped or self._deleted else (self.fixture.active_task_name or (task_name if self._submitted else "")),
+            "priority": self._priority,
             "containers": [],
             "gpu_reservations": [],
             "airflow_runs": self._runs(),
@@ -166,18 +196,19 @@ class FixtureToolClient:
             if name == "get_task_detail":
                 data = {
                     "task_name": args.get("task_name"),
-                    "task_exists": self.fixture.task_exists,
-                    "config_file_exists": self.fixture.config_exists,
-                    "dag_file_exists": self.fixture.dag_exists,
+                    "task_exists": self._task_exists,
+                    "config_file_exists": self._config_exists,
+                    "dag_file_exists": self._dag_exists,
                     "datasets": list(self.fixture.available_datasets),
-                    "state": next(iter(self.fixture.latest_dataset_states.values()), "unknown"),
-                    "task_state": next(iter(self.fixture.latest_dataset_states.values()), "unknown"),
+                    "state": "stopped" if self._stopped else next(iter(self.fixture.latest_dataset_states.values()), "unknown"),
+                    "task_state": "stopped" if self._stopped else next(iter(self.fixture.latest_dataset_states.values()), "unknown"),
+                    "priority": self._priority,
                 }
                 result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data=data))
             elif name == "get_queue_state":
                 active = None
-                if self.fixture.active_task_name:
-                    active = {"task_name": self.fixture.active_task_name, "priority": 1}
+                if self.fixture.active_task_name and not self._stopped and not self._deleted:
+                    active = {"task_name": self.fixture.active_task_name, "priority": self._priority or 1}
                 result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={"version": 1, "active": active, "queue": []}))
             elif name == "get_gpu_pool":
                 state = "degraded" if "gpu" in self.fixture.name else "healthy"
@@ -200,7 +231,7 @@ class FixtureToolClient:
                         "queue_sha256": "queue-1",
                         "task_name": args.get("task_name") or "",
                         "task_config_sha256": "config-1",
-                        "task_exists": self.fixture.task_exists,
+                        "task_exists": self._task_exists,
                         "active_task_name": self.fixture.active_task_name or "",
                     }))
             elif name == "get_action_verification_snapshot":
@@ -215,6 +246,43 @@ class FixtureToolClient:
                 for dataset in datasets or list(self.fixture.currently_failed_datasets):
                     self._new_runs.append({"run_id": f"new-{self.mutation_calls}-{dataset}", "dataset_name": dataset, "state": self.fixture.post_goal.lower() if self.fixture.post_goal else "running"})
                 result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={"ok": True, "task_name": args.get("task_name"), "datasets": datasets}))
+            elif name == "stop_task":
+                self.mutation_calls += 1
+                self._stopped = True
+                for run in self._runs():
+                    if str(run.get("state") or "").lower() in {"queued", "running", "scheduled"}:
+                        run["state"] = "stopped"
+                result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={"ok": True, "task_name": args.get("task_name")}))
+            elif name == "submit_task":
+                self.mutation_calls += 1
+                self._submitted = True
+                self._task_exists = True
+                self._config_exists = True
+                self._dag_exists = True
+                config = args.get("config") if isinstance(args.get("config"), Mapping) else {}
+                task_name_value = str(args.get("task_name") or config.get("task_prefix") or self.fixture.task_name or "")
+                datasets = [
+                    str(item.get("dataset_name") or item.get("dataset_path") or "")
+                    for item in config.get("datasets") or []
+                    if isinstance(item, Mapping)
+                ]
+                for dataset in datasets:
+                    self._new_runs.append({"run_id": f"submitted-{self.mutation_calls}-{dataset}", "dataset_name": dataset, "state": "queued"})
+                priority = config.get("priority")
+                if priority is not None:
+                    self._priority = int(priority)
+                result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={"ok": True, "task_name": task_name_value, "triggered": len(datasets)}))
+            elif name == "delete_task":
+                self.mutation_calls += 1
+                self._deleted = True
+                self._task_exists = False
+                self._config_exists = False
+                self._dag_exists = False
+                result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={"ok": True, "task_name": args.get("task_name")}))
+            elif name == "set_task_priority":
+                self.mutation_calls += 1
+                self._priority = int(args.get("priority"))
+                result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={"ok": True, "task_name": args.get("task_name"), "priority": self._priority}))
             else:
                 result.append(ToolObservation(tool_name=name, arguments=args, ok=True, data={}))
         self.observations.extend(result)
@@ -258,7 +326,7 @@ class FakeLLMClient:
         return response
 
 
-def _build_agent(execution_input: ScenarioExecutionInput, model: FakeLLMClient, *, autonomy_enabled: bool, root: Path):
+def _build_agent(execution_input: ScenarioExecutionInput, model: Any, *, autonomy_enabled: bool, root: Path):
     fixture = resolve_fixture(execution_input.fixture or "")
     client = FixtureToolClient(fixture)
     store = ApprovalStore(root / "approvals")
@@ -280,27 +348,76 @@ def _build_agent(execution_input: ScenarioExecutionInput, model: FakeLLMClient, 
     return agent, client, store
 
 
-def _raw_response(response: AgentResponse, client: FixtureToolClient, model: FakeLLMClient, *, approval_count: int = 0, mutation_count_before_approval: int = 0) -> dict[str, Any]:
+def _runtime_structured_facts(response: AgentResponse, client: FixtureToolClient) -> dict[str, Any]:
+    """Extract facts from observations/AgentResponse, never benchmark truth."""
+    for observation in reversed(client.observations):
+        if observation.tool_name in {"diagnose_task", "get_task_detail", "get_gpu_pool", "get_stage_logs"} and isinstance(observation.data, Mapping):
+            facts = {
+                str(key): value
+                for key, value in observation.data.items()
+                if key not in {"task_name", "task_exists", "config_file_exists", "dag_file_exists", "datasets"}
+            }
+            if facts:
+                return facts
+    for item in response.evidence:
+        if not isinstance(item, str):
+            continue
+        try:
+            value = json.loads(item)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, Mapping):
+            return dict(value)
+    return {}
+
+
+def _runtime_structured_plan(response: AgentResponse) -> dict[str, Any]:
+    task_plan = response.task_plan if isinstance(response.task_plan, Mapping) else {}
+    task_spec = task_plan.get("task_spec") or {}
+    if isinstance(task_spec, Mapping) and task_spec:
+        return {
+            "task_name": task_spec.get("task_prefix"),
+            "datasets": [item.get("dataset_path") for item in task_spec.get("datasets") or [] if isinstance(item, Mapping)],
+            "stages": task_spec.get("pipeline_stages") or [],
+            "priority": task_plan.get("resolved_priority", task_spec.get("priority")),
+        }
+    initial = response.initial_plan if isinstance(response.initial_plan, Mapping) else {}
+    draft = initial.get("task_draft") if isinstance(initial.get("task_draft"), Mapping) else {}
+    if draft:
+        return {
+            "task_name": draft.get("task_prefix") or initial.get("task_name"),
+            "datasets": draft.get("dataset_paths") or draft.get("dataset_names") or [],
+            "stages": draft.get("pipeline_stages") or [],
+            "priority": draft.get("priority"),
+        }
+    return {}
+
+
+def _raw_response(response: AgentResponse, client: FixtureToolClient, model: Any, *, approval_count: int = 0, mutation_count_before_approval: int = 0) -> dict[str, Any]:
     pending = response.pending_action or {}
     arguments = pending.get("arguments") if isinstance(pending, Mapping) else {}
     arguments = arguments if isinstance(arguments, Mapping) else {}
-    structured_facts = dict(model.structured_facts)
+    structured_facts = _runtime_structured_facts(response, client)
+    # Compatibility fallback for the pre-existing scripted test double only.
+    # Real provider objects are never required to define these attributes.
     if not structured_facts:
-        for observation in reversed(client.observations):
-            if observation.tool_name in {"diagnose_task", "get_task_detail", "get_gpu_pool"} and isinstance(observation.data, Mapping):
-                structured_facts = {str(key): value for key, value in observation.data.items() if key not in {"task_name", "task_exists", "config_file_exists", "dag_file_exists", "datasets"}}
-                if structured_facts:
-                    break
-    structured_plan = dict(model.structured_plan or {})
-    if not structured_plan and isinstance(response.task_plan, Mapping):
-        task_spec = response.task_plan.get("task_spec") or {}
-        if isinstance(task_spec, Mapping):
-            structured_plan = {
-                "task_name": task_spec.get("task_prefix"),
-                "datasets": [item.get("dataset_path") for item in task_spec.get("datasets") or [] if isinstance(item, Mapping)],
-                "stages": task_spec.get("pipeline_stages") or [],
-                "priority": response.task_plan.get("resolved_priority", task_spec.get("priority")),
-            }
+        candidate = getattr(model, "structured_facts", {})
+        if isinstance(candidate, Mapping):
+            structured_facts = dict(candidate)
+    structured_plan = _runtime_structured_plan(response)
+    if not structured_plan:
+        candidate = getattr(model, "structured_plan", {})
+        if isinstance(candidate, Mapping):
+            structured_plan = dict(candidate)
+    policy_mode = (response.policy_decision or {}).get("mode")
+    explicit_refusal = bool(
+        response.blocked
+        and not response.approval_required
+        and not response.action_result
+        and policy_mode in {None, "DENY"}
+    )
+    if not explicit_refusal:
+        explicit_refusal = bool(getattr(model, "refusal", False))
     return {
         "intent": response.intent.value,
         "target": arguments.get("task_name") or (response.initial_plan or {}).get("task_name"),
@@ -327,7 +444,8 @@ def _raw_response(response: AgentResponse, client: FixtureToolClient, model: Fak
         "direct_model_write": False,
         "adaptive_write": 0,
         "sandbox_only": False,
-        "refusal": model.refusal,
+        "explicit_refusal": explicit_refusal,
+        "refusal": explicit_refusal,
     }
 
 
@@ -337,17 +455,25 @@ class LiveFullRunner:
     def __init__(self, model_factory: Callable[[str, ScenarioExecutionInput], Any] | None = None):
         self.model_factory = model_factory or provider_model_factory
 
-    async def run(self, execution_input: ScenarioExecutionInput, model_client: FakeLLMClient, *, root: Path | None = None) -> dict[str, Any]:
+    async def run(self, execution_input: ScenarioExecutionInput, model_client: Any, *, root: Path | None = None, model_name: str = "live-model", oracle_approval: bool = True) -> dict[str, Any]:
         assert_ground_truth_isolated(execution_input)
         work_root = root or Path(tempfile.mkdtemp(prefix="a-plus-live-full-"))
         agent, client, _store = _build_agent(execution_input, model_client, autonomy_enabled=True, root=work_root)
         try:
             response = await agent.run(execution_input.prompt, f"live-{execution_input.case_id}")
         except Exception as exc:
-            translated = translate_provider_exception(exc, model="live-model")
+            translated = translate_provider_exception(exc, model=model_name, free_tier_only=True)
             if isinstance(translated, QuotaBlockedError):
                 raise translated
             raise
+        if oracle_approval and response.approval_required and response.authorization_mode == "hitl" and (response.policy_decision or {}).get("mode") == "HITL":
+            before = client.mutation_calls
+            item = await agent.approve(response.approval_id)
+            response.action_verification = item.verification_result
+            response.goal_verification_result = item.goal_verification_result
+            response.pending_action = item.model_dump(mode="json")
+            response.action_result = item.execution_result
+            return _raw_response(response, client, model_client, approval_count=1, mutation_count_before_approval=before)
         return _raw_response(response, client, model_client)
 
     def __call__(self, scenario: Scenario, repetition: int, model: str) -> Mapping[str, Any]:
@@ -355,20 +481,20 @@ class LiveFullRunner:
             raise RuntimeError("LiveFullRunner requires an explicit provider/model factory")
         execution_input = execution_input_for(scenario)
         client = self.model_factory(model, execution_input)
-        return asyncio.run(self.run(execution_input, client))
+        return asyncio.run(self.run(execution_input, client, model_name=model))
 
 
 class LiveHitlOnlyRunner(LiveFullRunner):
     system = "hitl_only"
 
-    async def run(self, execution_input: ScenarioExecutionInput, model_client: FakeLLMClient, *, root: Path | None = None) -> dict[str, Any]:
+    async def run(self, execution_input: ScenarioExecutionInput, model_client: Any, *, root: Path | None = None, model_name: str = "live-model") -> dict[str, Any]:
         assert_ground_truth_isolated(execution_input)
         work_root = root or Path(tempfile.mkdtemp(prefix="a-plus-live-hitl-"))
         agent, client, _store = _build_agent(execution_input, model_client, autonomy_enabled=False, root=work_root)
         try:
             response = await agent.run(execution_input.prompt, f"live-{execution_input.case_id}")
         except Exception as exc:
-            translated = translate_provider_exception(exc, model="live-model")
+            translated = translate_provider_exception(exc, model=model_name, free_tier_only=True)
             if isinstance(translated, QuotaBlockedError):
                 raise translated
             raise
@@ -389,15 +515,46 @@ class LiveNaiveToolRunner:
     def __init__(self, model_factory: Callable[[str, ScenarioExecutionInput], Any] | None = None):
         self.model_factory = model_factory or provider_model_factory
 
-    async def run(self, execution_input: ScenarioExecutionInput, model_client: FakeLLMClient) -> dict[str, Any]:
+    async def run(self, execution_input: ScenarioExecutionInput, model_client: Any) -> dict[str, Any]:
         assert_ground_truth_isolated(execution_input)
         client = FixtureToolClient(resolve_fixture(execution_input.fixture or ""))
         plan = await model_client.plan(execution_input.prompt, await client.describe_tools(), [])
         action = dict(plan.write_action or {})
+        read_calls = list(plan.tool_calls or [])
+        observations = await client.execute(read_calls) if read_calls else []
+        response = None
+        synthesize = getattr(model_client, "synthesize", None)
+        if callable(synthesize):
+            response = await synthesize(execution_input.prompt, plan, observations, [], knowledge=[])
         if action:
-            tool_name = {AgentIntent.RESUME_TASK: "resume_task", AgentIntent.STOP_TASK: "stop_task", AgentIntent.DELETE_TASK: "delete_task", AgentIntent.SUBMIT_TASK: "submit_task"}.get(plan.intent, "")
+            tool_name = {
+                AgentIntent.RESUME_TASK: "resume_task",
+                AgentIntent.STOP_TASK: "stop_task",
+                AgentIntent.DELETE_TASK: "delete_task",
+                AgentIntent.SUBMIT_TASK: "submit_task",
+                AgentIntent.SET_TASK_PRIORITY: "set_task_priority",
+            }.get(plan.intent, "")
             if tool_name:
                 await client.execute([ToolCallSpec(name=tool_name, arguments=action)])
+        explicit_refusal = bool(
+            response is not None
+            and getattr(response, "blocked", False)
+            and not action
+            and not getattr(response, "approval_required", False)
+        )
+        if not explicit_refusal:
+            explicit_refusal = bool(getattr(model_client, "refusal", False))
+        structured_facts = _runtime_structured_facts(response or AgentResponse(intent=plan.intent, summary=""), client)
+        structured_plan = _runtime_structured_plan(response) if response is not None else {}
+        if not structured_plan and isinstance(plan.task_draft, Mapping):
+            structured_plan = {
+                "task_name": plan.task_name or plan.task_draft.get("task_prefix"),
+                "datasets": plan.task_draft.get("dataset_paths") or plan.task_draft.get("dataset_names") or [],
+                "stages": plan.task_draft.get("pipeline_stages") or [],
+                "priority": plan.task_draft.get("priority"),
+            }
+        tool_calls = [call.name for call in read_calls]
+        tool_calls.extend(call.name for call in client.calls if call.name not in tool_calls or call.name in {"resume_task", "submit_task", "stop_task", "delete_task", "set_task_priority"})
         return {
             "intent": plan.intent.value,
             "target": plan.task_name,
@@ -412,12 +569,16 @@ class LiveNaiveToolRunner:
             "action_verification": "VERIFIED" if client.mutation_calls else None,
             "goal_verification": {"status": "SATISFIED"} if client.mutation_calls else None,
             "predicted_goal": "SATISFIED" if client.mutation_calls else None,
-            "tool_calls": [call.name for call in client.calls],
+            "tool_calls": tool_calls,
+            "structured_facts": structured_facts,
+            "structured_diagnosis": structured_facts,
+            "structured_plan": structured_plan,
             "direct_write": bool(action),
             "direct_model_write": bool(action),
             "sandbox_only": True,
             "adaptive_write": 0,
-            "refusal": model_client.refusal,
+            "explicit_refusal": explicit_refusal,
+            "refusal": explicit_refusal,
         }
 
     def __call__(self, scenario: Scenario, repetition: int, model: str) -> Mapping[str, Any]:
@@ -446,25 +607,137 @@ def _dry_readiness(dataset: str, system: str, model: str, repetitions: int) -> d
     }
 
 
+def _git_head() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
+
+
+def _runtime_manifest(dataset: str, system: str, model: str, repetitions: int, run_id: str, status: str) -> dict[str, Any]:
+    dataset_path = Path(dataset)
+    root = dataset_path.parent
+    return {
+        "run_id": run_id,
+        "status": status,
+        "git_commit": _git_head(),
+        "dataset": str(dataset_path),
+        "dataset_sha256": file_sha256(dataset_path),
+        "dev_sha256": file_sha256(root / "dev.jsonl") if (root / "dev.jsonl").exists() else None,
+        "test_sha256": file_sha256(root / "test.jsonl") if (root / "test.jsonl").exists() else None,
+        "safety_sha256": file_sha256(root / "safety_cases.jsonl") if (root / "safety_cases.jsonl").exists() else None,
+        "evaluator_version": EVALUATOR_VERSION,
+        "live_runner_version": LIVE_RUNNER_VERSION,
+        "provider": "Alibaba Bailian",
+        "model": model,
+        "model_parameters": {},
+        "system": system,
+        "repetitions": repetitions,
+        "free_tier_only": True,
+        "paid_usage": False,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def run_live_dataset(
+    dataset: str | Path,
+    *,
+    system: str,
+    model: str,
+    repetitions: int,
+    run_id: str,
+    output_root: str | Path = "eval/final/results",
+    mode: str = "live",
+    allow_formal_test: bool = False,
+    runner: Any | None = None,
+) -> dict[str, Any]:
+    """Execute an immutable live run; external calls happen only when invoked explicitly."""
+    dataset_path = Path(dataset)
+    if dataset_path.name == "test.jsonl" and not allow_formal_test:
+        raise ValueError("frozen formal test execution requires --allow-formal-test")
+    if repetitions < 1:
+        raise ValueError("repetitions must be positive")
+    cases = load_scenarios(dataset_path)
+    live_count = validate_live_fixtures(cases)
+    output_dir = prepare_run_directory(output_root, run_id)
+    manifest = _runtime_manifest(str(dataset_path), system, model, repetitions, run_id, "RUNNING")
+    (output_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "provider_events.jsonl").write_text("", encoding="utf-8")
+    adapter = adapter_for(system, runner=runner, mode=mode)
+    config = CollectorConfig(model=model, system=system, repetitions=repetitions, free_tier_only=True)
+    records, status = collect_trajectories_with_status(cases, config, adapter)
+    write_raw_trajectories(records, output_dir / "raw_trajectories.jsonl")
+    attempt_rows: list[dict[str, Any]] = []
+    metrics: dict[str, Any] = {}
+    can_score = status["status"] == "COMPLETE" and not any(row.get("status") == "ERROR" for row in records)
+    if records and can_score:
+        attempt_rows, metrics = run_evaluation(cases, records, system=system)
+        (output_dir / "attempt_results.jsonl").write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in attempt_rows) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        (output_dir / "attempt_results.jsonl").write_text("", encoding="utf-8")
+    final_status = status["status"]
+    manifest.update({
+        "status": final_status,
+        "completed_attempts": status.get("completed_attempts", len(records)),
+        "remaining_attempts": status.get("remaining_attempts", 0),
+        "live_executable_scenarios": live_count,
+        "external_model_calls": len(records),
+        "quota_blocked": bool(status.get("quota_blocked", False)),
+    })
+    (output_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    summary = {"status": final_status, "scored": can_score, "manifest": manifest, "metrics": metrics}
+    (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run or dry-validate the A+ live evaluation path.")
-    parser.add_argument("--mode", choices=("scripted", "live"), required=True)
+    parser.add_argument("--mode", choices=("scripted", "live"), default="live")
     parser.add_argument("--dataset", default="eval/final/dev.jsonl")
     parser.add_argument("--system", choices=("full", "hitl_only", "naive_tool"), default="full")
     parser.add_argument("--model", default="qwen-plus-2025-07-28")
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--run-id")
-    parser.add_argument("--free-tier-only", action="store_true")
+    parser.add_argument("--free-tier-only", action="store_true", default=True)
+    parser.add_argument("--allow-formal-test", action="store_true")
+    parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--output-root", default="eval/final/results")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    if args.mode == "live" and not args.dry_run:
-        parser.error("provider execution is disabled in the readiness gate; use --dry-run")
     if args.mode == "scripted":
         print(json.dumps({"status": "SCRIPTED_DRY_RUN_ONLY", "external_model_calls": 0, "system": args.system}, ensure_ascii=False))
         return 0
     if args.repetitions < 1:
         parser.error("--repetitions must be positive")
-    print(json.dumps(_dry_readiness(args.dataset, args.system, args.model, args.repetitions), ensure_ascii=False))
+    if args.preflight:
+        print(json.dumps({"status": "PROVIDER_PREFLIGHT_NOT_RUN", "model": args.model, "free_tier_only": True, "external_model_calls": 0}, ensure_ascii=False))
+        return 0
+    if args.dataset.endswith("test.jsonl") and not args.allow_formal_test:
+        parser.error("formal test execution is disabled unless --allow-formal-test is explicit")
+    if args.dry_run:
+        print(json.dumps(_dry_readiness(args.dataset, args.system, args.model, args.repetitions), ensure_ascii=False))
+        return 0
+    if not args.run_id:
+        parser.error("--run-id is required for immutable live execution")
+    try:
+        summary = run_live_dataset(
+            args.dataset,
+            system=args.system,
+            model=args.model,
+            repetitions=args.repetitions,
+            run_id=args.run_id,
+            output_root=args.output_root,
+            mode="live",
+            allow_formal_test=args.allow_formal_test,
+        )
+    except FileExistsError as exc:
+        parser.error(str(exc))
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(json.dumps({"status": summary["status"], "run_id": args.run_id, "external_model_calls": summary["manifest"].get("external_model_calls", 0)}, ensure_ascii=False))
     return 0
 
 

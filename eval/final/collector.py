@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
 
-COLLECTOR_VERSION = "a-plus-final-collector-v2"
+COLLECTOR_VERSION = "a-plus-final-collector-v3"
 DERIVED_FIELDS = frozenset(
     {
         "resolved",
@@ -41,6 +41,7 @@ class CollectorConfig:
     model: str
     system: str
     repetitions: int = 3
+    free_tier_only: bool = True
 
 
 class QuotaBlockedError(RuntimeError):
@@ -54,12 +55,28 @@ class QuotaBlockedError(RuntimeError):
         super().__init__(f"{error_code} ({status_code}) for {model}")
 
 
-def translate_provider_exception(exc: BaseException, *, model: str, provider: str = "Alibaba Bailian") -> BaseException:
+def translate_provider_exception(
+    exc: BaseException,
+    *,
+    model: str,
+    provider: str = "Alibaba Bailian",
+    free_tier_only: bool = True,
+) -> BaseException:
     """Translate the provider's free-tier terminal error without retrying it."""
     text = str(exc)
-    code = str(getattr(exc, "error_code", "") or "")
+    code = str(
+        getattr(exc, "provider_error_code", None)
+        or getattr(exc, "error_code", None)
+        or ""
+    )
     status = getattr(exc, "status_code", None)
-    if ("AllocationQuota.FreeTierOnly" in text or code == "AllocationQuota.FreeTierOnly") and (str(status) == "403" or "HTTP 403" in text or "403" in text):
+    quota_code = "AllocationQuota.FreeTierOnly" in text or code == "AllocationQuota.FreeTierOnly"
+    is_403 = str(status) == "403" or "HTTP 403" in text or "status_code=403" in text or "403" in text
+    # In free-tier-only mode an unclassified 403 is fail-closed: provider SDKs
+    # are not allowed to turn a quota/auth refusal into a retryable experiment
+    # error or a paid fallback.
+    conservative_403 = free_tier_only and (str(status) == "403" or "403" in text)
+    if free_tier_only and (quota_code or conservative_403) and is_403:
         return QuotaBlockedError(model=model, provider=provider, status_code=403, error_code="AllocationQuota.FreeTierOnly")
     return exc
 
@@ -174,8 +191,33 @@ def collect_trajectories_with_status(cases: list[Any], config: CollectorConfig, 
                     "error_code": exc.error_code,
                 }
             except Exception as exc:
+                translated = translate_provider_exception(
+                    exc,
+                    model=config.model,
+                    free_tier_only=config.free_tier_only,
+                )
+                if isinstance(translated, QuotaBlockedError):
+                    records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="BLOCKED", error=str(translated)))
+                    completed = len(records)
+                    return records, {
+                        "status": "INCOMPLETE_QUOTA_BLOCKED",
+                        "completed_attempts": completed,
+                        "remaining_attempts": max(0, total - completed),
+                        "quota_blocked": True,
+                        "model": translated.model,
+                        "provider": translated.provider,
+                        "http_status": translated.status_code,
+                        "error_code": translated.error_code,
+                    }
                 records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="ERROR", error=f"{type(exc).__name__}: {exc}"))
-    return records, {"status": "COMPLETE", "completed_attempts": len(records), "remaining_attempts": 0, "quota_blocked": False, "model": config.model}
+    has_errors = any(row.get("status") == "ERROR" for row in records)
+    return records, {
+        "status": "INCOMPLETE_ATTEMPTS" if has_errors else "COMPLETE",
+        "completed_attempts": len(records),
+        "remaining_attempts": 0,
+        "quota_blocked": False,
+        "model": config.model,
+    }
 
 
 def run_fake_benchmark(cases: list[Any], *, repetitions: int = 3, model: str = "scripted-model") -> tuple[list[dict[str, Any]], dict[str, Any]]:

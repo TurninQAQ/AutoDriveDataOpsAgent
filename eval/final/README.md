@@ -32,7 +32,7 @@ fixture runtime.
   model results.
 - `live_runner.py`: `LiveFullRunner`, `LiveHitlOnlyRunner` and
   `LiveNaiveToolRunner`, ground-truth-isolated execution inputs, deterministic
-  fixture tool client and a dry-only live-readiness CLI.
+  fixture tool client and an immutable live CLI.
 - `collector.py`: raw-facts-only adapters, quota stop semantics and immutable
   run directories.
 - `runner.py`: deterministic scoring, coverage and repetition aggregation.
@@ -78,8 +78,24 @@ PYTHONPATH=. python -m eval.final.live_runner \
 
 This checks fixture readiness only. `ScenarioExecutionInput` contains the
 prompt and runtime-visible fixture data; expected intent, policy, goal and
-plan remain evaluator-only. The next authorized step is a 12-case development
-live pilot, not the frozen formal test benchmark.
+plan remain evaluator-only. The next authorized step is provider preflight
+only, not the frozen formal test benchmark.
+
+An explicitly operator-triggered development run uses the real live runner
+and writes an immutable `raw_trajectories.jsonl`, `attempt_results.jsonl`,
+`summary.json`, `run_manifest.json` and `provider_events.jsonl` set:
+
+```bash
+PYTHONPATH=. python -m eval.final.live_runner \
+  --dataset eval/final/dev.jsonl \
+  --system full \
+  --model qwen-plus-2025-07-28 \
+  --repetitions 1 \
+  --run-id dev-live-pilot-001
+```
+
+Free-tier-only protection is always enabled. Frozen `test.jsonl` requires an
+explicit `--allow-formal-test`; an existing run id is rejected.
 
 ```bash
 PYTHONPATH=. python -m eval.final.runner \
@@ -113,8 +129,8 @@ counts. `FreeTierOnly` stops a run immediately and marks it
 `INCOMPLETE_QUOTA_BLOCKED`; it never retries or switches models inside the
 same run.
 
-The quota-free execution-gate dry-run is deliberately executable before live
-evaluation:
+The quota-free scripted execution-gate dry-run is deliberately executable
+before live evaluation:
 
 ```bash
 PYTHONPATH=. python - <<'PY'

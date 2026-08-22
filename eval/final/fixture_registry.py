@@ -97,6 +97,9 @@ def _build_fixture(name: str) -> Fixture:
         kwargs["latest_dataset_states"] = {one: "failed", two: "success"}
     if "stop" in name or "submit" in name or "delete" in name or "priority" in name:
         kwargs["latest_dataset_states"] = {one: "running"}
+    if "stop" in name or "priority" in name:
+        kwargs["active_task_name"] = task
+        kwargs["task_exclusive"] = True
     return Fixture(**kwargs)
 
 

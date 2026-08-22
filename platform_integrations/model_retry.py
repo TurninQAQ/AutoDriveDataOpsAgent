@@ -62,12 +62,14 @@ class ModelRequestError(RuntimeError):
         status_code: int | None,
         retryable: bool,
         failure_type: str = "unknown_provider_error",
+        provider_error_code: str | None = None,
     ) -> None:
         self.operation = operation
         self.attempts = attempts
         self.status_code = status_code
         self.retryable = retryable
         self.failure_type = failure_type
+        self.provider_error_code = provider_error_code
         status = str(status_code) if status_code is not None else "unknown"
         super().__init__(
             f"Model operation {redact_text(operation)} failed after {attempts} attempt(s) "
@@ -81,6 +83,7 @@ class _Failure:
     retry_after_sec: float | None
     retryable: bool
     failure_type: str
+    provider_error_code: str | None = None
 
 
 def _int_env(env: Mapping[str, str], name: str, default: int) -> int:
@@ -126,6 +129,23 @@ def _status_from_exception(exc: BaseException) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _provider_error_code(exc: BaseException) -> str | None:
+    """Keep only a safe provider code, never provider payloads or credentials."""
+    for source in (exc, getattr(exc, "response", None), getattr(exc, "http_response", None)):
+        if source is None:
+            continue
+        for name in ("provider_error_code", "error_code", "code"):
+            try:
+                value = getattr(source, name, None)
+            except Exception:
+                value = None
+            if str(value or "") == "AllocationQuota.FreeTierOnly":
+                return "AllocationQuota.FreeTierOnly"
+    if "AllocationQuota.FreeTierOnly" in str(exc):
+        return "AllocationQuota.FreeTierOnly"
+    return None
+
+
 def _retry_after_value(source: Any) -> float | None:
     if source is None:
         return None
@@ -167,12 +187,15 @@ def _retry_after_value(source: Any) -> float | None:
 
 def classify_exception(exc: BaseException) -> _Failure:
     status = _status_from_exception(exc)
+    provider_error_code = _provider_error_code(exc)
     retry_after = _retry_after_value(exc)
     if retry_after is None:
         retry_after = _retry_after_value(getattr(exc, "response", None))
     temporary_transport = isinstance(exc, (TimeoutError, ConnectionError, OSError))
     if isinstance(exc, TimeoutError):
         failure_type = "provider_timeout"
+    elif provider_error_code == "AllocationQuota.FreeTierOnly":
+        failure_type = "provider_quota_error"
     elif status in {401, 403}:
         failure_type = "provider_auth_error"
     elif status == 429:
@@ -188,6 +211,7 @@ def classify_exception(exc: BaseException) -> _Failure:
         retry_after_sec=retry_after,
         retryable=status in RETRYABLE_STATUS_CODES or (status is None and temporary_transport),
         failure_type=failure_type,
+        provider_error_code=provider_error_code,
     )
 
 
@@ -214,6 +238,7 @@ def _safe_failure(operation: str, attempt: int, policy: ModelRetryPolicy, exc: B
         failure.status_code,
         failure.retryable,
         failure.failure_type,
+        failure.provider_error_code,
     )
 
 
