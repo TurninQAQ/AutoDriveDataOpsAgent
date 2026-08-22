@@ -36,6 +36,13 @@ def _string_list(payload: dict[str, Any], key: str) -> list[str]:
     return list(value)
 
 
+def _dict_value(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} must be an object")
+    return dict(value)
+
+
 def _nonnegative_int(payload: dict[str, Any], key: str, default: int = 0) -> int:
     value = payload.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -55,7 +62,10 @@ class Scenario:
     expected_target: str | None = None
     expected_policy: str | None = None
     expected_goal: str | None = None
+    goal_eval: bool = False
+    risk_class: str | None = None
     expected_datasets: list[str] = field(default_factory=list)
+    fixture_payload: dict[str, Any] = field(default_factory=dict)
     max_mutations: int = 0
     required_tools: list[str] = field(default_factory=list)
     allowed_optional_tools: list[str] = field(default_factory=list)
@@ -68,6 +78,9 @@ class Scenario:
         category = _required_string(payload, "category")
         if category not in SCENARIO_CATEGORIES:
             raise ValueError(f"invalid category={category!r}")
+        goal_eval = payload.get("goal_eval", False)
+        if not isinstance(goal_eval, bool):
+            raise ValueError("goal_eval must be boolean")
         return cls(
             id=_required_string(payload, "id"),
             category=category,  # type: ignore[arg-type]
@@ -77,7 +90,10 @@ class Scenario:
             expected_target=_optional_string(payload, "expected_target"),
             expected_policy=_optional_string(payload, "expected_policy"),
             expected_goal=_optional_string(payload, "expected_goal"),
+            goal_eval=goal_eval,
+            risk_class=_optional_string(payload, "risk_class"),
             expected_datasets=_string_list(payload, "expected_datasets"),
+            fixture_payload=_dict_value(payload, "fixture_payload"),
             max_mutations=_nonnegative_int(payload, "max_mutations"),
             required_tools=_string_list(payload, "required_tools"),
             allowed_optional_tools=_string_list(payload, "allowed_optional_tools"),
@@ -89,6 +105,10 @@ class Scenario:
             raise ValueError(f"{self.id}: invalid expected_policy={self.expected_policy!r}")
         if self.expected_goal is not None and self.expected_goal.upper() not in GOAL_STATES:
             raise ValueError(f"{self.id}: invalid expected_goal={self.expected_goal!r}")
+        if self.goal_eval and self.expected_goal is None:
+            raise ValueError(f"{self.id}: goal_eval scenarios require expected_goal")
+        if self.risk_class is not None and self.risk_class not in {"AUTO_ELIGIBLE", "HITL_REQUIRED", "DENY_REQUIRED", "NONE"}:
+            raise ValueError(f"{self.id}: invalid risk_class={self.risk_class!r}")
         if len(set(self.required_tools) & set(self.allowed_optional_tools)):
             raise ValueError(f"{self.id}: required_tools and allowed_optional_tools overlap")
         if self.category == "safe_auto" and self.expected_policy != "AUTO":
@@ -99,6 +119,25 @@ class Scenario:
             raise ValueError(f"{self.id}: deny scenarios must expect DENY")
         if self.expected_policy == "AUTO" and self.max_mutations != 1:
             raise ValueError(f"{self.id}: AUTO scenarios must cap mutations at one")
+
+    @property
+    def effective_risk_class(self) -> str:
+        if self.risk_class:
+            return self.risk_class
+        return {"AUTO": "AUTO_ELIGIBLE", "HITL": "HITL_REQUIRED", "DENY": "DENY_REQUIRED"}.get(self.expected_policy or "", "NONE")
+
+    def signature(self) -> str:
+        normalized = {
+            "prompt": " ".join(self.prompt.casefold().split()),
+            "fixture": self.fixture,
+            "fixture_payload": self.fixture_payload,
+            "expected_intent": self.expected_intent.upper(),
+            "expected_target": self.expected_target,
+            "expected_risk": self.effective_risk_class,
+            "expected_goal": self.expected_goal.upper() if self.expected_goal else None,
+            "expected_datasets": sorted(self.expected_datasets),
+        }
+        return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -173,3 +212,7 @@ def validate_split(path: str | Path, *, expected_count: int | None = None) -> li
     if expected_count is not None and len(cases) != expected_count:
         raise ValueError(f"{path}: expected {expected_count} scenarios, found {len(cases)}")
     return cases
+
+
+def signature_overlap(left: list[Scenario], right: list[Scenario]) -> set[str]:
+    return {case.signature() for case in left} & {case.signature() for case in right}

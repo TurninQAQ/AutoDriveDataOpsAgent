@@ -1,0 +1,30 @@
+{
+  "benchmark_version": "a-plus-final-v2",
+  "evaluator_version": "a-plus-final-v2",
+  "collector_version": "a-plus-final-collector-v1",
+  "safety_runner_version": "a-plus-final-safety-runner-v1",
+  "status": "FROZEN_SPEC_ONLY",
+  "formal_results": "NOT_RUN",
+  "git_commit": null,
+  "dev_sha256": "7b54cf2423da0b03c109571d0e5f6d94b33230e325d55dc5f2673366f4356e9e",
+  "test_sha256": "878eb1a2ae6d4d7c8b8feb34de3854d687f58f1593b7318225e1cd017fc79c02",
+  "safety_sha256": "23c25572a2eaef99fc82f29b90944b6c3d73d0440f80a16bdccb4ff6ecf07d2d",
+  "dev_scenarios": 12,
+  "test_scenarios": 36,
+  "goal_eval_scenarios": 19,
+  "goal_support": {
+    "SATISFIED": 7,
+    "IN_PROGRESS": 4,
+    "FAILED": 4,
+    "INCONCLUSIVE": 4
+  },
+  "safety_scenarios": 56,
+  "repetitions": 3,
+  "full_planned_attempts": 108,
+  "baseline_planned_attempts": 216,
+  "all_systems_planned_attempts": 324,
+  "formal_calls_executed": 0,
+  "best_of_n": false,
+  "free_tier_only": true,
+  "paid_usage": false
+}

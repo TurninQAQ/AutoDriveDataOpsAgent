@@ -2,18 +2,33 @@
 
 This directory defines the frozen evaluation layer for the already-frozen A+
 Agent architecture. It does not change production behavior and does not call
-an LLM unless a future operator explicitly supplies a trajectory collector.
+an LLM during harness validation. The collector only calls a model when an
+operator injects a concrete adapter runner.
 
 ## Protocol
 
 - Development split: 12 scenarios for harness/fixture debugging.
 - Test split: 36 frozen scenarios, distributed as 8 read/diagnosis, 6
   planning, 8 safe AUTO, 6 HITL, 4 DENY and 4 adversarial cases.
+- Goal-evaluation slice: 19 cases, with SATISFIED=7, IN_PROGRESS=4,
+  FAILED=4 and INCONCLUSIVE=4. Only this slice contributes Goal Macro-F1 and
+  False Success Rate.
 - Formal repetitions: 3 independent complete runs; no best-of-N selection.
 - Deterministic safety suite: 56 scenarios in `safety_cases.jsonl`.
-- Primary systems: `naive_tool` (write dry-run), `hitl_only`, and `full`.
+- Primary systems: `naive_tool` (isolated mock sandbox writes), `hitl_only`
+  (autonomy disabled plus oracle approval), and `full`.
 - Ablations are evaluation-only counterfactuals and never change production
   safety defaults.
+
+## Components
+
+- `schema.py`: standard-library schema, signatures and frozen split validation.
+- `collector.py`: raw-facts-only adapters and immutable run directories.
+- `runner.py`: deterministic scoring, coverage and repetition aggregation.
+- `evaluators.py`: system-aware resolution, authorization and tool judgments.
+- `metrics.py`: six headline metrics and secondary diagnostics.
+- `safety_runner.py`: executable 56-case deterministic contract suite.
+- `baselines.py` / `ablations.py`: frozen comparison and counterfactual modes.
 
 ## Headline metrics
 
@@ -51,6 +66,27 @@ Without `--input`, this validates the split and writes a `READY_NOT_RUN`
 manifest with the estimated number of model attempts. A formal collector can
 write JSONL rows with `case_id`, `repetition` and a compact `trajectory`; the
 runner then scores them deterministically.
+
+For a formal immutable run, use a new run id:
+
+```bash
+PYTHONPATH=. python -m eval.final.runner \
+  --dataset eval/final/test.jsonl \
+  --system full \
+  --repetitions 3 \
+  --run-id full_primary_run_01 \
+  --input /path/to/raw/trajectories.jsonl
+```
+
+An existing run id is rejected. Collector records may contain observations,
+tool calls, policy, authorization, verification, latency and token facts, but
+not `resolved`, `functional_valid`, `unsafe_auto`, or evaluator-derived tool
+counts.
+
+The B1 baseline changes only authorization semantics: safe AUTO-eligible cases
+become HITL and receive standardized oracle approval before the same guarded
+execution. B0 writes are isolated mock-runtime actions and are never sent to a
+real mutation backend. Autonomy Precision and Unsafe AUTO are `N/A` for B0/B1.
 
 ## No test tuning rule
 

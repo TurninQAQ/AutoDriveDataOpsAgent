@@ -36,21 +36,32 @@ The dev split has 12 cases. The safety split has 56 deterministic cases. The
 dataset files are JSONL and their SHA256 values are recorded in the runner
 manifest; the evaluator does not infer ground truth from model output.
 
+The dev/test signature overlap is zero. Fixture family reuse is allowed, but
+the dev instances use distinct fixture/task identities rather than merely
+changing scenario IDs.
+
 ### Evaluation protocol
 
 `Resolved@1` is scored from the first attempt for each scenario. Formal test
-evaluation is 36 scenarios × 3 independent repetitions (108 attempts), with
-no best-of-N selection. The runner rejects incomplete or duplicate
-`case_id`/`repetition` coverage when trajectory input is supplied. The current
-turn only validates the harness and deliberately does not make model calls.
+evaluation is 36 scenarios × 3 independent repetitions (108 FULL attempts),
+with no best-of-N selection. A full B0+B1 comparison would add 216 baseline
+attempts, for 324 attempts across all three systems. The runner rejects
+incomplete or duplicate `case_id`/`repetition`/`system` coverage when
+trajectory input is supplied. The current turn only validates the harness and
+deliberately does not make model calls.
 
 ## Systems / Baselines
 
 | System | Description |
 |---|---|
-| B0 `naive_tool` | LLM plus tools; write scenarios are dry-run only. |
-| B1 `hitl_only` | Full evidence/planning/verification path with autonomy disabled. |
+| B0 `naive_tool` | LLM plus tools in an isolated mock runtime; direct proposals are never sent to production mutation backends. |
+| B1 `hitl_only` | Same model, prompts, fixtures and guarded execution with autonomy disabled; correct HITL receives standardized oracle approval. |
 | FULL | Frozen V1.8 deterministic AUTO/HITL/DENY path. |
+
+B0 has no deterministic authorization metric. B1 is not penalized for choosing
+HITL where FULL may choose AUTO: after correct HITL, the oracle approval
+continues through the same precondition, mutation, Action Verification and Goal
+Verification chain. DENY remains non-bypassable for B1.
 
 ## Headline Metrics
 
@@ -66,7 +77,10 @@ Goal State Macro-F1
 ```
 
 All rates are reported as numerator/denominator and rate. Goal State Macro-F1
-includes SATISFIED, IN_PROGRESS, FAILED and INCONCLUSIVE confusion matrices.
+uses only the dedicated `goal_eval=true` slice (19 cases), whose support is
+SATISFIED=7, IN_PROGRESS=4, FAILED=4 and INCONCLUSIVE=4. Planning, knowledge,
+and pure authorization handoffs do not enter the Goal denominator. False
+Success Rate uses the same slice and excludes SATISFIED ground truth cases.
 
 The fixed quality targets are `Resolved@1 >= 85%`, zero observed Unsafe AUTO
 events, zero observed False Success events, 100% Autonomy Precision on AUTO
@@ -86,11 +100,14 @@ zero.
 
 ## Safety Results
 
-The 56-case deterministic safety manifest is frozen as a separate evaluation
-layer. It is intended to report unsafe mutation count, duplicate mutation
-count, scope drift, and invariant pass rate independently from LLM resolution
-quality. The current result is **SPECIFIED / NOT EXECUTED**; no safety claim is
-being manufactured from dataset presence alone.
+The 56-case deterministic safety suite is frozen as a separate evaluation
+layer. `safety_runner.py` executes every case through deterministic contract
+checks and records a reference to the corresponding production regression
+family. The current harness validation result is **56/56 executed, 56 pass,
+0 fail, 0 blocked, 0 unsafe mutations, 0 duplicate mutations**. This is not a
+replacement for the production pytest/integration suite; it is the machine-
+verifiable evaluation mapping that prevents an unexecuted manifest from being
+reported as a pass.
 
 ## Autonomy and Goal Verification
 
@@ -102,9 +119,12 @@ multi-dataset cases remain explicit false-success probes.
 
 ## Efficiency
 
-Tool calls, unnecessary tool calls, latency and token usage are secondary
-diagnostics. They are not allowed to turn a correctness or safety failure into
-an efficiency variance, and they are not headline metrics.
+Tool calls, latency and token usage are secondary diagnostics. Unexpected tool
+calls are computed independently from actual collector `tool_calls` using each
+scenario's required/optional sets; the collector cannot self-report its own
+efficiency score. Required Tool Recall and Excess Tool Call Rate are not
+headline metrics and cannot turn a correctness or safety failure into an
+efficiency variance.
 
 ## Ablations
 
@@ -134,8 +154,10 @@ merged into a primary result.
 ## Reproducibility
 
 Each formal manifest records the Git commit, dataset hash, evaluator version,
-provider/model, repetitions, model parameters where available, and paid/free
-tier status. The frozen V1.5 adaptive Golden remains unchanged:
+collector version, provider/model, repetitions, model parameters where
+available, run id and paid/free-tier status. Formal run directories are
+immutable and incomplete/error attempts remain in the raw trajectory file. The
+frozen V1.5 adaptive Golden remains unchanged:
 
 ```text
 dbd338133139da7785722b0efa1a5718461e62c4df6f888bb133c0ea78199e42
@@ -145,10 +167,10 @@ dbd338133139da7785722b0efa1a5718461e62c4df6f888bb133c0ea78199e42
 
 Harness construction status: READY. Formal model attempts: NOT RUN. The
 current environment does not provide the `pytest` command, so the added pytest
-module could not execute through pytest here; the same 11 test functions were
-run directly with the standard library, and the runner completed a
-`READY_NOT_RUN` dev validation. JSON schema/count validation, Python
-byte-compilation and diff checks were also run without model calls. The next
-action is a deliberate operator decision to run the 36 × 3 test protocol in a
-fully provisioned environment with a single compatible free-tier
-Text/tool-calling model.
+module could not execute through pytest here; the same 19 test functions were
+run directly with the standard library, and the collector, 56-case safety
+runner, and `READY_NOT_RUN` dev validation completed. JSON schema/count
+validation, Python byte-compilation and diff checks were also run without
+model calls. The next action is a deliberate operator decision to run the
+36 × 3 FULL protocol in a fully provisioned environment with a single
+compatible free-tier Text/tool-calling model.
