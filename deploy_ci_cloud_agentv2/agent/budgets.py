@@ -12,7 +12,9 @@ class RuntimeBudgets:
     max_parallel_read_batch: int = 3
     max_completion_gate_rejections: int = 3
     max_context_tokens: int = 12_000
-    max_runtime_read_retries: int = 2
+    # Per-call side-effect-free READ retry allowance.  The cumulative counter
+    # in BudgetState is telemetry and is not this limit.
+    max_runtime_read_retries_per_call: int = 2
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -21,7 +23,7 @@ class RuntimeBudgets:
             "max_parallel_read_batch",
             "max_completion_gate_rejections",
             "max_context_tokens",
-            "max_runtime_read_retries",
+            "max_runtime_read_retries_per_call",
         ):
             if getattr(self, field_name) < 0:
                 raise ValueError(f"{field_name} must not be negative")
@@ -56,4 +58,3 @@ class BudgetState:
 
     def has_read_calls(self, count: int) -> bool:
         return self.read_tool_calls_used + count <= self.limits.max_read_tool_calls
-

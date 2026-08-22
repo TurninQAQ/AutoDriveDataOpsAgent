@@ -154,14 +154,14 @@ async def invoke(
                 "termination_reason": terminal.code.value,
             }
         )
-        system_context.event_store.append(
+        terminal_event = system_context.event_store.append(
             event_type="ControlledTerminalOutcomeProduced",
             request_id=state["request_id"],
             thread_id=thread_id,
             payload={"code": terminal.code.value, "safe_facts": terminal.safe_facts},
             provenance=provenance,
         )
-    system_context.checkpointer.save(final_state)
+        final_state["last_event_id"] = terminal_event.event_id
     terminal = final_state.get("terminal_state")
     passed = bool(final_state.get("gate_passed"))
     status = "COMPLETED" if passed else "CONTROLLED_TERMINAL" if terminal else "ERROR"
@@ -171,8 +171,13 @@ async def invoke(
         thread_id=thread_id,
         payload={"status": status, "termination_reason": final_state.get("termination_reason")},
         provenance=provenance,
+        causation_id=final_state.get("last_event_id"),
     )
     final_state["last_event_id"] = completed_event.event_id
+    # The completed event is part of the canonical terminal transition. Save
+    # only after linking that event into state, so a checkpoint cannot lag the
+    # audit trace by one event.
+    system_context.checkpointer.save(final_state)
     candidate = final_state.get("final_candidate")
     return AgentRunResult(
         thread_id=thread_id,

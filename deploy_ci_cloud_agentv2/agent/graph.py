@@ -1,28 +1,35 @@
 """The actual Phase B LangGraph loop.
 
-The graph is intentionally short and visible:
+The graph deliberately exposes the reasoning cycle:
 
     START -> agent -> read_executor -> agent
     agent -> response_completion_gate -> agent / END
     runtime terminal -> END
 
-Each Agent node performs exactly one provider generation.  There is no hidden
+Each Agent node performs exactly one provider generation. There is no hidden
 model/tool loop inside a node.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any
+import uuid
 
 from .budgets import BudgetState
 from .context import ContextBuilder
 from .contracts import CompletionContractCompiler
 from .decisions import AgentDecision, FinalCandidate, ReadToolBatch, SingleToolCall
-from .evidence import EvidenceTracker
+from .evidence import (
+    EvidenceTracker,
+    IdentityStatus,
+    ObservationProvenance,
+    ToolObservation,
+)
 from .events import EventProvenance, EventStore
 from .gate import ResponseCompletionGate
-from .outcomes import ControlledTerminalOutcome, GoalOutcome, GoalStatus, TerminalCode
+from .outcomes import ControlledTerminalOutcome, GoalOutcome, TerminalCode
 from .principles import OperatingPrinciplesSnapshot
 from .state import AgentState
 from ..providers.model import ProviderUnavailable
@@ -48,7 +55,7 @@ def build_graph(dependencies: GraphDependencies):
     """Build and compile a real LangGraph StateGraph with explicit loop edges."""
     try:
         from langgraph.graph import END, START, StateGraph
-    except ImportError as exc:  # pragma: no cover - dependency is declared in pyproject
+    except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "LangGraph is required for the V2 explicit Agent loop; install project dependencies"
         ) from exc
@@ -107,10 +114,11 @@ def build_graph(dependencies: GraphDependencies):
         updates: dict[str, Any] = {
             "budgets": budget,
             "step_count": state.get("step_count", 0) + 1,
-            "decision": decision,
-            "final_candidate": decision if isinstance(decision, FinalCandidate) else None,
+            "decision": None,
+            "final_candidate": None,
             "gate_passed": None,
             "new_turn": False,
+            "continue_after_read_guard": False,
             "messages": list(state.get("messages", ()))
             + [
                 {
@@ -125,35 +133,28 @@ def build_graph(dependencies: GraphDependencies):
                 }
             ],
         }
+        last_event_id = state.get("last_event_id")
+
+        # A proposal can declare or revise the structured goal descriptor, but
+        # it cannot alter completion requirements. The compiler remains the
+        # sole writer of the contract.
         descriptor = getattr(decision, "proposed_goal_descriptor", None)
         current_descriptor = state.get("goal_descriptor")
-        if current_descriptor is None and descriptor is None:
-            return _terminal_update(
-                state,
-                ControlledTerminalOutcome(
-                    code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
-                    safe_facts={"reason": "agent_did_not_declare_goal_descriptor"},
-                    message_template="The Agent did not declare a structured GoalDescriptor.",
-                ),
-                dependencies,
-                budgets=budget,
-            )
-        if descriptor is not None and descriptor != current_descriptor:
-            if current_descriptor is not None:
-                if descriptor.descriptor_version != current_descriptor.descriptor_version + 1:
-                    return _terminal_update(
-                        state,
-                        ControlledTerminalOutcome(
-                            code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
-                            safe_facts={"reason": "non_monotonic_goal_descriptor_revision"},
-                            message_template="The Agent proposed an invalid GoalDescriptor revision.",
-                        ),
-                        dependencies,
-                        budgets=budget,
-                    )
-                descriptor_event = "GoalDescriptorRevised"
-            else:
-                descriptor_event = "GoalDescriptorDeclared"
+        descriptor_error: str | None = None
+        if (
+            descriptor is not None
+            and current_descriptor is not None
+            and descriptor != current_descriptor
+        ):
+            if descriptor.descriptor_version != current_descriptor.descriptor_version + 1:
+                descriptor_error = "non_monotonic_goal_descriptor_revision"
+        if descriptor is not None and current_descriptor is None:
+            descriptor_event = "GoalDescriptorDeclared"
+        elif descriptor is not None and descriptor != current_descriptor:
+            descriptor_event = "GoalDescriptorRevised"
+        else:
+            descriptor_event = None
+        if descriptor_event is not None and descriptor_error is None:
             contract = dependencies.compiler.compile(descriptor)
             updates.update(
                 {
@@ -161,8 +162,7 @@ def build_graph(dependencies: GraphDependencies):
                     "goal_descriptor_version": descriptor.descriptor_version,
                     "completion_contract": contract,
                     "goal_outcomes": {
-                        goal.goal_id: GoalOutcome(goal.goal_id)
-                        for goal in descriptor.goals
+                        goal.goal_id: GoalOutcome(goal.goal_id) for goal in descriptor.goals
                     },
                 }
             )
@@ -171,7 +171,9 @@ def build_graph(dependencies: GraphDependencies):
                 dependencies,
                 descriptor_event,
                 {"descriptor": descriptor.to_dict()},
+                causation_id=last_event_id,
             )
+            last_event_id = event.event_id
             contract_event = _emit(
                 state,
                 dependencies,
@@ -181,17 +183,44 @@ def build_graph(dependencies: GraphDependencies):
                     "contract_version": contract.contract_version,
                     "contract_fingerprint": contract.contract_fingerprint,
                 },
-                causation_id=event.event_id,
+                causation_id=last_event_id,
             )
-            updates["last_event_id"] = contract_event.event_id
+            last_event_id = contract_event.event_id
+
+        guard_reason = descriptor_error or _read_guard_reason(
+            decision, dependencies.read_runtime, budget.limits.max_parallel_read_batch
+        )
+        if guard_reason is None and state.get("goal_descriptor") is None and descriptor is None:
+            guard_reason = "Agent did not declare a structured GoalDescriptor"
+
         decision_event = _emit(
             state,
             dependencies,
             "AgentDecisionMade",
-            {"decision_kind": getattr(decision, "kind", type(decision).__name__)},
-            causation_id=updates.get("last_event_id", state.get("last_event_id")),
+            {
+                "decision_kind": getattr(decision, "kind", type(decision).__name__),
+                "accepted": guard_reason is None,
+                "rejection_reason": guard_reason,
+            },
+            causation_id=last_event_id,
         )
-        updates["last_event_id"] = decision_event.event_id
+        last_event_id = decision_event.event_id
+
+        if guard_reason is not None:
+            return {
+                **updates,
+                **_read_guard_update(
+                    state,
+                    dependencies,
+                    reason=guard_reason,
+                    budgets=budget,
+                    last_event_id=last_event_id,
+                ),
+            }
+
+        updates["decision"] = decision
+        updates["final_candidate"] = decision if isinstance(decision, FinalCandidate) else None
+        updates["last_event_id"] = last_event_id
         if isinstance(decision, FinalCandidate):
             final_event = _emit(
                 state,
@@ -201,7 +230,7 @@ def build_graph(dependencies: GraphDependencies):
                     "referenced_goal_ids": list(decision.referenced_goal_ids),
                     "response_length": len(decision.response),
                 },
-                causation_id=decision_event.event_id,
+                causation_id=last_event_id,
             )
             updates["last_event_id"] = final_event.event_id
         return updates
@@ -235,47 +264,43 @@ def build_graph(dependencies: GraphDependencies):
                     ),
                 ),
                 dependencies,
+                budgets=budget,
             )
-        if isinstance(decision, ReadToolBatch):
-            try:
-                dependencies.read_runtime.validate_batch(
-                    decision, budget.limits.max_parallel_read_batch
-                )
-            except Exception as exc:
-                return _terminal_update(
-                    state,
-                    ControlledTerminalOutcome(
-                        code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
-                        safe_facts={"reason": "invalid_read_batch", "error_type": type(exc).__name__},
-                        message_template="The Agent emitted a structurally invalid READ batch.",
-                    ),
-                    dependencies,
-                    budgets=budget,
-                )
+
+        guard_reason = (
+            _batch_guard_reason(
+                decision, dependencies.read_runtime, budget.limits.max_parallel_read_batch
+            )
+            if isinstance(decision, ReadToolBatch)
+            else _single_guard_reason(decision, dependencies.read_runtime)
+        )
+        if guard_reason is not None:
+            return _read_guard_update(state, dependencies, reason=guard_reason, budgets=budget)
+
+        last_event_id = state.get("last_event_id")
 
         async def on_started(call, attempt):
-            _emit(
+            nonlocal last_event_id
+            event = _emit(
                 state,
                 dependencies,
                 "ToolCallStarted",
-                {
-                    "call_id": call.call_id,
-                    "tool_name": call.tool_name,
-                    "attempt": attempt,
-                },
+                {"call_id": call.call_id, "tool_name": call.tool_name, "attempt": attempt},
+                causation_id=last_event_id,
             )
+            last_event_id = event.event_id
 
         if isinstance(decision, SingleToolCall):
             observation = await dependencies.read_runtime.execute_single(
                 decision.call,
-                max_retries=budget.limits.max_runtime_read_retries,
+                max_retries=budget.limits.max_runtime_read_retries_per_call,
                 on_started=on_started,
             )
             observations = (observation,)
         else:
             result = await dependencies.read_runtime.execute_batch(
                 decision,
-                max_retries=budget.limits.max_runtime_read_retries,
+                max_retries=budget.limits.max_runtime_read_retries_per_call,
                 max_batch=budget.limits.max_parallel_read_batch,
                 on_started=on_started,
             )
@@ -290,7 +315,7 @@ def build_graph(dependencies: GraphDependencies):
                 state["goal_descriptor"], state["completion_contract"], new_evidence, outcomes
             )
         for observation in observations:
-            _emit(
+            event = _emit(
                 state,
                 dependencies,
                 "ToolObservationRecorded",
@@ -302,11 +327,16 @@ def build_graph(dependencies: GraphDependencies):
                     "status": observation.status,
                     "trust": observation.trust,
                     "error_code": observation.error_code,
+                    "provenance": asdict(observation.provenance)
+                    if observation.provenance is not None
+                    else None,
                     "data": observation.data,
                 },
+                causation_id=last_event_id,
             )
+            last_event_id = event.event_id
         for record in created:
-            _emit(
+            event = _emit(
                 state,
                 dependencies,
                 "EvidenceRecorded",
@@ -315,12 +345,14 @@ def build_graph(dependencies: GraphDependencies):
                     "kind": record.kind,
                     "target": record.target,
                     "observation_id": record.observation_id,
-                    "provenance": record.provenance,
+                    "provenance": asdict(record.provenance),
                     "status": record.status,
                 },
+                causation_id=last_event_id,
             )
+            last_event_id = event.event_id
         for outcome in outcomes.values():
-            _emit(
+            event = _emit(
                 state,
                 dependencies,
                 "GoalOutcomeUpdated",
@@ -329,7 +361,9 @@ def build_graph(dependencies: GraphDependencies):
                     "status": outcome.status.value,
                     "evidence_refs": list(outcome.evidence_refs),
                 },
+                causation_id=last_event_id,
             )
+            last_event_id = event.event_id
         return {
             "budgets": budget.with_read_calls(len(calls)).with_retries(
                 sum(item.retry_count for item in observations)
@@ -339,6 +373,7 @@ def build_graph(dependencies: GraphDependencies):
             "evidence": new_evidence,
             "goal_outcomes": outcomes,
             "decision": None,
+            "last_event_id": last_event_id,
         }
 
     async def response_completion_gate(state: AgentState) -> dict[str, Any]:
@@ -362,6 +397,7 @@ def build_graph(dependencies: GraphDependencies):
             state["evidence"],
             state.get("goal_outcomes", {}),
         )
+        last_event_id = state.get("last_event_id")
         gate_event = _emit(
             state,
             dependencies,
@@ -370,15 +406,18 @@ def build_graph(dependencies: GraphDependencies):
                 "passed": evaluation.passed,
                 "facts": list(evaluation.facts),
                 "missing": list(evaluation.missing),
+                "referenced_goal_ids": list(candidate.referenced_goal_ids),
             },
+            causation_id=last_event_id,
         )
+        last_event_id = gate_event.event_id
         updates: dict[str, Any] = {
             "goal_outcomes": evaluation.goal_outcomes,
             "gate_passed": evaluation.passed,
-            "last_event_id": gate_event.event_id,
+            "last_event_id": last_event_id,
         }
         for outcome in evaluation.goal_outcomes.values():
-            _emit(
+            event = _emit(
                 state,
                 dependencies,
                 "GoalOutcomeUpdated",
@@ -387,8 +426,10 @@ def build_graph(dependencies: GraphDependencies):
                     "status": outcome.status.value,
                     "evidence_refs": list(outcome.evidence_refs),
                 },
-                causation_id=gate_event.event_id,
+                causation_id=last_event_id,
             )
+            last_event_id = event.event_id
+        updates["last_event_id"] = last_event_id
         if evaluation.passed:
             return updates
         budget = state["budgets"].with_gate_rejection()
@@ -407,6 +448,7 @@ def build_graph(dependencies: GraphDependencies):
                 ),
                 dependencies,
                 budgets=budget,
+                causation_id=last_event_id,
             )
         return {
             **updates,
@@ -417,6 +459,8 @@ def build_graph(dependencies: GraphDependencies):
     def after_agent(state: AgentState) -> str:
         if state.get("terminal_state") is not None:
             return "terminal"
+        if state.get("continue_after_read_guard"):
+            return "agent"
         decision = state.get("decision")
         if isinstance(decision, FinalCandidate):
             return "response_completion_gate"
@@ -438,6 +482,7 @@ def build_graph(dependencies: GraphDependencies):
         "agent",
         after_agent,
         {
+            "agent": "agent",
             "read_executor": "read_executor",
             "response_completion_gate": "response_completion_gate",
             "terminal": END,
@@ -450,6 +495,88 @@ def build_graph(dependencies: GraphDependencies):
         {"agent": "agent", "end": END, "terminal": END},
     )
     return builder.compile()
+
+
+def _read_guard_reason(
+    decision: object, runtime: ReadToolRuntime, max_batch: int
+) -> str | None:
+    if isinstance(decision, SingleToolCall):
+        return _single_guard_reason(decision, runtime)
+    if isinstance(decision, ReadToolBatch):
+        return _batch_guard_reason(decision, runtime, max_batch)
+    if isinstance(decision, FinalCandidate):
+        return None
+    return "AgentDecision is not SingleToolCall, ReadToolBatch, or FinalCandidate"
+
+
+def _single_guard_reason(decision: SingleToolCall, runtime: ReadToolRuntime) -> str | None:
+    try:
+        runtime.validate_single(decision.call)
+    except (TypeError, ValueError) as exc:
+        return f"SINGLE_READ_GUARD_REJECTED: {type(exc).__name__}: {exc}"
+    return None
+
+
+def _batch_guard_reason(
+    decision: ReadToolBatch, runtime: ReadToolRuntime, max_batch: int
+) -> str | None:
+    try:
+        runtime.validate_batch(decision, max_batch)
+    except (TypeError, ValueError) as exc:
+        return f"BATCH_READ_GUARD_REJECTED: {type(exc).__name__}: {exc}"
+    return None
+
+
+def _read_guard_update(
+    state: AgentState,
+    dependencies: GraphDependencies,
+    *,
+    reason: str,
+    budgets: BudgetState,
+    last_event_id: str | None = None,
+) -> dict[str, Any]:
+    observation = ToolObservation(
+        observation_id=f"obs_guard_{uuid.uuid4().hex}",
+        call_id="read-guard",
+        source="read_guard",
+        target="platform",
+        status="READ_GUARD_REJECTED",
+        data={"error_code": "INVALID_READ_DECISION", "reason": reason},
+        trust="RUNTIME_STRUCTURED",
+        error_code="INVALID_READ_DECISION",
+        observed_at=datetime.now(timezone.utc),
+        provenance=ObservationProvenance(
+            requested_target="platform",
+            observed_target=None,
+            source_tool="read_guard",
+            arguments_fingerprint="",
+            identity_status=IdentityStatus.NOT_APPLICABLE,
+        ),
+    )
+    event = _emit(
+        state,
+        dependencies,
+        "ToolObservationRecorded",
+        {
+            "observation_id": observation.observation_id,
+            "call_id": observation.call_id,
+            "source": observation.source,
+            "status": observation.status,
+            "trust": observation.trust,
+            "error_code": observation.error_code,
+            "data": observation.data,
+        },
+        causation_id=last_event_id or state.get("last_event_id"),
+    )
+    return {
+        "decision": None,
+        "final_candidate": None,
+        "budgets": budgets,
+        "observations": tuple(state.get("observations", ())) + (observation,),
+        "gate_feedback": (f"READ_GUARD_REJECTED: {reason}",),
+        "continue_after_read_guard": True,
+        "last_event_id": event.event_id,
+    }
 
 
 def _emit(
@@ -485,6 +612,7 @@ def _terminal_update(
     dependencies: GraphDependencies,
     *,
     budgets: BudgetState | None = None,
+    causation_id: str | None = None,
 ) -> dict[str, Any]:
     event = _emit(
         state,
@@ -495,6 +623,7 @@ def _terminal_update(
             "safe_facts": outcome.safe_facts,
             "message_template": outcome.message_template,
         },
+        causation_id=causation_id,
     )
     return {
         "terminal_state": outcome,

@@ -28,9 +28,16 @@ can inject its own V2-local `AgentProvider` and `ReadFacade` without importing
 V1 modules. Phase B contains no WRITE execution, HITL interrupt, AUTO path, or
 autonomy policy.
 
-Install the package and run the local tests from the repository root:
+READ transport success is kept separate from qualified evidence. Entity-bound
+tools compare requested and observed identity; missing or conflicting identity,
+placeholder state, empty knowledge, and empty diagnosis fail closed. The
+completion gate also requires a `FinalCandidate` to reference every declared
+goal. Invalid READ proposals become bounded guard observations and return to
+the Agent. Runtime READ retries are side-effect-free and bounded per tool call.
+
+Run the local tests from the repository root:
 
 ```bash
-python -m pip install -e .
-python -m pytest -q deploy_ci_cloud_agentv2/tests
+PYTHONPATH=/home/ubuntu/project/AutoDriveDataOpsAgent \
+  .venv/bin/pytest -q deploy_ci_cloud_agentv2/tests
 ```

@@ -37,6 +37,7 @@ class AgentState(TypedDict, total=False):
     gate_passed: bool | None
     new_turn: bool
     last_event_id: str | None
+    continue_after_read_guard: bool
 
 
 class InMemoryCheckpointer:
@@ -87,4 +88,5 @@ def new_state(
         gate_feedback=(),
         gate_passed=None,
         new_turn=True,
+        continue_after_read_guard=False,
     )

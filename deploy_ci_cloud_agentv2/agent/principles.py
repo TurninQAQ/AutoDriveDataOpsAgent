@@ -29,6 +29,7 @@ class OperatingPrinciplesSnapshot:
 _HEADING = re.compile(
     r"^##\s+(?:\d+\.\s+)?Principle\s+(P\d+)\s+—\s+(.+?)\s*$"
 )
+_TOP_LEVEL_HEADING = re.compile(r"^#\s+\S")
 
 
 def load_operating_principles(path: str | Path) -> OperatingPrinciplesSnapshot:
@@ -50,6 +51,14 @@ def load_operating_principles(path: str | Path) -> OperatingPrinciplesSnapshot:
                     OperatingPrinciple(current[0], current[1], "\n".join(body).strip())
                 )
             current = (match.group(1), match.group(2))
+            body = []
+        elif current is not None and _TOP_LEVEL_HEADING.match(line):
+            # Later top-level sections are document guidance, not the body of
+            # the last principle.
+            principles.append(
+                OperatingPrinciple(current[0], current[1], "\n".join(body).strip())
+            )
+            current = None
             body = []
         elif current is not None:
             body.append(line)

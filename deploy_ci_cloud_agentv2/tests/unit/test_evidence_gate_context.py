@@ -4,7 +4,12 @@ from deploy_ci_cloud_agentv2.agent.budgets import BudgetState, RuntimeBudgets
 from deploy_ci_cloud_agentv2.agent.context import ContextBuilder
 from deploy_ci_cloud_agentv2.agent.contracts import CompletionContractCompiler
 from deploy_ci_cloud_agentv2.agent.decisions import FinalCandidate
-from deploy_ci_cloud_agentv2.agent.evidence import EvidenceState, EvidenceTracker, ToolObservation
+from deploy_ci_cloud_agentv2.agent.evidence import (
+    EvidenceState,
+    EvidenceTracker,
+    ToolObservation,
+    build_observation_provenance,
+)
 from deploy_ci_cloud_agentv2.agent.gate import ResponseCompletionGate
 from deploy_ci_cloud_agentv2.agent.goals import GoalDescriptor, ReadTaskState
 from deploy_ci_cloud_agentv2.agent.outcomes import GoalStatus
@@ -14,13 +19,22 @@ from deploy_ci_cloud_agentv2.agent.principles import load_operating_principles
 def test_evidence_records_provenance_and_freshness():
     now = datetime.now(timezone.utc)
     observation = ToolObservation(
-        "obs1", "call1", "get_task_detail", "task_A", "SUCCESS", {"state": "failed"}, observed_at=now
+        "obs1",
+        "call1",
+        "get_task_detail",
+        "task_A",
+        "SUCCESS",
+        {"task_name": "task_A", "state": "failed"},
+        observed_at=now,
+        provenance=build_observation_provenance(
+            "get_task_detail", {"task_name": "task_A"}, {"task_name": "task_A", "state": "failed"}
+        ),
     )
     state, records = EvidenceTracker(freshness_seconds=1).record_observations(
         EvidenceState(), [observation]
     )
     assert records[0].kind == "LIVE_TASK"
-    assert records[0].provenance == "get_task_detail"
+    assert records[0].provenance.source_tool == "get_task_detail"
     assert records[0].observation_id == "obs1"
     assert records[0].is_current(now)
     assert not records[0].is_current(now + timedelta(seconds=2))

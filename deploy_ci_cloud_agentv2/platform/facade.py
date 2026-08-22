@@ -50,24 +50,29 @@ class InMemoryReadFacade:
         return copy.deepcopy(self.responses.get(tool_name, default))
 
     def get_task_detail(self, task_name: str) -> Any:
-        default = {"task_name": task_name, "state": "UNKNOWN"}
+        default = {"status": "NO_DATA", "task_name": task_name, "state": None}
         return self._result("get_task_detail", {"task_name": task_name}, default)
 
     def get_gpu_pool(self) -> Any:
         return self._result(
-            "get_gpu_pool", {}, {"devices": [], "reservations": []}
+            "get_gpu_pool", {}, {"status": "NO_DATA", "devices": [], "reservations": []}
         )
 
     def search_knowledge(self, query: str, top_k: int = 5) -> Any:
-        default = {"query": query, "top_k": top_k, "results": []}
+        default = {
+            "status": "EMPTY_RESULT",
+            "query": query,
+            "top_k": top_k,
+            "results": [],
+        }
         return self._result(
             "search_knowledge", {"query": query, "top_k": top_k}, default
         )
 
     def get_queue_state(self, task_name: str = "") -> Any:
-        default = {"task_name": task_name, "queue": []}
+        default = {"status": "NO_DATA", "task_name": task_name, "queue": []}
         return self._result("get_queue_state", {"task_name": task_name}, default)
 
     def diagnose_task(self, task_name: str) -> Any:
-        default = {"task_name": task_name, "diagnosis": "no diagnostic facts"}
+        default = {"status": "NO_DATA", "task_name": task_name, "diagnosis": None}
         return self._result("diagnose_task", {"task_name": task_name}, default)

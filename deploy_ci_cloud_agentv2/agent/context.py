@@ -1,4 +1,4 @@
-"""Explicit separation of runtime state, advisory guidance, and untrusted data."""
+"""Explicit separation of authoritative state, guidance, and untrusted data."""
 
 from __future__ import annotations
 
@@ -51,21 +51,37 @@ class AgentContext:
 
 
 class ContextBuilder:
-    """Builds three typed projections; it never collapses them into one authority."""
+    """Build bounded typed projections without truncating runtime authority.
 
-    def __init__(self, *, max_guidance_chars: int = 16_000, max_observations: int = 32):
+    The character budget applies to semantic strings (guidance, observations,
+    messages, and the user input projection). Structured runtime objects remain
+    complete and are never replaced by an LLM summary.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_guidance_chars: int = 16_000,
+        max_observations: int = 32,
+        max_messages: int = 32,
+        max_message_chars: int = 4_096,
+    ):
         self.max_guidance_chars = max_guidance_chars
         self.max_observations = max_observations
+        self.max_messages = max_messages
+        self.max_message_chars = max_message_chars
 
     def build(self, state: dict[str, Any], snapshot: OperatingPrinciplesSnapshot) -> AgentContext:
         max_context_chars = max(
-            1_024,
+            256,
             min(
                 self.max_guidance_chars,
                 int(state["budgets"].limits.max_context_tokens) * 4,
             ),
         )
-        guidance_limit = max_context_chars // 2
+
+        # Guidance has priority over semantic payloads, but remains advisory.
+        guidance_limit = min(max_context_chars // 3, self.max_guidance_chars)
         guidance: list[str] = []
         guidance_size = 0
         for item in snapshot.principles:
@@ -76,31 +92,20 @@ class ContextBuilder:
             bounded = text[:remaining]
             guidance.append(bounded)
             guidance_size += len(bounded)
-        observations = tuple(state.get("observations", ()))[: self.max_observations]
-        observation_budget = max_context_chars
-        bounded_observations = []
-        used_chars = guidance_size
-        for observation in observations:
-            data_text = repr(observation.data)
-            remaining = observation_budget - used_chars
-            if remaining <= 0:
-                break
-            if len(data_text) > remaining:
-                bounded_observations.append(
-                    replace(
-                        observation,
-                        data=(
-                            data_text[: max(0, remaining)]
-                            + " [semantic context truncated; observation remains canonical]"
-                        ),
-                    )
-                )
-                break
-            bounded_observations.append(observation)
-            used_chars += len(data_text)
+
+        user_budget = max(64, max_context_chars // 4)
+        user_input = _bound_text(str(state.get("user_input", "")), user_budget)
+        semantic_budget = max_context_chars - guidance_size - len(user_input)
+        observations, observation_size = self._latest_observations(
+            state.get("observations", ()), min(self.max_observations, semantic_budget // 2), semantic_budget
+        )
+
+        message_budget = max_context_chars - guidance_size - len(user_input) - observation_size
+        messages = self._latest_messages(state.get("messages", ()), message_budget)
+
         return AgentContext(
-            user_input=str(state.get("user_input", "")),
-            messages=tuple(state.get("messages", ())),
+            user_input=user_input,
+            messages=messages,
             runtime_structured=RuntimeStructuredContext(
                 request_id=state["request_id"],
                 thread_id=state["thread_id"],
@@ -118,8 +123,67 @@ class ContextBuilder:
                 content_hash=snapshot.content_hash,
                 principles=tuple(guidance),
             ),
-            semantic_observations=SemanticObservationContext(
-                observations=tuple(bounded_observations)
-            ),
+            semantic_observations=SemanticObservationContext(observations=observations),
             new_turn=bool(state.get("new_turn", False)),
         )
+
+    def _latest_observations(
+        self, observations: Any, limit: int, budget: int
+    ) -> tuple[tuple[ToolObservation, ...], int]:
+        selected = list(observations)[-self.max_observations :]
+        if limit <= 0 or budget <= 0:
+            return (), 0
+        kept: list[ToolObservation] = []
+        used = 0
+        # Walk backwards so the newest observation is never pushed out by old
+        # large logs. Restore chronological order for the Agent projection.
+        for observation in reversed(selected):
+            if len(kept) >= limit or used >= budget:
+                break
+            data_text = repr(observation.data)
+            remaining = budget - used
+            if len(data_text) > remaining:
+                bounded_data = _with_marker(
+                    data_text, remaining, " [semantic context truncated]"
+                )
+                kept.append(replace(observation, data=bounded_data))
+                used += len(bounded_data)
+                break
+            kept.append(observation)
+            used += len(data_text)
+        kept.reverse()
+        return tuple(kept), used
+
+    def _latest_messages(self, messages: Any, budget: int) -> tuple[dict[str, Any], ...]:
+        if budget <= 0:
+            return ()
+        kept: list[dict[str, Any]] = []
+        used = 0
+        for message in reversed(list(messages)[-self.max_messages :]):
+            if used >= budget:
+                break
+            row = dict(message) if isinstance(message, dict) else {"content": str(message)}
+            content = str(row.get("content", ""))
+            remaining = min(self.max_message_chars, budget - used)
+            bounded = _with_marker(content, remaining, " [message context truncated]")
+            row["content"] = bounded
+            kept.append(row)
+            used += len(bounded)
+        kept.reverse()
+        return tuple(kept)
+
+
+def _bound_text(value: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - len("…"))] + "…"
+
+
+def _with_marker(value: str, limit: int, marker: str) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= len(marker):
+        return _bound_text(value, limit)
+    return _bound_text(value, limit - len(marker)) + marker

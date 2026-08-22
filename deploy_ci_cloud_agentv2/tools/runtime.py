@@ -10,8 +10,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from ..agent.decisions import ReadToolBatch, ToolCall
-from ..agent.evidence import ToolObservation
-from ..agent.outcomes import TerminalCode
+from ..agent.evidence import ToolObservation, build_observation_provenance
 from .metadata import ToolKind
 from .registry import ToolRegistry
 
@@ -32,7 +31,15 @@ class ReadToolRuntime:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
 
+    def validate_single(self, call: ToolCall) -> None:
+        """Validate one proposed READ using the same guard as batch calls."""
+        self.registry.validate_call(call, require_read=True)
+        if not _arguments_are_concrete(call.arguments):
+            raise ValueError("tool arguments must be concrete before execution")
+
     def validate_batch(self, batch: ReadToolBatch, max_batch: int) -> None:
+        if not batch.calls:
+            raise ValueError("READ batch must contain at least one call")
         if len(batch.calls) > max_batch:
             raise ValueError(f"READ batch exceeds configured maximum {max_batch}")
         for call in batch.calls:
@@ -52,9 +59,10 @@ class ReadToolRuntime:
         max_retries: int,
         on_started=None,
     ) -> ToolObservation:
-        spec = self.registry.validate_call(call, require_read=True)
-        if not _arguments_are_concrete(call.arguments):
-            raise ValueError("tool arguments must be concrete before execution")
+        if max_retries < 0:
+            raise ValueError("max_retries is a non-negative per-call retry allowance")
+        self.validate_single(call)
+        spec = self.registry.spec(call.tool_name)
         retries = 0
         while True:
             if on_started is not None:
@@ -63,60 +71,48 @@ class ReadToolRuntime:
                     await maybe
             try:
                 data = await self.registry.call(call)
-                return ToolObservation(
-                    observation_id=f"obs_{uuid.uuid4().hex}",
-                    call_id=call.call_id,
-                    source=spec.name,
-                    target=_target_for(call),
+                return _observation(
+                    call,
+                    spec.name,
                     status="SUCCESS",
                     data=data,
                     retry_count=retries,
-                    observed_at=datetime.now(timezone.utc),
                 )
             except ReadFailure as exc:
                 if exc.retryable and retries < max_retries:
                     retries += 1
                     continue
-                return ToolObservation(
-                    observation_id=f"obs_{uuid.uuid4().hex}",
-                    call_id=call.call_id,
-                    source=spec.name,
-                    target=_target_for(call),
+                return _observation(
+                    call,
+                    spec.name,
                     status="READ_FAILURE",
                     data=None,
                     error_code=exc.error_code,
                     retryable=exc.retryable,
                     retry_count=retries,
-                    observed_at=datetime.now(timezone.utc),
                 )
             except TimeoutError as exc:
                 if retries < max_retries:
                     retries += 1
                     continue
-                return ToolObservation(
-                    observation_id=f"obs_{uuid.uuid4().hex}",
-                    call_id=call.call_id,
-                    source=spec.name,
-                    target=_target_for(call),
+                return _observation(
+                    call,
+                    spec.name,
                     status="READ_FAILURE",
                     data=None,
                     error_code="READ_TIMEOUT",
                     retryable=True,
                     retry_count=retries,
-                    observed_at=datetime.now(timezone.utc),
                 )
             except Exception as exc:  # external read errors become data, not authority
-                return ToolObservation(
-                    observation_id=f"obs_{uuid.uuid4().hex}",
-                    call_id=call.call_id,
-                    source=spec.name,
-                    target=_target_for(call),
+                return _observation(
+                    call,
+                    spec.name,
                     status="READ_FAILURE",
                     data=None,
                     error_code="READ_ERROR",
                     retryable=False,
                     retry_count=retries,
-                    observed_at=datetime.now(timezone.utc),
                 )
 
     async def execute_batch(
@@ -127,7 +123,12 @@ class ReadToolRuntime:
         max_batch: int | None = None,
         on_started=None,
     ) -> ReadBatchObservation:
-        self.validate_batch(batch, max_batch=max_batch or len(batch.calls))
+        if max_retries < 0:
+            raise ValueError("max_retries is a non-negative per-call retry allowance")
+        self.validate_batch(
+            batch,
+            max_batch=max_batch if max_batch is not None else len(batch.calls),
+        )
         results = await asyncio.gather(
             *(
                 self.execute_single(call, max_retries=max_retries, on_started=on_started)
@@ -156,3 +157,28 @@ def _target_for(call: ToolCall) -> str:
     if call.tool_name == "search_knowledge":
         return str(arguments.get("query", ""))
     return "platform"
+
+
+def _observation(
+    call: ToolCall,
+    source: str,
+    *,
+    status: str,
+    data: object | None,
+    error_code: str | None = None,
+    retryable: bool = False,
+    retry_count: int = 0,
+) -> ToolObservation:
+    return ToolObservation(
+        observation_id=f"obs_{uuid.uuid4().hex}",
+        call_id=call.call_id,
+        source=source,
+        target=_target_for(call),
+        status=status,
+        data=data,
+        error_code=error_code,
+        retryable=retryable,
+        retry_count=retry_count,
+        observed_at=datetime.now(timezone.utc),
+        provenance=build_observation_provenance(source, call.arguments, data),
+    )
