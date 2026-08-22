@@ -1,16 +1,26 @@
-"""Typed deterministic response contracts for the five Phase B READ tools.
+"""Strict deterministic response contracts for the five Phase B READ tools.
 
-This module is the boundary between an external mapping and Runtime-owned
-meaning.  A normalized result may preserve small external fields for semantic
-context, but evidence qualification consumes only these result objects.
+External mappings cross this boundary exactly once.  The parsers below use the
+shared field-contract primitives so a known malformed field can never be
+silently treated as absent.  EvidenceTracker consumes these typed results; it
+does not inspect the raw payload.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Mapping
 
+from .field_contract import (
+    collect_invalid,
+    read_optional_bool,
+    read_optional_enum,
+    read_optional_int,
+    read_optional_mapping,
+    read_optional_sequence,
+    read_optional_string,
+)
 from .provenance import ObservationScope, ScopeKind
 
 
@@ -44,7 +54,7 @@ class NormalizedReadResult:
 
     @property
     def is_valid(self) -> bool:
-        return self.envelope.is_success and not self.validation_errors
+        return self.envelope.status is ResultStatus.SUCCESS and not self.validation_errors
 
     def qualifies_for_evidence(self) -> bool:
         return False
@@ -124,13 +134,6 @@ class KnowledgeResult(NormalizedReadResult):
         )
 
 
-@dataclass(frozen=True)
-class QueueEntry:
-    task_name: str | None
-    position: int | None
-    state: "QueueState | None"
-
-
 class QueueState(str, Enum):
     QUEUED = "QUEUED"
     PENDING = "PENDING"
@@ -144,17 +147,26 @@ class QueueState(str, Enum):
 
 
 @dataclass(frozen=True)
+class QueueEntry:
+    task_name: str | None
+    position: int | None
+    state: QueueState | None
+
+
+@dataclass(frozen=True)
 class QueueResult(NormalizedReadResult):
     task_name: str | None = None
     position: int | None = None
     state: QueueState | None = None
     entries: tuple[QueueEntry, ...] = ()
+    meaningful: bool = False
 
     def qualifies_for_evidence(self) -> bool:
-        return self.is_valid and self.observed_scope.kind in {
-            ScopeKind.PLATFORM,
-            ScopeKind.TASK,
-        }
+        return (
+            self.is_valid
+            and self.meaningful
+            and self.observed_scope.kind in {ScopeKind.PLATFORM, ScopeKind.TASK}
+        )
 
 
 @dataclass(frozen=True)
@@ -191,136 +203,154 @@ _TASK_STATE_ALIASES = {
     "UNKNOWN": "UNKNOWN_EXTERNAL_STATE",
     "UNKNOWN_EXTERNAL_STATE": "UNKNOWN_EXTERNAL_STATE",
 }
-_TASK_STATES = {item.value for item in TaskState}
+_TASK_STATE_VALUES = {item.value: item for item in TaskState}
+_TASK_STATE_VALUES.update({name: TaskState(value) for name, value in _TASK_STATE_ALIASES.items()})
+_QUEUE_STATES = {item.value: item for item in QueueState}
 _EMPTY_DIAGNOSTIC_TEXT = {"no diagnostic facts", "no diagnostic finding", "none"}
+_SCOPE_VALUES = {
+    "PLATFORM": ScopeKind.PLATFORM,
+    "GLOBAL": ScopeKind.PLATFORM,
+    "TASK": ScopeKind.TASK,
+}
+_KNOWLEDGE_SCOPE_VALUES = {"QUERY": ScopeKind.QUERY, "KNOWLEDGE": ScopeKind.QUERY}
+_KNOWN_ENVELOPE_FIELDS = {
+    "success", "status", "available", "not_found", "error", "error_code", "message", "scope",
+}
+_COMMON_KNOWN_FIELDS = _KNOWN_ENVELOPE_FIELDS | {"entity_version"}
 
 
 def normalize_read_result(
     tool_name: str, arguments: Mapping[str, Any], raw: object
 ) -> NormalizedReadResult:
-    """Validate and normalize one known tool response without semantic inference."""
+    """Validate and normalize one known tool response."""
 
-    envelope = _envelope(raw)
     payload = raw if isinstance(raw, Mapping) else {}
+    envelope, envelope_errors = _envelope(raw)
     if tool_name == "get_task_detail":
-        return _task_detail(envelope, payload)
-    if tool_name == "get_gpu_pool":
-        return _gpu_pool(envelope, payload)
-    if tool_name == "search_knowledge":
-        return _knowledge(envelope, payload)
-    if tool_name == "get_queue_state":
-        return _queue(envelope, payload)
-    if tool_name == "diagnose_task":
-        return _diagnosis(envelope, payload)
-    return NormalizedReadResult(
-        ResultEnvelope(ResultStatus.MALFORMED, error_code="UNKNOWN_TOOL_RESULT"),
-        ObservationScope(ScopeKind.UNKNOWN),
-        ("unknown tool result contract",),
-    )
-
-
-def _envelope(raw: object) -> ResultEnvelope:
-    if not isinstance(raw, Mapping):
-        return ResultEnvelope(ResultStatus.MALFORMED, error_code="RESPONSE_NOT_OBJECT")
-    error_code = _text(raw.get("error_code"))
-    error_value = raw.get("error")
-    if raw.get("success") is False or error_code or error_value:
-        return ResultEnvelope(
-            ResultStatus.ERROR,
-            error_code=error_code or "EXTERNAL_ERROR",
-            message=_text(raw.get("message")) or _text(error_value),
+        result = _task_detail(envelope, payload)
+    elif tool_name == "get_gpu_pool":
+        result = _gpu_pool(envelope, payload)
+    elif tool_name == "search_knowledge":
+        result = _knowledge(envelope, payload)
+    elif tool_name == "get_queue_state":
+        result = _queue(envelope, payload)
+    elif tool_name == "diagnose_task":
+        result = _diagnosis(envelope, payload)
+    else:
+        return NormalizedReadResult(
+            ResultEnvelope(ResultStatus.MALFORMED, error_code="UNKNOWN_TOOL_RESULT"),
+            ObservationScope(ScopeKind.UNKNOWN),
+            ("unknown tool result contract",),
         )
-    marker = _text(raw.get("status"))
-    if marker:
-        marker = marker.upper()
+    if envelope_errors:
+        result = replace(
+            result,
+            envelope=ResultEnvelope(ResultStatus.MALFORMED, error_code="MALFORMED_ENVELOPE"),
+            validation_errors=tuple(envelope_errors) + result.validation_errors,
+        )
+    return result
+
+
+def _envelope(raw: object) -> tuple[ResultEnvelope, tuple[str, ...]]:
+    if not isinstance(raw, Mapping):
+        return ResultEnvelope(ResultStatus.MALFORMED, error_code="RESPONSE_NOT_OBJECT"), (
+            "response must be an object",
+        )
+    fields = {
+        "success": read_optional_bool(raw, "success"),
+        "status": read_optional_string(raw, "status"),
+        "available": read_optional_bool(raw, "available"),
+        "not_found": read_optional_bool(raw, "not_found"),
+        "error": read_optional_string(raw, "error"),
+        "error_code": read_optional_string(raw, "error_code"),
+        "message": read_optional_string(raw, "message"),
+    }
+    errors = collect_invalid(*fields.values())
+    if errors:
+        return ResultEnvelope(ResultStatus.MALFORMED, error_code="MALFORMED_ENVELOPE"), tuple(errors)
+    success = fields["success"].value if fields["success"].is_valid else None
+    status_marker = fields["status"].value if fields["status"].is_valid else None
+    error_code = fields["error_code"].value if fields["error_code"].is_valid else None
+    error_message = fields["error"].value if fields["error"].is_valid else None
+    message = fields["message"].value if fields["message"].is_valid else None
+    if success is False or error_code is not None or error_message is not None:
+        return ResultEnvelope(ResultStatus.ERROR, error_code=error_code or "EXTERNAL_ERROR", message=message or error_message), ()
+    if status_marker is not None:
+        marker = status_marker.upper()
         if marker in _ERROR_MARKERS:
-            return ResultEnvelope(ResultStatus.ERROR, error_code=marker)
+            return ResultEnvelope(ResultStatus.ERROR, error_code=marker, message=message), ()
         if marker in _NO_DATA_MARKERS:
             status = ResultStatus.NOT_FOUND if marker == "NOT_FOUND" else (
                 ResultStatus.EMPTY if marker in {"EMPTY", "EMPTY_RESULT"} else ResultStatus.NO_DATA
             )
-            return ResultEnvelope(status)
-        if marker == "OK" or marker == "SUCCESS":
-            return ResultEnvelope(ResultStatus.SUCCESS)
-        return ResultEnvelope(ResultStatus.MALFORMED, error_code="UNKNOWN_RESULT_STATUS")
-    if raw.get("not_found") is True:
-        return ResultEnvelope(ResultStatus.NOT_FOUND)
-    if raw.get("available") is False:
-        return ResultEnvelope(ResultStatus.UNAVAILABLE)
-    return ResultEnvelope(ResultStatus.SUCCESS)
+            return ResultEnvelope(status, message=message), ()
+        if marker not in {"OK", "SUCCESS"}:
+            return ResultEnvelope(ResultStatus.MALFORMED, error_code="UNKNOWN_RESULT_STATUS"), (
+                f"unknown result status: {status_marker}",
+            )
+    if fields["not_found"].is_valid and fields["not_found"].value is True:
+        return ResultEnvelope(ResultStatus.NOT_FOUND, message=message), ()
+    if fields["available"].is_valid and fields["available"].value is False:
+        return ResultEnvelope(ResultStatus.UNAVAILABLE, message=message), ()
+    return ResultEnvelope(ResultStatus.SUCCESS, message=message), ()
 
 
 def _task_detail(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> TaskDetailResult:
     errors: list[str] = []
-    task_name = _text(raw.get("task_name"))
-    state: TaskState | None = None
-    exists = raw.get("exists")
+    task_field = read_optional_string(raw, "task_name")
+    state_field = read_optional_enum(raw, "state", _TASK_STATE_VALUES)
+    exists_field = read_optional_bool(raw, "exists")
+    version_field = read_optional_string(raw, "entity_version")
+    errors.extend(collect_invalid(task_field, state_field, exists_field, version_field))
+    scope, scope_errors, _ = _observed_scope(raw, default=None, infer_platform=False)
+    errors.extend(scope_errors)
+    task_name = task_field.value if task_field.is_valid else None
+    state = state_field.value if state_field.is_valid else None
+    exists = exists_field.value if exists_field.is_valid else None
     if envelope.is_success:
-        if task_name is None:
+        if task_field.is_absent:
             errors.append("task_name is required")
-        if "exists" in raw and not isinstance(exists, bool):
-            errors.append("exists must be boolean")
-        if "state" not in raw:
+        if state_field.is_absent:
             errors.append("state is required")
-        else:
-            state = _task_state(raw.get("state"), errors)
         if exists is None and task_name is not None and state is not None:
             exists = True
-        if exists is False:
+        if exists is False and not errors:
             envelope = ResultEnvelope(ResultStatus.NOT_FOUND)
     return TaskDetailResult(
         envelope=envelope,
-        observed_scope=(
-            ObservationScope(ScopeKind.TASK, task_name)
-            if task_name is not None
-            else ObservationScope(ScopeKind.UNKNOWN)
-        ),
+        observed_scope=scope,
         validation_errors=tuple(errors),
-        entity_version=_text(raw.get("entity_version")),
+        entity_version=version_field.value if version_field.is_valid else None,
         task_name=task_name,
-        exists=exists if isinstance(exists, bool) else None,
+        exists=exists,
         state=state,
-        metadata={
-            key: value
-            for key, value in raw.items()
-            if key not in {"task_name", "exists", "state", "status", "success", "error_code", "error"}
-        },
+        metadata={key: value for key, value in raw.items() if key not in _COMMON_KNOWN_FIELDS | {"task_name", "state", "exists"}},
     )
-
-
-def _task_state(value: object, errors: list[str]) -> TaskState | None:
-    marker = _text(value)
-    if marker is None:
-        errors.append("state must be a non-empty string")
-        return None
-    normalized = _TASK_STATE_ALIASES.get(marker.upper(), marker.upper())
-    if normalized not in _TASK_STATES:
-        errors.append(f"unknown task state: {marker}")
-        return None
-    return TaskState(normalized)
 
 
 def _gpu_pool(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> GpuPoolResult:
     errors: list[str] = []
-    devices = _gpu_records(raw.get("devices"), "devices", errors)
-    reservations = _gpu_records(raw.get("reservations"), "reservations", errors)
-    if envelope.is_success and "devices" not in raw and "reservations" not in raw:
+    devices_field = read_optional_sequence(raw, "devices")
+    reservations_field = read_optional_sequence(raw, "reservations")
+    version_field = read_optional_string(raw, "entity_version")
+    errors.extend(collect_invalid(devices_field, reservations_field, version_field))
+    devices = _gpu_records(devices_field.value, "devices", errors) if devices_field.is_valid else ()
+    reservations = _gpu_records(reservations_field.value, "reservations", errors) if reservations_field.is_valid else ()
+    if envelope.is_success and devices_field.is_absent and reservations_field.is_absent:
         errors.append("devices or reservations is required")
-    scope, scope_errors = _observed_scope(raw, default=ScopeKind.PLATFORM)
+    scope, scope_errors, _ = _observed_scope(raw, default=ScopeKind.PLATFORM, infer_platform=False)
     errors.extend(scope_errors)
     return GpuPoolResult(
         envelope=envelope,
         observed_scope=scope,
         validation_errors=tuple(errors),
-        entity_version=_text(raw.get("entity_version")),
+        entity_version=version_field.value if version_field.is_valid else None,
         devices=devices,
         reservations=reservations,
     )
 
 
 def _gpu_records(value: object, field: str, errors: list[str]) -> tuple[GpuRecord, ...]:
-    if value is None:
-        return ()
     if not isinstance(value, list):
         errors.append(f"{field} must be a list")
         return ()
@@ -329,47 +359,47 @@ def _gpu_records(value: object, field: str, errors: list[str]) -> tuple[GpuRecor
         if not isinstance(item, Mapping):
             errors.append(f"{field}[{index}] must be an object")
             continue
-        identifier = _text(item.get("gpu_id")) or _text(item.get("device_id")) or _text(
-            item.get("reservation_id")
+        names = ("gpu_id", "device_id", "reservation_id")
+        fields = {name: read_optional_string(item, name) for name in names}
+        errors.extend(
+            f"{field}[{index}].{name}: {result.error or 'invalid field'}"
+            for name, result in fields.items()
+            if result.is_invalid
         )
-        if identifier is None:
+        identifiers = [result.value for result in fields.values() if result.is_valid and result.value is not None]
+        if not identifiers:
             errors.append(f"{field}[{index}] requires an identifier")
             continue
-        records.append(GpuRecord(identifier, dict(item)))
+        records.append(GpuRecord(identifiers[0], dict(item)))
     return tuple(records)
 
 
 def _knowledge(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> KnowledgeResult:
     errors: list[str] = []
-    query = _text(raw.get("query"))
-    if envelope.is_success and query is None:
-        errors.append("query is required")
-    raw_results = raw.get("results")
+    query_field = read_optional_string(raw, "query")
+    results_field = read_optional_sequence(raw, "results")
+    version_field = read_optional_string(raw, "entity_version")
+    scope_field = read_optional_enum(raw, "scope", _KNOWLEDGE_SCOPE_VALUES)
+    errors.extend(collect_invalid(query_field, results_field, version_field, scope_field))
+    if envelope.is_success:
+        if query_field.is_absent:
+            errors.append("query is required")
+        if results_field.is_absent:
+            errors.append("results is required")
     hits: list[KnowledgeHit] = []
-    if raw_results is None:
-        raw_results = []
-    if not isinstance(raw_results, list):
-        errors.append("results must be a list")
-    else:
-        for index, item in enumerate(raw_results):
+    if results_field.is_valid and results_field.value is not None:
+        for index, item in enumerate(results_field.value):
             if not isinstance(item, Mapping):
                 errors.append(f"results[{index}] must be an object")
                 continue
-            hits.append(
-                KnowledgeHit(
-                    title=_text(item.get("title")),
-                    content=(
-                        _text(item.get("content"))
-                        or _text(item.get("body"))
-                        or _text(item.get("text"))
-                        or _text(item.get("snippet"))
-                        or _text(item.get("summary"))
-                    ),
-                    source=_text(item.get("source")),
-                    url=_text(item.get("url")),
-                )
-            )
-    if query is None:
+            hit, hit_errors = _knowledge_hit(item, index)
+            errors.extend(hit_errors)
+            hits.append(hit)
+    query = query_field.value if query_field.is_valid else None
+    declared_scope = scope_field.value if scope_field.is_valid else None
+    if query is not None and declared_scope not in (None, ScopeKind.QUERY):
+        errors.append("knowledge response scope conflicts with QUERY")
+    if query is None or (declared_scope is not None and declared_scope is not ScopeKind.QUERY):
         scope = ObservationScope(ScopeKind.UNKNOWN)
     else:
         scope = ObservationScope(ScopeKind.QUERY, query)
@@ -377,202 +407,234 @@ def _knowledge(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> KnowledgeRes
         envelope=envelope,
         observed_scope=scope,
         validation_errors=tuple(errors),
-        entity_version=_text(raw.get("entity_version")),
+        entity_version=version_field.value if version_field.is_valid else None,
         query=query,
         hits=tuple(hits),
     )
 
 
+def _knowledge_hit(raw: Mapping[str, Any], index: int) -> tuple[KnowledgeHit, list[str]]:
+    errors: list[str] = []
+    fields = {
+        name: read_optional_string(raw, name)
+        for name in ("title", "source", "url", "content", "body", "text", "snippet", "summary")
+    }
+    errors.extend(
+        f"results[{index}].{name}: {result.error or 'invalid field'}"
+        for name, result in fields.items()
+        if result.is_invalid
+    )
+    content = None
+    for name in ("content", "body", "text", "snippet", "summary"):
+        result = fields[name]
+        if result.is_valid and result.value is not None:
+            content = result.value
+            break
+    return KnowledgeHit(
+        title=fields["title"].value if fields["title"].is_valid else None,
+        content=content,
+        source=fields["source"].value if fields["source"].is_valid else None,
+        url=fields["url"].value if fields["url"].is_valid else None,
+    ), errors
+
+
 def _queue(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> QueueResult:
     errors: list[str] = []
-    task_name = _text(raw.get("task_name"))
-    position = raw.get("position")
-    if position is not None and (not isinstance(position, int) or isinstance(position, bool) or position < 0):
-        errors.append("position must be a non-negative integer")
-        position = None
-    state = _queue_state(_text(raw.get("state")) or _text(raw.get("queue_state")), errors)
-    for field in ("active", "pending", "running"):
-        value = raw.get(field)
-        if value is not None and (
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-        ):
-            errors.append(f"{field} must be a non-negative integer")
+    task_field = read_optional_string(raw, "task_name")
+    position_field = read_optional_int(raw, "position", minimum=0)
+    version_field = read_optional_string(raw, "entity_version")
+    errors.extend(collect_invalid(task_field, position_field, version_field))
+    state, state_errors = _read_queue_state_fields(raw)
+    errors.extend(state_errors)
+    count_values: dict[str, int] = {}
+    for name in ("active", "waiting", "queued", "pending", "running"):
+        field_result = read_optional_int(raw, name, minimum=0)
+        errors.extend(collect_invalid(field_result))
+        if field_result.is_valid and field_result.value is not None:
+            count_values[name] = field_result.value
     entries: list[QueueEntry] = []
-    if "queue" in raw:
-        queue = raw["queue"]
-        if not isinstance(queue, list):
-            errors.append("queue must be a list")
-        else:
-            for index, item in enumerate(queue):
-                if not isinstance(item, Mapping):
-                    errors.append(f"queue[{index}] must be an object")
-                    continue
-                entry_position = item.get("position")
-                if entry_position is not None and (
-                    not isinstance(entry_position, int)
-                    or isinstance(entry_position, bool)
-                    or entry_position < 0
-                ):
-                    errors.append(f"queue[{index}].position must be non-negative integer")
-                    continue
-                entries.append(
-                    QueueEntry(
-                        _text(item.get("task_name")),
-                        entry_position,
-                        _queue_state(_text(item.get("state")), errors),
-                    )
-                )
-    if envelope.is_success and not any(
-        key in raw for key in ("queue", "position", "state", "queue_state", "active", "pending", "running")
-    ):
-        errors.append("queue result has no recognized state fields")
-    scope, scope_errors = _observed_scope(raw, default=None)
+    queue_field = read_optional_sequence(raw, "queue")
+    errors.extend(collect_invalid(queue_field))
+    if queue_field.is_valid and queue_field.value is not None:
+        for index, item in enumerate(queue_field.value):
+            entry, entry_errors = _queue_entry(item, index)
+            errors.extend(entry_errors)
+            if entry is not None:
+                entries.append(entry)
+    scope, scope_errors, _ = _observed_scope(raw, default=None, infer_platform=True)
     errors.extend(scope_errors)
-    if scope.kind is ScopeKind.TASK and scope.identity is None:
-        errors.append("task queue scope requires task_name")
+    meaningful = queue_field.is_valid or position_field.is_valid or state is not None or bool(count_values)
+    if envelope.is_success and not meaningful:
+        errors.append("queue result has no meaningful state value")
+    task_name = task_field.value if task_field.is_valid else None
     return QueueResult(
         envelope=envelope,
         observed_scope=scope,
         validation_errors=tuple(errors),
-        entity_version=_text(raw.get("entity_version")),
+        entity_version=version_field.value if version_field.is_valid else None,
         task_name=task_name,
-        position=position,
+        position=position_field.value if position_field.is_valid else None,
         state=state,
         entries=tuple(entries),
+        meaningful=meaningful,
     )
 
 
-def _observed_scope(
-    raw: Mapping[str, Any], default: ScopeKind | None
-) -> tuple[ObservationScope, list[str]]:
+def _queue_entry(value: object, index: int) -> tuple[QueueEntry | None, list[str]]:
     errors: list[str] = []
-    task_name = _text(raw.get("task_name"))
-    declared = _text(raw.get("scope"))
-    declared_kind: ScopeKind | None = None
-    if declared is not None:
-        declared_kind = {
-            "PLATFORM": ScopeKind.PLATFORM,
-            "GLOBAL": ScopeKind.PLATFORM,
-            "TASK": ScopeKind.TASK,
-        }.get(declared.upper())
-        if declared_kind is None:
-            errors.append(f"unknown scope: {declared}")
+    if not isinstance(value, Mapping):
+        return None, [f"queue[{index}] must be an object"]
+    task = read_optional_string(value, "task_name")
+    position = read_optional_int(value, "position", minimum=0)
+    state = read_optional_enum(value, "state", _QUEUE_STATES)
+    errors.extend(collect_invalid(task, position, state))
+    if not any(field.is_valid for field in (task, position, state)):
+        errors.append(f"queue[{index}] has no meaningful fields")
+    return QueueEntry(
+        task.value if task.is_valid else None,
+        position.value if position.is_valid else None,
+        state.value if state.is_valid else None,
+    ), errors
+
+
+def _read_queue_state_fields(raw: Mapping[str, Any]) -> tuple[QueueState | None, list[str]]:
+    state_field = read_optional_enum(raw, "state", _QUEUE_STATES)
+    queue_state_field = read_optional_enum(raw, "queue_state", _QUEUE_STATES)
+    local_errors = collect_invalid(state_field, queue_state_field)
+    values = [field.value for field in (state_field, queue_state_field) if field.is_valid and field.value is not None]
+    if len(values) == 2 and values[0] is not values[1]:
+        local_errors.append("state and queue_state conflict")
+    return (values[0] if values else None), local_errors
+
+
+def _observed_scope(
+    raw: Mapping[str, Any], *, default: ScopeKind | None, infer_platform: bool
+) -> tuple[ObservationScope, list[str], bool]:
+    errors: list[str] = []
+    task_field = read_optional_string(raw, "task_name")
+    scope_field = read_optional_enum(raw, "scope", _SCOPE_VALUES)
+    errors.extend(collect_invalid(task_field, scope_field))
+    if task_field.is_invalid or scope_field.is_invalid:
+        return ObservationScope(ScopeKind.UNKNOWN), errors, False
+    task_name = task_field.value if task_field.is_valid else None
+    declared = scope_field.value if scope_field.is_valid else None
     if task_name is not None:
-        observed = ObservationScope(ScopeKind.TASK, task_name)
-        if declared_kind is ScopeKind.PLATFORM:
+        if declared is ScopeKind.PLATFORM:
             errors.append("scope declares PLATFORM but task_name is present")
-        return observed, errors
-    if declared_kind is ScopeKind.TASK:
-        return ObservationScope(ScopeKind.UNKNOWN), errors + ["TASK scope missing task_name"]
-    if declared_kind is ScopeKind.PLATFORM:
-        return ObservationScope(ScopeKind.PLATFORM), errors
+        return ObservationScope(ScopeKind.TASK, task_name), errors, True
+    if declared is ScopeKind.TASK:
+        errors.append("TASK scope missing task_name")
+        return ObservationScope(ScopeKind.UNKNOWN), errors, True
+    if declared is ScopeKind.PLATFORM:
+        return ObservationScope(ScopeKind.PLATFORM), errors, True
     if default is not None:
-        return ObservationScope(default), errors
-    if "queue" in raw or any(key in raw for key in ("active", "pending", "running")):
-        return ObservationScope(ScopeKind.PLATFORM), errors
-    # A bare position is task-like but has no identity; fail closed rather than
-    # silently promoting it to platform scope.
-    return ObservationScope(ScopeKind.UNKNOWN), errors
-
-
-_QUEUE_STATES = {item.value: item for item in QueueState}
-
-
-def _queue_state(value: str | None, errors: list[str]) -> QueueState | None:
-    if value is None:
-        return None
-    normalized = _QUEUE_STATES.get(value.upper())
-    if normalized is None:
-        errors.append(f"unknown queue state: {value}")
-    return normalized
+        return ObservationScope(default), errors, True
+    if infer_platform and ("queue" in raw or any(name in raw for name in ("active", "waiting", "queued", "pending", "running"))):
+        return ObservationScope(ScopeKind.PLATFORM), errors, True
+    return ObservationScope(ScopeKind.UNKNOWN), errors, True
 
 
 def _diagnosis(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> DiagnosticResult:
     errors: list[str] = []
-    task_name = _text(raw.get("task_name"))
-    if envelope.is_success and task_name is None:
+    task_field = read_optional_string(raw, "task_name")
+    version_field = read_optional_string(raw, "entity_version")
+    errors.extend(collect_invalid(task_field, version_field))
+    scope, scope_errors, _ = _observed_scope(raw, default=None, infer_platform=False)
+    errors.extend(scope_errors)
+    if envelope.is_success and task_field.is_absent:
         errors.append("task_name is required")
     findings: list[DiagnosticFinding] = []
     for key in ("root_cause", "reason", "diagnosis", "anomaly", "error_condition", "finding"):
-        finding = _finding_from_value(raw.get(key))
+        if key not in raw:
+            continue
+        finding, finding_errors = _diagnostic_value(raw[key], key)
+        errors.extend(finding_errors)
         if finding is not None:
             findings.append(finding)
     for key in ("findings", "diagnostic_findings", "facts"):
-        value = raw.get(key)
-        if value is None:
+        if key not in raw:
             continue
-        if isinstance(value, list):
-            for index, item in enumerate(value):
-                finding = _finding_from_value(item)
-                if finding is None:
-                    errors.append(f"{key}[{index}] is not a diagnostic finding")
-                else:
+        sequence_field = read_optional_sequence(raw, key)
+        if sequence_field.is_valid and sequence_field.value is not None:
+            for index, item in enumerate(sequence_field.value):
+                finding, finding_errors = _diagnostic_value(item, f"{key}[{index}]")
+                errors.extend(finding_errors)
+                if finding is not None:
                     findings.append(finding)
-        elif isinstance(value, Mapping):
-            finding = _finding_from_value(value)
+            continue
+        mapping_field = read_optional_mapping(raw, key)
+        if mapping_field.is_invalid:
+            errors.append(mapping_field.error or f"{key} must be an object or list")
+        elif mapping_field.is_valid and mapping_field.value is not None:
+            finding, finding_errors = _diagnostic_mapping(mapping_field.value, key)
+            errors.extend(finding_errors)
             if finding is not None:
                 findings.append(finding)
-            elif key in {"findings", "diagnostic_findings"}:
-                errors.append(f"{key} is not a diagnostic finding")
-        else:
-            errors.append(f"{key} must be an object or list")
-    scope = (
-        ObservationScope(ScopeKind.TASK, task_name)
-        if task_name is not None
-        else ObservationScope(ScopeKind.UNKNOWN)
-    )
+    task_name = task_field.value if task_field.is_valid else None
     return DiagnosticResult(
         envelope=envelope,
         observed_scope=scope,
         validation_errors=tuple(errors),
-        entity_version=_text(raw.get("entity_version")),
+        entity_version=version_field.value if version_field.is_valid else None,
         task_name=task_name,
         findings=tuple(findings),
     )
 
 
-def _finding_from_value(value: object) -> DiagnosticFinding | None:
+def _diagnostic_value(value: object, name: str) -> tuple[DiagnosticFinding | None, list[str]]:
     if isinstance(value, str):
-        message = value.strip()
-        if not message or message.lower() in _EMPTY_DIAGNOSTIC_TEXT:
-            return None
-        return DiagnosticFinding(message=message)
-    if not isinstance(value, Mapping):
-        return None
-    message = (
-        _text(value.get("message"))
-        or _text(value.get("description"))
-        or _text(value.get("finding"))
-        or _text(value.get("root_cause"))
-        or _text(value.get("reason"))
+        text = value.strip()
+        if not text:
+            return None, [f"{name} must be non-empty"]
+        if text.lower() in _EMPTY_DIAGNOSTIC_TEXT:
+            return None, []
+        return DiagnosticFinding(message=text), []
+    if isinstance(value, Mapping):
+        return _diagnostic_mapping(value, name)
+    return None, [f"{name} must be a string or object"]
+
+
+def _diagnostic_mapping(value: Mapping[str, Any], name: str) -> tuple[DiagnosticFinding | None, list[str]]:
+    errors: list[str] = []
+    string_names = ("message", "description", "finding", "root_cause", "reason", "code", "category")
+    fields = {field_name: read_optional_string(value, field_name) for field_name in string_names}
+    errors.extend(
+        f"{name}.{field_name}: {field.error or 'invalid field'}"
+        for field_name, field in fields.items()
+        if field.is_invalid
     )
-    if message is None or message.lower() in _EMPTY_DIAGNOSTIC_TEXT:
-        return None
-    refs = value.get("supporting_fact_refs", ())
-    if not isinstance(refs, (list, tuple)) or any(not isinstance(item, str) or not item.strip() for item in refs):
-        refs = ()
+    refs = read_optional_sequence(value, "supporting_fact_refs")
+    if refs.is_invalid:
+        errors.append(refs.error or f"{name}.supporting_fact_refs is invalid")
+    refs_value: tuple[str, ...] = ()
+    if refs.is_valid and refs.value is not None:
+        converted: list[str] = []
+        for index, item in enumerate(refs.value):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"{name}.supporting_fact_refs[{index}] must be a non-empty string")
+            else:
+                converted.append(item.strip())
+        refs_value = tuple(converted)
+    if errors:
+        return None, errors
+    message = next(
+        (fields[field_name].value for field_name in ("message", "description", "finding", "root_cause", "reason") if fields[field_name].is_valid and fields[field_name].value is not None),
+        None,
+    )
+    if message is None:
+        return None, []
+    if message.lower() in _EMPTY_DIAGNOSTIC_TEXT:
+        return None, []
     return DiagnosticFinding(
         message=message,
-        code=_text(value.get("code")),
-        category=_text(value.get("category")),
-        supporting_fact_refs=tuple(item.strip() for item in refs),
-    )
-
-
-def _text(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
+        code=fields["code"].value if fields["code"].is_valid else None,
+        category=fields["category"].value if fields["category"].is_valid else None,
+        supporting_fact_refs=refs_value,
+    ), []
 
 
 def normalize_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize and enforce semantic constraints before execution/fingerprints.
-
-    This is intentionally an explicit Phase B READ boundary, not a generic
-    schema inference engine.  Whitespace-only identifiers are invalid and
-    ``None`` is the sole representation of a global queue request.
-    """
+    """Normalize and enforce semantic constraints before execution/fingerprints."""
 
     if not isinstance(arguments, Mapping):
         raise ValueError("tool arguments must be a mapping")

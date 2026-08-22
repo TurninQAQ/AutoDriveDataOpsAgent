@@ -200,26 +200,12 @@ def _observation(
     if transport_status is not TransportStatus.SUCCESS:
         result = None
     provenance = build_provenance(source, call.arguments, result)
-    if transport_status is not TransportStatus.SUCCESS:
-        disposition = ObservationDisposition.TRANSPORT_FAILURE
-    elif result is None:
-        disposition = ObservationDisposition.MALFORMED
-    elif result.envelope.status in {
-        ResultStatus.NOT_FOUND,
-        ResultStatus.NO_DATA,
-        ResultStatus.UNAVAILABLE,
-        ResultStatus.EMPTY,
-    }:
-        disposition = ObservationDisposition.ABSENT
-    elif result.envelope.status is ResultStatus.ERROR:
-        disposition = ObservationDisposition.EXTERNAL_ERROR
-    elif result.validation_errors or not result.is_valid:
-        disposition = ObservationDisposition.MALFORMED
-    elif result.qualifies_for_evidence():
-        disposition = ObservationDisposition.NORMALIZED
-    else:
-        disposition = ObservationDisposition.NORMALIZED_NO_QUALIFIED_EVIDENCE
-    validation_error = "RESULT_VALIDATION_FAILED" if result is not None and result.validation_errors else error_code
+    disposition = classify_normalized_result(result, transport_status)
+    validation_error = (
+        "; ".join(result.validation_errors)
+        if result is not None and result.validation_errors
+        else error_code
+    )
     return ToolObservation(
         observation_id=f"obs_{uuid.uuid4().hex}",
         call_id=call.call_id,
@@ -236,3 +222,28 @@ def _observation(
         provenance=provenance,
         result=result,
     )
+
+
+def classify_normalized_result(result, transport_status: TransportStatus) -> ObservationDisposition:
+    """Map transport and validated-result state to an observation disposition.
+
+    Validation errors are checked before semantic envelope status.  Therefore a
+    malformed field in a nominal ``NO_DATA``/``ERROR`` response cannot be
+    downgraded to an ordinary absence/error envelope.
+    """
+    if transport_status is not TransportStatus.SUCCESS:
+        return ObservationDisposition.TRANSPORT_FAILURE
+    if result is None or result.validation_errors or result.envelope.status is ResultStatus.MALFORMED:
+        return ObservationDisposition.MALFORMED
+    if result.envelope.status is ResultStatus.ERROR:
+        return ObservationDisposition.EXTERNAL_ERROR
+    if result.envelope.status in {
+        ResultStatus.NOT_FOUND,
+        ResultStatus.NO_DATA,
+        ResultStatus.UNAVAILABLE,
+        ResultStatus.EMPTY,
+    }:
+        return ObservationDisposition.ABSENT
+    if result.qualifies_for_evidence():
+        return ObservationDisposition.NORMALIZED
+    return ObservationDisposition.NORMALIZED_NO_QUALIFIED_EVIDENCE

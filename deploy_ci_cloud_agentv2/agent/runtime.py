@@ -16,6 +16,7 @@ from .gate import ResponseCompletionGate
 from .graph import GraphDependencies, build_graph
 from .principles import load_operating_principles
 from .state import AgentState, InMemoryCheckpointer, LatestStateHolder, new_state
+from .outcomes import ControlledTerminalOutcome, TerminalCode
 from ..platform.facade import InMemoryReadFacade, ReadFacade
 from ..providers.deterministic import DeterministicReadAgent
 from ..providers.model import AgentProvider
@@ -140,6 +141,7 @@ async def invoke(
         policy_version=system_context.policy_version,
         latest_state_holder=latest_state,
     )
+    runtime_terminal: ControlledTerminalOutcome | None = None
     try:
         graph = build_graph(dependencies)
         final_state = await graph.ainvoke(
@@ -148,43 +150,72 @@ async def invoke(
         )
         latest_state.record(final_state)
     except Exception as exc:
-        from .outcomes import ControlledTerminalOutcome, TerminalCode
-
-        terminal = ControlledTerminalOutcome(
+        runtime_terminal = ControlledTerminalOutcome(
             code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
             safe_facts={"graph_error_type": type(exc).__name__},
             message_template="The runtime could not safely complete this interaction.",
         )
         final_state = latest_state.current() or dict(state)
-        final_state["current_request"] = replace(
+        terminal_state = replace(
             final_state["current_request"],
-            terminal_state=terminal,
-            termination_reason=terminal.code.value,
+            terminal_state=runtime_terminal,
+            termination_reason=runtime_terminal.code.value,
             decision=None,
             final_candidate=None,
         )
-        terminal_event = system_context.event_store.append(
-            event_type="ControlledTerminalOutcomeProduced",
-            request_id=final_state["current_request"].identity.request_id,
-            thread_id=final_state["thread_id"],
-            payload={"code": terminal.code.value, "safe_facts": terminal.safe_facts},
-            provenance=provenance,
-        )
+        try:
+            terminal_event = system_context.event_store.append(
+                event_type="ControlledTerminalOutcomeProduced",
+                request_id=terminal_state.identity.request_id,
+                thread_id=final_state["thread_id"],
+                payload={"code": runtime_terminal.code.value, "safe_facts": runtime_terminal.safe_facts},
+                provenance=provenance,
+                causation_id=final_state.get("last_event_id"),
+            )
+        except Exception:
+            # The durable tail remains the only returned/checkpointable state.
+            # There is deliberately no synthetic terminal state or completion
+            # event when the terminal audit append itself failed.
+            return _result_from_state(
+                thread_id,
+                final_state,
+                status="CONTROLLED_TERMINAL",
+                terminal_outcome=runtime_terminal,
+            )
+        final_state = dict(final_state)
+        final_state["current_request"] = terminal_state
         final_state["last_event_id"] = terminal_event.event_id
         latest_state.record(final_state)
     final_current = final_state["current_request"]
     terminal = final_current.terminal_state
     passed = bool(final_current.gate_passed)
     status = "COMPLETED" if passed else "CONTROLLED_TERMINAL" if terminal else "ERROR"
-    completed_event = system_context.event_store.append(
-        event_type="AgentRunCompleted",
-        request_id=final_current.identity.request_id,
-        thread_id=thread_id,
-        payload={"status": status, "termination_reason": final_current.termination_reason},
-        provenance=provenance,
-        causation_id=final_state.get("last_event_id"),
-    )
+    try:
+        completed_event = system_context.event_store.append(
+            event_type="AgentRunCompleted",
+            request_id=final_current.identity.request_id,
+            thread_id=thread_id,
+            payload={"status": status, "termination_reason": final_current.termination_reason},
+            provenance=provenance,
+            causation_id=final_state.get("last_event_id"),
+        )
+    except Exception:
+        # AgentRunCompleted is itself a durable transition.  Do not checkpoint
+        # a state claiming completion when the audit tail lacks that event.
+        fallback = latest_state.current() or final_state
+        failure = ControlledTerminalOutcome(
+            code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
+            safe_facts={"runtime_failure": "AgentRunCompleted append failed"},
+            message_template="The runtime could not durably record completion.",
+        )
+        return _result_from_state(
+            thread_id,
+            fallback,
+            status="CONTROLLED_TERMINAL",
+            terminal_outcome=failure,
+        )
     final_state["last_event_id"] = completed_event.event_id
+    latest_state.record(final_state)
     # The completed event is part of the canonical terminal transition. Save
     # only after linking that event into state, so a checkpoint cannot lag the
     # audit trace by one event.
@@ -198,6 +229,27 @@ async def invoke(
         goal_outcomes=tuple(final_current.goal_outcomes.values()),
         terminal_outcome=terminal,
         state=final_state,
+    )
+
+
+def _result_from_state(
+    thread_id: str,
+    state: AgentState,
+    *,
+    status: str,
+    terminal_outcome: ControlledTerminalOutcome,
+) -> AgentRunResult:
+    """Return a fail-closed result without saving a state ahead of the audit tail."""
+    current = state["current_request"]
+    candidate = current.final_candidate
+    return AgentRunResult(
+        thread_id=thread_id,
+        request_id=current.identity.request_id,
+        status=status,
+        response=None,
+        goal_outcomes=tuple(current.goal_outcomes.values()),
+        terminal_outcome=terminal_outcome,
+        state=state,
     )
 
 

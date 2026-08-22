@@ -159,21 +159,27 @@ def build_graph(dependencies: GraphDependencies):
                 else "GoalDescriptorRevised"
             )
             contract = dependencies.compiler.compile(descriptor)
-            current = replace(
+            descriptor_current = replace(
                 current,
                 goal_descriptor=descriptor,
-                completion_contract=contract,
-                goal_outcomes={goal.goal_id: GoalOutcome(goal.goal_id) for goal in descriptor.goals},
+                completion_contract=None,
+                goal_outcomes={},
             )
             event = _emit(
                 state,
                 dependencies,
                 event_type,
                 {"descriptor": descriptor.to_dict()},
-                current=current,
+                current=descriptor_current,
                 causation_id=last_event_id,
             )
             last_event_id = event.event_id
+            current = descriptor_current
+            contract_current = replace(
+                current,
+                completion_contract=contract,
+                goal_outcomes={goal.goal_id: GoalOutcome(goal.goal_id) for goal in descriptor.goals},
+            )
             contract_event = _emit(
                 state,
                 dependencies,
@@ -183,10 +189,11 @@ def build_graph(dependencies: GraphDependencies):
                     "contract_version": contract.contract_version,
                     "contract_fingerprint": contract.contract_fingerprint,
                 },
-                current=current,
+                current=contract_current,
                 causation_id=last_event_id,
             )
             last_event_id = contract_event.event_id
+            current = contract_current
 
         guard_reason = descriptor_error or _read_guard_reason(
             decision,
@@ -195,6 +202,11 @@ def build_graph(dependencies: GraphDependencies):
         )
         if guard_reason is None and current.goal_descriptor is None and descriptor is None:
             guard_reason = "Agent did not declare a structured GoalDescriptor"
+        accepted_current = replace(
+            current,
+            decision=decision if guard_reason is None else None,
+            final_candidate=decision if guard_reason is None and isinstance(decision, FinalCandidate) else None,
+        )
         decision_event = _emit(
             state,
             dependencies,
@@ -204,7 +216,7 @@ def build_graph(dependencies: GraphDependencies):
                 "accepted": guard_reason is None,
                 "rejection_reason": guard_reason,
             },
-            current=current,
+            current=accepted_current,
             causation_id=last_event_id,
         )
         last_event_id = decision_event.event_id
@@ -216,11 +228,7 @@ def build_graph(dependencies: GraphDependencies):
             _remember(dependencies, state, result)
             return result
 
-        current = replace(
-            current,
-            decision=decision,
-            final_candidate=decision if isinstance(decision, FinalCandidate) else None,
-        )
+        current = accepted_current
         if isinstance(decision, FinalCandidate):
             final_event = _emit(
                 state,
@@ -315,18 +323,22 @@ def build_graph(dependencies: GraphDependencies):
             outcomes = dependencies.evidence_tracker.refresh_goal_outcomes(
                 current.goal_descriptor, current.completion_contract, new_evidence, outcomes
             )
-        current = replace(
+        observation_current = replace(
             current,
             budgets=budget.with_read_calls(len(calls)).with_retries(
                 sum(item.retry_count for item in observations)
             ),
             tool_call_count=current.tool_call_count + len(calls),
-            observations=current.observations + observations,
-            evidence=new_evidence,
-            goal_outcomes=outcomes,
+            observations=current.observations,
+            evidence=current.evidence,
+            goal_outcomes=current.goal_outcomes,
             decision=None,
         )
         for observation in observations:
+            observation_current = replace(
+                observation_current,
+                observations=observation_current.observations + (observation,),
+            )
             event = _emit(
                 state,
                 dependencies,
@@ -346,11 +358,20 @@ def build_graph(dependencies: GraphDependencies):
                     else None,
                     "data": observation.data,
                 },
-                current=current,
+                current=observation_current,
                 causation_id=last_event_id,
             )
             last_event_id = event.event_id
+        current = observation_current
+        evidence_current = current
         for record in created:
+            evidence_current = replace(
+                evidence_current,
+                evidence=type(current.evidence)(
+                    owner=current.identity,
+                    records=evidence_current.evidence.records + (record,),
+                ),
+            )
             event = _emit(
                 state,
                 dependencies,
@@ -364,11 +385,16 @@ def build_graph(dependencies: GraphDependencies):
                     "provenance": asdict(record.provenance),
                     "freshness": asdict(record.freshness),
                 },
-                current=current,
+                current=evidence_current,
                 causation_id=last_event_id,
             )
             last_event_id = event.event_id
+        current = evidence_current
+        outcome_current = current
         for outcome in outcomes.values():
+            goal_outcomes = dict(outcome_current.goal_outcomes)
+            goal_outcomes[outcome.goal_id] = outcome
+            outcome_current = replace(outcome_current, goal_outcomes=goal_outcomes)
             event = _emit(
                 state,
                 dependencies,
@@ -378,10 +404,11 @@ def build_graph(dependencies: GraphDependencies):
                     "status": outcome.status.value,
                     "evidence_refs": list(outcome.evidence_refs),
                 },
-                current=current,
+                current=outcome_current,
                 causation_id=last_event_id,
             )
             last_event_id = event.event_id
+        current = outcome_current
         result = {"current_request": current, "last_event_id": last_event_id}
         _remember(dependencies, state, result)
         return result
@@ -405,6 +432,13 @@ def build_graph(dependencies: GraphDependencies):
             candidate, descriptor, contract, current.evidence, current.goal_outcomes
         )
         last_event_id = state.get("last_event_id")
+        rejected_budget = current.budgets.with_gate_rejection() if not evaluation.passed else current.budgets
+        gate_current = replace(
+            current,
+            gate_passed=evaluation.passed,
+            budgets=rejected_budget,
+            gate_feedback=tuple(evaluation.facts + evaluation.missing) if not evaluation.passed else current.gate_feedback,
+        )
         gate_event = _emit(
             state,
             dependencies,
@@ -415,16 +449,16 @@ def build_graph(dependencies: GraphDependencies):
                 "missing": list(evaluation.missing),
                 "referenced_goal_ids": list(candidate.referenced_goal_ids),
             },
-            current=current,
+            current=gate_current,
             causation_id=last_event_id,
         )
         last_event_id = gate_event.event_id
-        current = replace(
-            current,
-            goal_outcomes=evaluation.goal_outcomes,
-            gate_passed=evaluation.passed,
-        )
+        current = gate_current
+        outcome_current = current
         for outcome in evaluation.goal_outcomes.values():
+            goal_outcomes = dict(outcome_current.goal_outcomes)
+            goal_outcomes[outcome.goal_id] = outcome
+            outcome_current = replace(outcome_current, goal_outcomes=goal_outcomes)
             event = _emit(
                 state,
                 dependencies,
@@ -434,15 +468,16 @@ def build_graph(dependencies: GraphDependencies):
                     "status": outcome.status.value,
                     "evidence_refs": list(outcome.evidence_refs),
                 },
-                current=current,
+                current=outcome_current,
                 causation_id=last_event_id,
             )
             last_event_id = event.event_id
+        current = outcome_current
         if evaluation.passed:
             result = {"current_request": current, "last_event_id": last_event_id}
             _remember(dependencies, state, result)
             return result
-        budget = current.budgets.with_gate_rejection()
+        budget = current.budgets
         if budget.completion_gate_rejections > budget.limits.max_completion_gate_rejections:
             return _terminal_update(
                 state,
@@ -458,11 +493,6 @@ def build_graph(dependencies: GraphDependencies):
                 budgets=budget,
                 causation_id=last_event_id,
             )
-        current = replace(
-            current,
-            budgets=budget,
-            gate_feedback=tuple(evaluation.facts + evaluation.missing),
-        )
         result = {"current_request": current, "last_event_id": last_event_id}
         _remember(dependencies, state, result)
         return result
@@ -566,6 +596,15 @@ def _read_guard_update(
             scope_status=ScopeStatus.UNKNOWN,
         ),
     )
+    updated = replace(
+        current,
+        budgets=budgets,
+        decision=None,
+        final_candidate=None,
+        observations=current.observations + (observation,),
+        gate_feedback=(f"READ_GUARD_REJECTED: {reason}",),
+        continue_after_read_guard=True,
+    )
     event = _emit(
         state,
         dependencies,
@@ -580,17 +619,8 @@ def _read_guard_update(
             "error_code": observation.error_code,
             "data": observation.data,
         },
-        current=current,
+        current=updated,
         causation_id=last_event_id or state.get("last_event_id"),
-    )
-    updated = replace(
-        current,
-        budgets=budgets,
-        decision=None,
-        final_candidate=None,
-        observations=current.observations + (observation,),
-        gate_feedback=(f"READ_GUARD_REJECTED: {reason}",),
-        continue_after_read_guard=True,
     )
     return {"current_request": updated, "last_event_id": event.event_id}
 

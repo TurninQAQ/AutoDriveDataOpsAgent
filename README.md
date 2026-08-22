@@ -40,7 +40,11 @@ typed results for the five READ tools, then scope/identity provenance is
 validated before evidence qualification. Canonical evidence remains complete;
 the Agent receives only a bounded metadata projection that preserves current
 contract-relevant evidence. `None` is the only global queue scope value;
-whitespace identifiers and malformed result envelopes are rejected.
+whitespace identifiers and malformed result envelopes are rejected. Known
+response fields use strict `ABSENT` / `PRESENT_VALID` / `PRESENT_INVALID`
+semantics, so wrong types cannot be reinterpreted as missing data. Audit events
+are appended before their corresponding state projection is committed; an
+append failure returns the last durable state without fabricating completion.
 
 Run the local tests from the repository root:
 

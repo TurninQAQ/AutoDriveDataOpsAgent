@@ -9,6 +9,7 @@ from deploy_ci_cloud_agentv2.agent.identity import RequestIdentity
 from deploy_ci_cloud_agentv2.agent.provenance import build_provenance
 from deploy_ci_cloud_agentv2.agent.results import normalize_read_result
 from deploy_ci_cloud_agentv2.agent.results import ResultStatus
+from deploy_ci_cloud_agentv2.tools.runtime import classify_normalized_result
 
 
 def identity(thread_id="thread", request_id="request", turn_id="turn"):
@@ -26,25 +27,7 @@ def observation(
 ):
     owner = owner or identity()
     result = normalize_read_result(tool, arguments, payload) if transport_status is TransportStatus.SUCCESS else None
-    if transport_status is not TransportStatus.SUCCESS:
-        disposition = ObservationDisposition.TRANSPORT_FAILURE
-    elif result is None:
-        disposition = ObservationDisposition.MALFORMED
-    elif result.envelope.status in {
-        ResultStatus.NOT_FOUND,
-        ResultStatus.NO_DATA,
-        ResultStatus.UNAVAILABLE,
-        ResultStatus.EMPTY,
-    }:
-        disposition = ObservationDisposition.ABSENT
-    elif result.envelope.status is ResultStatus.ERROR:
-        disposition = ObservationDisposition.EXTERNAL_ERROR
-    elif result.validation_errors or not result.is_valid:
-        disposition = ObservationDisposition.MALFORMED
-    elif result.qualifies_for_evidence():
-        disposition = ObservationDisposition.NORMALIZED
-    else:
-        disposition = ObservationDisposition.NORMALIZED_NO_QUALIFIED_EVIDENCE
+    disposition = classify_normalized_result(result, transport_status)
     return ToolObservation(
         observation_id=observation_id,
         call_id=f"call-{observation_id}",

@@ -61,7 +61,23 @@ class AgentContext:
     semantic_observations: SemanticObservationContext
     thread_history: tuple[HistoricalRequestProjection, ...]
     new_turn: bool
-    estimated_context_chars: int
+
+    def model_facing_payload(self) -> tuple[Any, ...]:
+        """The exact immutable representation delivered to the provider."""
+        return (
+            self.user_input,
+            self.messages,
+            self.runtime_structured,
+            self.operating_guidance,
+            self.semantic_observations,
+            self.thread_history,
+            self.new_turn,
+        )
+
+    @property
+    def estimated_context_chars(self) -> int:
+        # Telemetry is derived from, and never added to, the model payload.
+        return len(repr(self.model_facing_payload()))
 
 
 class ContextBuilder:
@@ -96,6 +112,7 @@ class ContextBuilder:
             max_records=min(64, max(1, projection_budget // 160)),
             max_chars=projection_budget,
         )
+        bounded_gate_feedback = tuple(current.gate_feedback[:8])
         critical_structured = {
             "identity": current.identity,
             "goal_descriptor": current.goal_descriptor,
@@ -104,7 +121,7 @@ class ContextBuilder:
             "evidence": evidence_projection,
             "budgets": current.budgets,
             "terminal_state": current.terminal_state,
-            "gate_feedback": current.gate_feedback[:8],
+            "gate_feedback": bounded_gate_feedback,
         }
         structured_cost = len(repr(critical_structured))
         if structured_cost >= max_context_chars:
@@ -153,7 +170,7 @@ class ContextBuilder:
             evidence=evidence_projection,
             budgets=current.budgets,
             terminal_state=current.terminal_state,
-            gate_feedback=current.gate_feedback,
+            gate_feedback=bounded_gate_feedback,
             new_turn=current.new_turn,
         )
         guidance_context = OperatingGuidanceContext(
@@ -162,7 +179,7 @@ class ContextBuilder:
             principles=tuple(guidance),
         )
         semantic_context = SemanticObservationContext(observations=observations)
-        provisional = AgentContext(
+        final_context = AgentContext(
             user_input=user_input,
             messages=messages,
             runtime_structured=runtime_structured,
@@ -170,24 +187,13 @@ class ContextBuilder:
             semantic_observations=semantic_context,
             thread_history=history_projection,
             new_turn=current.new_turn,
-            estimated_context_chars=0,
         )
-        # The budget applies to the complete provider-facing projection, not
-        # just message content.  repr() is an intentional deterministic,
-        # dependency-free approximation for this offline Phase B boundary.
-        estimated = len(repr(provisional))
-        if estimated > max_context_chars:
+        # The budget applies to the exact object passed to the provider.  The
+        # same immutable payload is measured here; no provisional object or
+        # telemetry field can diverge from what the provider receives.
+        if final_context.estimated_context_chars > max_context_chars:
             raise ContextBudgetExceeded("Agent-facing projection exceeded the full context budget")
-        return AgentContext(
-            user_input=user_input,
-            messages=messages,
-            runtime_structured=runtime_structured,
-            operating_guidance=guidance_context,
-            semantic_observations=semantic_context,
-            thread_history=history_projection,
-            new_turn=current.new_turn,
-            estimated_context_chars=estimated,
-        )
+        return final_context
 
     def _history_projection(self, history: ThreadHistory) -> tuple[HistoricalRequestProjection, ...]:
         selected = history.requests[-self.max_history_requests :]
