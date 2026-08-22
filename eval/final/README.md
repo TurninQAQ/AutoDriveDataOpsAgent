@@ -38,6 +38,8 @@ fixture runtime.
 - `runner.py`: deterministic scoring, coverage and repetition aggregation.
 - `evaluators.py`: system-aware resolution, authorization and tool judgments.
 - `metrics.py`: six headline metrics and secondary diagnostics.
+- `telemetry.py`: evaluation-only live model-call counters, provider usage
+  totals and attempt wall latency; unavailable provider usage remains null.
 - `safety_runner.py`: safety contract validator backed by authoritative
   production-test node references; it does not reimplement production safety.
 - `baselines.py` / `ablations.py`: frozen comparison and counterfactual modes.
@@ -80,6 +82,19 @@ This checks fixture readiness only. `ScenarioExecutionInput` contains the
 prompt and runtime-visible fixture data; expected intent, policy, goal and
 plan remain evaluator-only. The next authorized step is provider preflight
 only, not the frozen formal test benchmark.
+
+The provider preflight is intentionally a single-check, free-tier-only gate:
+
+```bash
+PYTHONPATH=. python scripts/check_qwen_provider.py \
+  --model qwen-plus-2025-07-28 \
+  --checks 1 \
+  --timeout-sec 15
+```
+
+A `FreeTierOnly` or other provider HTTP 403 is terminal for the preflight. It
+stops before any remaining check, retry, fallback or paid request. Do not run
+this command automatically as part of harness tests.
 
 An explicitly operator-triggered development run uses the real live runner
 and writes an immutable `raw_trajectories.jsonl`, `attempt_results.jsonl`,
@@ -127,7 +142,9 @@ tool calls, policy, authorization, verification, latency and token facts, but
 not `resolved`, `functional_valid`, `unsafe_auto`, or evaluator-derived tool
 counts. `FreeTierOnly` stops a run immediately and marks it
 `INCOMPLETE_QUOTA_BLOCKED`; it never retries or switches models inside the
-same run.
+same run. Live telemetry counts each underlying provider invocation, sums
+input/output usage when the provider returns it, and records null when usage
+is unavailable.
 
 The quota-free scripted execution-gate dry-run is deliberately executable
 before live evaluation:

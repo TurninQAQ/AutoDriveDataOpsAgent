@@ -93,9 +93,16 @@ def compute_headline_metrics(records: Iterable[Mapping[str, Any]], *, baseline_h
     if baseline_hitl_count is not None:
         reduction = {"baseline": baseline_hitl_count, "full": hitl_count, "absolute": baseline_hitl_count - hitl_count, "rate": (baseline_hitl_count - hitl_count) / baseline_hitl_count if baseline_hitl_count else None}
     goal = goal_confusion(goal_rows)
-    latencies = [float(row["latency_ms"]) for row in rows if row.get("latency_ms") is not None]
+    latencies = [float(row["attempt_wall_latency_ms"] if row.get("attempt_wall_latency_ms") is not None else row["latency_ms"]) for row in rows if row.get("attempt_wall_latency_ms") is not None or row.get("latency_ms") is not None]
+    llm_calls = [float(row["llm_call_count"]) for row in rows if row.get("llm_call_count") is not None]
     input_tokens = [float(row["input_tokens"]) for row in rows if row.get("input_tokens") is not None]
     output_tokens = [float(row["output_tokens"]) for row in rows if row.get("output_tokens") is not None]
+    input_usage_complete = bool(rows) and all(row.get("input_tokens") is not None for row in rows)
+    output_usage_complete = bool(rows) and all(row.get("output_tokens") is not None for row in rows)
+    total_input_tokens = sum(input_tokens) if input_usage_complete else None
+    total_output_tokens = sum(output_tokens) if output_usage_complete else None
+    resolved_rows = sum(bool(row.get("resolved_first_attempt")) for row in rows)
+    token_sum = (total_input_tokens + total_output_tokens) if total_input_tokens is not None and total_output_tokens is not None else None
     total_tools = sum(int(row.get("tool_call_count", 0)) for row in rows)
     unexpected_tools = sum(len(row.get("unexpected_tool_calls") or []) for row in rows)
     return {
@@ -117,8 +124,12 @@ def compute_headline_metrics(records: Iterable[Mapping[str, Any]], *, baseline_h
         "tool_calls": {"mean": _mean([float(row.get("tool_call_count", 0)) for row in rows])},
         "secondary": {
             "latency_ms": {"p50": _percentile(latencies, 0.50), "p95": _percentile(latencies, 0.95)},
+            "llm_calls_mean": _mean(llm_calls),
             "input_tokens_mean": _mean(input_tokens),
             "output_tokens_mean": _mean(output_tokens),
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "tokens_per_resolved": (token_sum / resolved_rows) if token_sum is not None and resolved_rows else None,
             "excess_tool_call_rate": _rate(unexpected_tools, total_tools),
             "intent_accuracy": _rate(sum(bool(row.get("intent_ok")) for row in rows), len(rows)),
             "target_accuracy": _rate(sum(bool(row.get("target_ok")) for row in rows), len(rows)),

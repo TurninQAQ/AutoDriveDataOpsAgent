@@ -51,7 +51,7 @@ async def main(args) -> int:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="qwen-plus")
-    parser.add_argument("--checks", type=int, default=2)
+    parser.add_argument("--checks", type=int, default=1)
     parser.add_argument("--timeout-sec", type=float, default=15.0)
     return parser.parse_args()
 

@@ -1,9 +1,9 @@
 {
   "benchmark_version": "a-plus-final-v4-live-readiness",
   "evaluator_version": "a-plus-final-v4-live-readiness",
-  "collector_version": "a-plus-final-collector-v3",
+  "collector_version": "a-plus-final-collector-v4",
   "safety_runner_version": "a-plus-final-safety-contract-validator-v3",
-  "live_runner_version": "a-plus-final-live-runner-v2",
+  "live_runner_version": "a-plus-final-live-runner-v3",
   "status": "FROZEN_SPEC_ONLY",
   "formal_results": "NOT_RUN",
   "git_commit": null,

@@ -18,6 +18,7 @@ import asyncio
 import json
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,9 +43,10 @@ from .collector import (
 )
 from .runner import EVALUATOR_VERSION, run_evaluation
 from .schema import file_sha256
+from .telemetry import InstrumentedModelClient, ModelTelemetry
 
 
-LIVE_RUNNER_VERSION = "a-plus-final-live-runner-v2"
+LIVE_RUNNER_VERSION = "a-plus-final-live-runner-v3"
 
 
 @dataclass(frozen=True)
@@ -449,6 +451,20 @@ def _raw_response(response: AgentResponse, client: FixtureToolClient, model: Any
     }
 
 
+def _finish_telemetry(raw: dict[str, Any], telemetry: ModelTelemetry, started: float) -> dict[str, Any]:
+    raw.update(telemetry.as_dict())
+    raw["attempt_wall_latency_ms"] = round(max(0.0, (time.perf_counter() - started) * 1000), 3)
+    raw["latency_ms"] = raw["attempt_wall_latency_ms"]
+    return raw
+
+
+def _attach_telemetry(error: BaseException, telemetry: ModelTelemetry, started: float) -> BaseException:
+    # Exception metadata is deliberately limited to safe counters/codes.
+    setattr(error, "telemetry", telemetry.as_dict())
+    setattr(error, "attempt_wall_latency_ms", round(max(0.0, (time.perf_counter() - started) * 1000), 3))
+    return error
+
+
 class LiveFullRunner:
     system = "full"
 
@@ -457,15 +473,18 @@ class LiveFullRunner:
 
     async def run(self, execution_input: ScenarioExecutionInput, model_client: Any, *, root: Path | None = None, model_name: str = "live-model", oracle_approval: bool = True) -> dict[str, Any]:
         assert_ground_truth_isolated(execution_input)
+        started = time.perf_counter()
+        telemetry = ModelTelemetry()
+        instrumented_model = InstrumentedModelClient(model_client, telemetry)
         work_root = root or Path(tempfile.mkdtemp(prefix="a-plus-live-full-"))
-        agent, client, _store = _build_agent(execution_input, model_client, autonomy_enabled=True, root=work_root)
+        agent, client, _store = _build_agent(execution_input, instrumented_model, autonomy_enabled=True, root=work_root)
         try:
             response = await agent.run(execution_input.prompt, f"live-{execution_input.case_id}")
         except Exception as exc:
             translated = translate_provider_exception(exc, model=model_name, free_tier_only=True)
             if isinstance(translated, QuotaBlockedError):
-                raise translated
-            raise
+                raise _attach_telemetry(translated, telemetry, started)
+            raise _attach_telemetry(translated, telemetry, started)
         if oracle_approval and response.approval_required and response.authorization_mode == "hitl" and (response.policy_decision or {}).get("mode") == "HITL":
             before = client.mutation_calls
             item = await agent.approve(response.approval_id)
@@ -473,8 +492,8 @@ class LiveFullRunner:
             response.goal_verification_result = item.goal_verification_result
             response.pending_action = item.model_dump(mode="json")
             response.action_result = item.execution_result
-            return _raw_response(response, client, model_client, approval_count=1, mutation_count_before_approval=before)
-        return _raw_response(response, client, model_client)
+            return _finish_telemetry(_raw_response(response, client, model_client, approval_count=1, mutation_count_before_approval=before), telemetry, started)
+        return _finish_telemetry(_raw_response(response, client, model_client), telemetry, started)
 
     def __call__(self, scenario: Scenario, repetition: int, model: str) -> Mapping[str, Any]:
         if self.model_factory is None:
@@ -489,15 +508,18 @@ class LiveHitlOnlyRunner(LiveFullRunner):
 
     async def run(self, execution_input: ScenarioExecutionInput, model_client: Any, *, root: Path | None = None, model_name: str = "live-model") -> dict[str, Any]:
         assert_ground_truth_isolated(execution_input)
+        started = time.perf_counter()
+        telemetry = ModelTelemetry()
+        instrumented_model = InstrumentedModelClient(model_client, telemetry)
         work_root = root or Path(tempfile.mkdtemp(prefix="a-plus-live-hitl-"))
-        agent, client, _store = _build_agent(execution_input, model_client, autonomy_enabled=False, root=work_root)
+        agent, client, _store = _build_agent(execution_input, instrumented_model, autonomy_enabled=False, root=work_root)
         try:
             response = await agent.run(execution_input.prompt, f"live-{execution_input.case_id}")
         except Exception as exc:
             translated = translate_provider_exception(exc, model=model_name, free_tier_only=True)
             if isinstance(translated, QuotaBlockedError):
-                raise translated
-            raise
+                raise _attach_telemetry(translated, telemetry, started)
+            raise _attach_telemetry(translated, telemetry, started)
         if response.approval_required and response.authorization_mode == "hitl" and (response.policy_decision or {}).get("mode") == "HITL":
             before = client.mutation_calls
             item = await agent.approve(response.approval_id)
@@ -505,8 +527,8 @@ class LiveHitlOnlyRunner(LiveFullRunner):
             response.goal_verification_result = item.goal_verification_result
             response.pending_action = item.model_dump(mode="json")
             response.action_result = item.execution_result
-            return _raw_response(response, client, model_client, approval_count=1, mutation_count_before_approval=before)
-        return _raw_response(response, client, model_client)
+            return _finish_telemetry(_raw_response(response, client, model_client, approval_count=1, mutation_count_before_approval=before), telemetry, started)
+        return _finish_telemetry(_raw_response(response, client, model_client), telemetry, started)
 
 
 class LiveNaiveToolRunner:
@@ -517,13 +539,16 @@ class LiveNaiveToolRunner:
 
     async def run(self, execution_input: ScenarioExecutionInput, model_client: Any) -> dict[str, Any]:
         assert_ground_truth_isolated(execution_input)
+        started = time.perf_counter()
+        telemetry = ModelTelemetry()
+        instrumented_model = InstrumentedModelClient(model_client, telemetry)
         client = FixtureToolClient(resolve_fixture(execution_input.fixture or ""))
-        plan = await model_client.plan(execution_input.prompt, await client.describe_tools(), [])
+        plan = await instrumented_model.plan(execution_input.prompt, await client.describe_tools(), [])
         action = dict(plan.write_action or {})
         read_calls = list(plan.tool_calls or [])
         observations = await client.execute(read_calls) if read_calls else []
         response = None
-        synthesize = getattr(model_client, "synthesize", None)
+        synthesize = getattr(instrumented_model, "synthesize", None)
         if callable(synthesize):
             response = await synthesize(execution_input.prompt, plan, observations, [], knowledge=[])
         if action:
@@ -555,7 +580,7 @@ class LiveNaiveToolRunner:
             }
         tool_calls = [call.name for call in read_calls]
         tool_calls.extend(call.name for call in client.calls if call.name not in tool_calls or call.name in {"resume_task", "submit_task", "stop_task", "delete_task", "set_task_priority"})
-        return {
+        return _finish_telemetry({
             "intent": plan.intent.value,
             "target": plan.task_name,
             "policy_mode": "NAIVE_PROPOSAL" if action else None,
@@ -579,7 +604,7 @@ class LiveNaiveToolRunner:
             "adaptive_write": 0,
             "explicit_refusal": explicit_refusal,
             "refusal": explicit_refusal,
-        }
+        }, telemetry, started)
 
     def __call__(self, scenario: Scenario, repetition: int, model: str) -> Mapping[str, Any]:
         execution_input = execution_input_for(scenario)
@@ -684,7 +709,7 @@ def run_live_dataset(
         "completed_attempts": status.get("completed_attempts", len(records)),
         "remaining_attempts": status.get("remaining_attempts", 0),
         "live_executable_scenarios": live_count,
-        "external_model_calls": len(records),
+        "external_model_calls": sum(int(row.get("llm_call_count") or 0) for row in records),
         "quota_blocked": bool(status.get("quota_blocked", False)),
     })
     (output_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

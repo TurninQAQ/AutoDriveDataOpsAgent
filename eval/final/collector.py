@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
 
-COLLECTOR_VERSION = "a-plus-final-collector-v3"
+COLLECTOR_VERSION = "a-plus-final-collector-v4"
 DERIVED_FIELDS = frozenset(
     {
         "resolved",
@@ -53,6 +53,18 @@ class QuotaBlockedError(RuntimeError):
         self.status_code = status_code
         self.error_code = error_code
         super().__init__(f"{error_code} ({status_code}) for {model}")
+
+
+def _telemetry_from_exception(exc: BaseException) -> dict[str, Any]:
+    """Return only safe attempt telemetry attached by a live runner."""
+    value = getattr(exc, "telemetry", None)
+    if not isinstance(value, Mapping):
+        value = {}
+    telemetry = dict(value)
+    wall_latency = getattr(exc, "attempt_wall_latency_ms", None)
+    if wall_latency is not None and "attempt_wall_latency_ms" not in telemetry:
+        telemetry["attempt_wall_latency_ms"] = wall_latency
+    return telemetry
 
 
 def translate_provider_exception(
@@ -178,7 +190,7 @@ def collect_trajectories_with_status(cases: list[Any], config: CollectorConfig, 
                     raise TypeError("adapter must return a mapping of raw facts")
                 records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts=facts))
             except QuotaBlockedError as exc:
-                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="BLOCKED", error=str(exc)))
+                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts=_telemetry_from_exception(exc), status="BLOCKED", error=str(exc)))
                 completed = len(records)
                 return records, {
                     "status": "INCOMPLETE_QUOTA_BLOCKED",
@@ -197,7 +209,10 @@ def collect_trajectories_with_status(cases: list[Any], config: CollectorConfig, 
                     free_tier_only=config.free_tier_only,
                 )
                 if isinstance(translated, QuotaBlockedError):
-                    records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="BLOCKED", error=str(translated)))
+                    telemetry = _telemetry_from_exception(exc)
+                    if telemetry:
+                        setattr(translated, "telemetry", telemetry)
+                    records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts=telemetry, status="BLOCKED", error=str(translated)))
                     completed = len(records)
                     return records, {
                         "status": "INCOMPLETE_QUOTA_BLOCKED",
@@ -209,7 +224,7 @@ def collect_trajectories_with_status(cases: list[Any], config: CollectorConfig, 
                         "http_status": translated.status_code,
                         "error_code": translated.error_code,
                     }
-                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="ERROR", error=f"{type(exc).__name__}: {exc}"))
+                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts=_telemetry_from_exception(exc), status="ERROR", error=f"{type(exc).__name__}: {exc}"))
     has_errors = any(row.get("status") == "ERROR" for row in records)
     return records, {
         "status": "INCOMPLETE_ATTEMPTS" if has_errors else "COMPLETE",

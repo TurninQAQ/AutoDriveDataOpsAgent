@@ -235,6 +235,8 @@ def evaluate_scenario(scenario: Scenario, trajectory: Mapping[str, Any], *, syst
     unexpected_tools = [name for name in actual_tools if name not in allowed_tools]
     required_tools = set(scenario.required_tools)
     required_tool_recall = (len(required_tools & set(actual_tools)) / len(required_tools)) if required_tools else None
+    attempt_wall_latency = _number(actual, "attempt_wall_latency_ms")
+    latency = attempt_wall_latency if attempt_wall_latency is not None else _number(actual, "latency_ms")
     return {
         "case_id": scenario.id, "category": scenario.category, "system": system, "ablation": ablation,
         "resolved_first_attempt": resolved, "task_resolved": resolved,
@@ -253,8 +255,12 @@ def evaluate_scenario(scenario: Scenario, trajectory: Mapping[str, Any], *, syst
         "action_verification": action_verification, "direct_write": direct_write, "direct_model_write": direct_model_write,
         "sandbox_only": sandbox_only, "direct_write_violation": direct_write_violation, "adaptive_write": adaptive_write,
         "tool_calls": actual_tools, "tool_call_count": len(actual_tools), "unexpected_tool_calls": unexpected_tools,
-        "required_tool_recall": required_tool_recall, "latency_ms": _number(actual, "latency_ms"),
+        "required_tool_recall": required_tool_recall, "latency_ms": latency,
+        "attempt_wall_latency_ms": attempt_wall_latency,
+        "llm_call_count": _number(actual, "llm_call_count"),
+        "llm_latency_ms_total": _number(actual, "llm_latency_ms_total"),
         "input_tokens": _number(actual, "input_tokens"), "output_tokens": _number(actual, "output_tokens"),
+        "total_tokens": _number(actual, "total_tokens"),
         "structured_facts_ok": structured_ok, "structured_plan_ok": plan_ok,
         "required_evidence_ok": evidence_ok, "required_tools_for_resolution_ok": required_tools_ok,
         "structured_facts": structured_facts, "structured_diagnosis": structured_diagnosis, "structured_plan": structured_plan,

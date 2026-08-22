@@ -113,6 +113,27 @@ class QwenReadOnlyModel:
         except ModelRequestError as exc:
             self.metrics["provider_errors"] = self.metrics.get("provider_errors", 0) + 1
             raise
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            def usage_value(*names):
+                for name in names:
+                    value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+                    if value is not None:
+                        try:
+                            return int(value)
+                        except (TypeError, ValueError):
+                            continue
+                return None
+
+            input_tokens = usage_value("prompt_tokens", "input_tokens")
+            output_tokens = usage_value("completion_tokens", "output_tokens")
+            total_tokens = usage_value("total_tokens")
+            if input_tokens is not None:
+                self.metrics["input_tokens"] = self.metrics.get("input_tokens", 0) + input_tokens
+            if output_tokens is not None:
+                self.metrics["output_tokens"] = self.metrics.get("output_tokens", 0) + output_tokens
+            if total_tokens is not None:
+                self.metrics["total_tokens"] = self.metrics.get("total_tokens", 0) + total_tokens
         text = self._content_text(response)
         if not text.strip():
             raise RuntimeError(f"Qwen model {self.model} returned an empty JSON response")

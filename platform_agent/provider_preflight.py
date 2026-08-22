@@ -11,6 +11,22 @@ from typing import Any
 from platform_integrations.model_retry import classify_exception
 
 
+FREE_TIER_QUOTA_CODE = "AllocationQuota.FreeTierOnly"
+
+
+def is_free_tier_quota_block(failure_or_exc: Any) -> bool:
+    """Recognize the normalized quota identity, with a safe legacy fallback."""
+    for name in ("provider_error_code", "error_code", "code"):
+        try:
+            if str(getattr(failure_or_exc, name, "") or "") == FREE_TIER_QUOTA_CODE:
+                return True
+        except Exception:
+            continue
+    if str(getattr(failure_or_exc, "failure_type", "") or "") == "provider_quota_error":
+        return True
+    return FREE_TIER_QUOTA_CODE in str(failure_or_exc)
+
+
 def _response_text(response: Any) -> str:
     choices = getattr(response, "choices", None) or []
     if not choices:
@@ -33,8 +49,10 @@ def classify_provider_failure(exc: BaseException) -> str:
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return "provider_timeout"
     failure = classify_exception(exc)
+    if is_free_tier_quota_block(failure) or is_free_tier_quota_block(exc):
+        return "provider_quota_error"
     status = failure.status_code
-    if status in {401, 403}:
+    if status in {401, 403} or (status is None and "403" in str(exc)):
         return "provider_auth_error"
     if status == 429:
         return "provider_rate_limit"
@@ -58,6 +76,7 @@ class ProviderPreflightResult:
     latencies_sec: list[float] = field(default_factory=list)
     http_statuses: list[int] = field(default_factory=list)
     quota_blocked: bool = False
+    terminal: bool = False
 
     @property
     def ok(self) -> bool:
@@ -76,6 +95,7 @@ class ProviderPreflightResult:
             "latencies_sec": [round(item, 4) for item in self.latencies_sec],
             "http_statuses": list(self.http_statuses),
             "quota_blocked": self.quota_blocked,
+            "terminal": self.terminal,
         }
 
 
@@ -120,14 +140,19 @@ async def run_qwen_preflight(
             result.error_count += 1
             result.failure_types.append("provider_invalid_json")
         except Exception as exc:
+            failure_info = classify_exception(exc)
             failure_type = classify_provider_failure(exc)
             result.error_count += 1
             result.failure_types.append(failure_type)
-            failure_info = classify_exception(exc)
             if failure_info.status_code is not None:
                 result.http_statuses.append(int(failure_info.status_code))
-            if "AllocationQuota.FreeTierOnly" in str(exc):
+            quota_block = is_free_tier_quota_block(failure_info) or is_free_tier_quota_block(exc)
+            generic_403 = failure_info.status_code == 403 or "403" in str(exc)
+            if quota_block:
                 result.quota_blocked = True
+            if quota_block or generic_403:
+                result.terminal = True
+                break
             if failure_type == "provider_timeout":
                 result.timeout_count += 1
     result.status = "PASS" if result.requests_completed == checks else "FAIL"

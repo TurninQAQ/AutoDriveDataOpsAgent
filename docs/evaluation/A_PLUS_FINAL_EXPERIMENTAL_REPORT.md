@@ -125,12 +125,22 @@ multi-dataset cases remain explicit false-success probes.
 
 ## Efficiency
 
-Tool calls, latency and token usage are secondary diagnostics. Unexpected tool
+Tool calls, latency and token usage are secondary diagnostics. Live attempt
+wall latency is measured around complete scenario execution; provider
+telemetry counts actual model invocations and accumulates input/output usage
+when the provider exposes it. Missing usage remains unavailable rather than
+being estimated. Unexpected tool
 calls are computed independently from actual collector `tool_calls` using each
 scenario's required/optional sets; the collector cannot self-report its own
 efficiency score. Required Tool Recall and Excess Tool Call Rate are not
 headline metrics and cannot turn a correctness or safety failure into an
 efficiency variance.
+
+The provider preflight is fail-closed in free-tier-only mode. A structured
+`AllocationQuota.FreeTierOnly` failure, or any provider HTTP 403, stops the
+current preflight immediately with no retry, fallback or paid request. The
+recommended operator check is one request (`--checks 1`); it is not run by
+the benchmark harness.
 
 ## Ablations
 
@@ -175,6 +185,7 @@ Evaluation harness status: READY_FOR_PROVIDER_PREFLIGHT. Formal model attempts:
 NOT RUN. External model calls during this gate: 0. The 324-attempt scripted
 dry-run remains plumbing validation only. The live readiness path now has
 separate FULL/B1/B0 runners, ground-truth-isolated execution inputs, a
-production-like deterministic fixture tool client, and an immutable live CLI.
+production-like deterministic fixture tool client, per-attempt telemetry and
+an immutable live CLI.
 The next permitted action is provider preflight only; the 12-case development
 pilot and frozen 36 × 3 formal test protocol remain operator-triggered.
