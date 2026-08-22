@@ -39,6 +39,17 @@ class ResponseCompletionGate:
         facts: list[str] = []
         missing: list[str] = []
 
+        if contract.descriptor_version != descriptor.descriptor_version:
+            missing.append("CompletionContract descriptor version does not match GoalDescriptor")
+        contract_goal_ids = set(contract.requirements_by_goal)
+        if contract_goal_ids != set(goal_ids):
+            missing.append("CompletionContract goal set does not match GoalDescriptor")
+        unknown_outcomes = sorted(set(current_outcomes) - set(goal_ids))
+        if unknown_outcomes:
+            missing.append(
+                "GoalOutcome contains unknown goal ids: " + ", ".join(unknown_outcomes)
+            )
+
         if len(candidate_ids) != len(set(candidate_ids)):
             missing.append("FinalCandidate references duplicate goal ids")
         unknown = sorted(set(candidate_ids) - set(goal_ids))
