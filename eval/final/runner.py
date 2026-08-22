@@ -14,7 +14,7 @@ from .metrics import aggregate_repetitions, compute_headline_metrics
 from .schema import file_sha256, load_scenarios
 
 
-EVALUATOR_VERSION = "a-plus-final-v3-execution-gate"
+EVALUATOR_VERSION = "a-plus-final-v4-live-readiness"
 
 
 def _git_commit() -> str:

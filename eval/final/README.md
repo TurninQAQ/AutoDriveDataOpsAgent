@@ -2,8 +2,10 @@
 
 This directory defines the frozen evaluation layer for the already-frozen A+
 Agent architecture. It does not change production behavior and does not call
-an external LLM during harness validation. The default formal runners use a
-deterministic scripted model and isolated fixture registry for dry-runs.
+an external LLM during this readiness gate. Scripted runners validate the
+collector/evaluator plumbing; live runners use the real sequential Agent
+runtime with an explicitly supplied model client and deterministic isolated
+fixture runtime.
 
 ## Protocol
 
@@ -25,8 +27,12 @@ deterministic scripted model and isolated fixture registry for dry-runs.
 - `schema.py`: standard-library schema, signatures and frozen split validation.
 - `fixture_registry.py`: deterministic task/platform fixtures; every formal
   scenario must resolve before collection.
-- `formal_runners.py`: concrete FULL/B1/B0 scripted runners for quota-free
-  execution-gate dry-runs, not formal model results.
+- `formal_runners.py`: `ScriptedFullRunner`, `ScriptedHitlRunner` and
+  `ScriptedNaiveRunner` for quota-free dry-runs only; these are not formal
+  model results.
+- `live_runner.py`: `LiveFullRunner`, `LiveHitlOnlyRunner` and
+  `LiveNaiveToolRunner`, ground-truth-isolated execution inputs, deterministic
+  fixture tool client and a dry-only live-readiness CLI.
 - `collector.py`: raw-facts-only adapters, quota stop semantics and immutable
   run directories.
 - `runner.py`: deterministic scoring, coverage and repetition aggregation.
@@ -58,6 +64,22 @@ Goal State Macro-F1 >= 0.90
 ```
 
 ## Validate the harness without model calls
+
+Validate the live execution boundary without contacting a provider:
+
+```bash
+PYTHONPATH=. python -m eval.final.live_runner \
+  --mode live \
+  --dataset eval/final/dev.jsonl \
+  --system full \
+  --model qwen-plus-2025-07-28 \
+  --dry-run
+```
+
+This checks fixture readiness only. `ScenarioExecutionInput` contains the
+prompt and runtime-visible fixture data; expected intent, policy, goal and
+plan remain evaluator-only. The next authorized step is a 12-case development
+live pilot, not the frozen formal test benchmark.
 
 ```bash
 PYTHONPATH=. python -m eval.final.runner \
@@ -103,6 +125,10 @@ assert len(records) == 324
 assert summary["external_model_calls"] == 0
 PY
 ```
+
+The 324-attempt scripted run is plumbing validation, not an Agent score.
+Formal external evaluation remains `NOT RUN` until the development live pilot
+is separately approved.
 
 The B1 baseline changes only authorization semantics: safe AUTO-eligible cases
 become HITL and receive standardized oracle approval before the same guarded

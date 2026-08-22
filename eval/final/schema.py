@@ -96,6 +96,14 @@ class Scenario:
     required_tools: list[str] = field(default_factory=list)
     allowed_optional_tools: list[str] = field(default_factory=list)
     safety_constraints: list[str] = field(default_factory=list)
+    # Evaluation-only structured truth.  These fields are never passed to a
+    # live Agent runner; they are consumed only by the deterministic evaluator.
+    expected_facts: dict[str, Any] = field(default_factory=dict)
+    expected_diagnosis: dict[str, Any] = field(default_factory=dict)
+    required_evidence_facts: list[str] = field(default_factory=list)
+    required_tools_for_resolution: bool = False
+    expected_plan: dict[str, Any] = field(default_factory=dict)
+    live_fixture_required: bool = True
 
     @classmethod
     def model_validate(cls, payload: Any) -> "Scenario":
@@ -109,6 +117,12 @@ class Scenario:
             raise ValueError("goal_eval must be boolean")
         expected_intent = _required_string(payload, "expected_intent")
         expected_policy = _optional_string(payload, "expected_policy")
+        required_tools_for_resolution = payload.get("required_tools_for_resolution", False)
+        live_fixture_required = payload.get("live_fixture_required", True)
+        if not isinstance(required_tools_for_resolution, bool):
+            raise ValueError("required_tools_for_resolution must be boolean")
+        if not isinstance(live_fixture_required, bool):
+            raise ValueError("live_fixture_required must be boolean")
         return cls(
             id=_required_string(payload, "id"),
             category=category,  # type: ignore[arg-type]
@@ -128,6 +142,12 @@ class Scenario:
             required_tools=_string_list(payload, "required_tools"),
             allowed_optional_tools=_string_list(payload, "allowed_optional_tools"),
             safety_constraints=_string_list(payload, "safety_constraints"),
+            expected_facts=_dict_value(payload, "expected_facts"),
+            expected_diagnosis=_dict_value(payload, "expected_diagnosis"),
+            required_evidence_facts=_string_list(payload, "required_evidence_facts"),
+            required_tools_for_resolution=required_tools_for_resolution,
+            expected_plan=_dict_value(payload, "expected_plan"),
+            live_fixture_required=live_fixture_required,
         )
 
     def validate_contract(self) -> None:
@@ -153,6 +173,8 @@ class Scenario:
             raise ValueError(f"{self.id}: AUTO scenarios must cap mutations at one")
         if self.min_mutations > self.max_mutations:
             raise ValueError(f"{self.id}: min_mutations cannot exceed max_mutations")
+        if self.live_fixture_required and not self.fixture:
+            raise ValueError(f"{self.id}: live_fixture_required scenarios need a fixture")
 
     @property
     def effective_outcome_type(self) -> str:
@@ -186,6 +208,9 @@ class Scenario:
             "expected_risk": self.effective_risk_class,
             "expected_goal": self.expected_goal.upper() if self.expected_goal else None,
             "expected_datasets": sorted(self.expected_datasets),
+            "expected_facts": self.expected_facts,
+            "expected_diagnosis": self.expected_diagnosis,
+            "expected_plan": self.expected_plan,
         }
         return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -199,6 +224,7 @@ class SafetyScenario:
     expected_goal: str | None = None
     expected_mutations: int = 0
     test_references: list[str] = field(default_factory=list)
+    evidence_reason: str = ""
     safety_invariants: list[str] = field(default_factory=list)
 
     @classmethod
@@ -217,6 +243,7 @@ class SafetyScenario:
             expected_goal=_optional_string(payload, "expected_goal"),
             expected_mutations=_nonnegative_int(payload, "expected_mutations"),
             test_references=references,
+            evidence_reason=_optional_string(payload, "evidence_reason") or "",
             safety_invariants=_string_list(payload, "safety_invariants"),
         )
 

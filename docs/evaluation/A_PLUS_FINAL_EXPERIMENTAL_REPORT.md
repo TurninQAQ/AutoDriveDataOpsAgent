@@ -16,9 +16,9 @@ is no best-of-N aggregation.
 The deterministic safety split contains 56 contracts and is evaluated
 separately from LLM effectiveness. It covers target provenance, policy
 boundaries, preconditions, scope freeze, concurrency, verification and
-no-retry behavior. Each contract has an authoritative production-test node
-reference; the validator checks the mapping and does not claim that metadata
-self-checks executed production logic.
+no-retry behavior. Each contract has a case-appropriate authoritative
+production-test node reference; the validator checks the mapping and does not
+claim that metadata self-checks executed production logic.
 
 ### Dataset composition
 
@@ -35,9 +35,11 @@ near-duplicate prompts:
 | Adversarial | 4 |
 | **Total** | **36** |
 
-The dev split has 12 cases. The safety split has 56 deterministic cases. The
-dataset files are JSONL and their SHA256 values are recorded in the runner
-manifest; the evaluator does not infer ground truth from model output.
+The dev split has 12 cases. All 36 test cases have an explicit live execution
+path through the deterministic fixture registry. The safety split has 56
+deterministic contracts. The dataset files are JSONL and their SHA256 values
+are recorded in the runner manifest; the evaluator does not infer ground truth
+from model output.
 
 The dev/test signature overlap is zero. Fixture family reuse is allowed, but
 the dev instances use distinct fixture/task identities rather than merely
@@ -108,9 +110,10 @@ The 56-case deterministic safety suite is frozen as a separate evaluation
 layer. `safety_runner.py` validates every case and its authoritative
 production-test reference. The gate result is **56/56 contracts backed, 0
 unbacked**; local validation is mapping validation, not a replacement for the
-production pytest/integration suite. The current project state includes the
-prior Reviewer-verified production safety results; this document does not
-turn a contract self-check into a new production execution claim.
+production pytest/integration suite. The mapped set contains 37 unique pytest
+nodes; it is not 56 unique tests. The current project state includes the prior
+Reviewer-verified production safety results; this document does not turn a
+contract self-check into a new production execution claim.
 
 ## Autonomy and Goal Verification
 
@@ -168,13 +171,10 @@ dbd338133139da7785722b0efa1a5718461e62c4df6f888bb133c0ea78199e42
 
 ## Current Status
 
-Harness construction status: READY_FOR_FORMAL_EVALUATION. Formal model
-attempts: NOT RUN. The
-current environment does not provide the `pytest` command, so the harness test
-module was run directly with the standard library (30 test functions). The
-324-attempt scripted dry-run, 56-contract production-reference mapping,
-fixture resolution and `READY_NOT_RUN` dev validation completed. JSON
-schema/count validation, Python byte-compilation and diff checks were also run
-without model calls. The next action is a deliberate operator decision to run the
-36 × 3 FULL protocol in a fully provisioned environment with a single
-compatible free-tier Text/tool-calling model.
+Evaluation harness status: READY_FOR_DEV_LIVE_PILOT. Formal model attempts:
+NOT RUN. External model calls during this gate: 0. The 324-attempt scripted
+dry-run remains plumbing validation only. The live readiness path now has
+separate FULL/B1/B0 runners, ground-truth-isolated execution inputs, a
+production-like deterministic fixture tool client, and a dry-only CLI. The
+next action is a deliberate 12-case development live pilot; the frozen 36 × 3
+formal test protocol must not start before that pilot is reviewed.

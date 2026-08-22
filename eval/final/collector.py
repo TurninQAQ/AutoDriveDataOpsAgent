@@ -54,6 +54,16 @@ class QuotaBlockedError(RuntimeError):
         super().__init__(f"{error_code} ({status_code}) for {model}")
 
 
+def translate_provider_exception(exc: BaseException, *, model: str, provider: str = "Alibaba Bailian") -> BaseException:
+    """Translate the provider's free-tier terminal error without retrying it."""
+    text = str(exc)
+    code = str(getattr(exc, "error_code", "") or "")
+    status = getattr(exc, "status_code", None)
+    if ("AllocationQuota.FreeTierOnly" in text or code == "AllocationQuota.FreeTierOnly") and (str(status) == "403" or "HTTP 403" in text or "403" in text):
+        return QuotaBlockedError(model=model, provider=provider, status_code=403, error_code="AllocationQuota.FreeTierOnly")
+    return exc
+
+
 class Adapter:
     system: str
 
@@ -79,9 +89,14 @@ class FullAgentAdapter(Adapter):
     system = "full"
 
 
-def adapter_for(system: str, runner: CaseRunner | None = None) -> Adapter:
+def adapter_for(system: str, runner: CaseRunner | None = None, *, mode: str = "scripted") -> Adapter:
     adapters = {"naive_tool": NaiveToolAdapter, "hitl_only": HitlOnlyAdapter, "full": FullAgentAdapter}
     try:
+        if mode == "live" and runner is None:
+            from .live_runner import live_runner_for
+            runner = live_runner_for(system)
+        elif mode not in {"scripted", "live"}:
+            raise ValueError(f"Unknown collector mode: {mode}")
         return adapters[system](runner)
     except KeyError as exc:
         raise ValueError(f"Unknown collector system: {system}") from exc

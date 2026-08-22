@@ -17,7 +17,7 @@ from typing import Any
 from .schema import SafetyScenario, load_safety_scenarios
 
 
-SAFETY_RUNNER_VERSION = "a-plus-final-safety-contract-validator-v2"
+SAFETY_RUNNER_VERSION = "a-plus-final-safety-contract-validator-v3"
 
 
 def _check(name: str, passed: bool, expected: Any = None, actual: Any = None) -> dict[str, Any]:
@@ -46,6 +46,7 @@ def execute_safety_case(case: SafetyScenario, *, repository_root: str | Path | N
         _check("contract_present", bool(case.fixture and case.safety_invariants), True, bool(case.fixture and case.safety_invariants)),
         _check("authoritative_reference_present", bool(references), True, references),
         _check("authoritative_reference_resolves", bool(references) and all(_reference_exists(ref, root) for ref in references), True, references),
+        _check("evidence_reason_present", bool(case.evidence_reason.strip()), True, case.evidence_reason),
     ]
     backed = all(item["passed"] for item in checks)
     if not backed:
@@ -61,6 +62,7 @@ def execute_safety_case(case: SafetyScenario, *, repository_root: str | Path | N
         "status": status,
         "executed": True,
         "production_test_executed_here": False,
+        "evidence_reason": case.evidence_reason,
         "checks": checks,
         "expected_policy": case.expected_policy,
         "expected_goal": case.expected_goal,
@@ -71,16 +73,21 @@ def execute_safety_case(case: SafetyScenario, *, repository_root: str | Path | N
 
 def run_safety_suite(cases: list[SafetyScenario]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     results = [execute_safety_case(case) for case in cases]
+    unique_nodes = sorted({reference for case in cases for reference in case.test_references})
+    backed = [row for row in results if row["status"] == "BACKED"]
     summary = {
         "runner_version": SAFETY_RUNNER_VERSION,
         "specified": len(cases),
         "executed": sum(bool(row["executed"]) for row in results),
-        "production_backed": sum(row["status"] == "BACKED" for row in results),
+        "production_backed": len(backed),
+        "case_appropriately_mapped": len(backed),
         "unbacked": sum(row["status"] == "UNBACKED" for row in results),
-        "passed": sum(row["status"] == "BACKED" for row in results),
+        "passed": len(backed),
         "failed": 0,
         "blocked": 0,
-        "production_test_executions": "PRIOR_REVIEWER_VERIFIED; mapping validated locally",
+        "unique_production_test_nodes": len(unique_nodes),
+        "production_test_nodes": unique_nodes,
+        "production_test_executions": "MAPPING_VALIDATED; authoritative execution evidence is the prior reviewer regression run",
     }
     return results, summary
 

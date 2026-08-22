@@ -98,15 +98,15 @@ class BaseFormalRunner:
         return facts
 
 
-class FullFormalRunner(BaseFormalRunner):
+class ScriptedFullRunner(BaseFormalRunner):
     system = "full"
 
 
-class HitlOnlyFormalRunner(BaseFormalRunner):
+class ScriptedHitlRunner(BaseFormalRunner):
     system = "hitl_only"
 
 
-class NaiveToolFormalRunner(BaseFormalRunner):
+class ScriptedNaiveRunner(BaseFormalRunner):
     system = "naive_tool"
 
     def __call__(self, scenario: Any, repetition: int, model: str) -> Mapping[str, Any]:
@@ -123,8 +123,16 @@ class NaiveToolFormalRunner(BaseFormalRunner):
         return facts
 
 
+ # Backward-compatible aliases for existing harness imports.  The explicit
+ # Scripted* names prevent these quota-free dry runners from being mistaken
+ # for formal live-model execution.
+FullFormalRunner = ScriptedFullRunner
+HitlOnlyFormalRunner = ScriptedHitlRunner
+NaiveToolFormalRunner = ScriptedNaiveRunner
+
+
 def formal_runner_for(system: str) -> BaseFormalRunner:
-    runners = {"full": FullFormalRunner, "hitl_only": HitlOnlyFormalRunner, "naive_tool": NaiveToolFormalRunner}
+    runners = {"full": ScriptedFullRunner, "hitl_only": ScriptedHitlRunner, "naive_tool": ScriptedNaiveRunner}
     try:
         return runners[system]()
     except KeyError as exc:
