@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 
+from .immutable import thaw_value
+
 
 class ScopeKind(str, Enum):
     PLATFORM = "PLATFORM"
@@ -65,7 +67,32 @@ class ObservationProvenance:
 
 
 def normalized_arguments_fingerprint(arguments: Mapping[str, Any]) -> str:
-    encoded = json.dumps(dict(arguments), sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(
+        thaw_value(dict(arguments)),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def canonical_tool_call_fingerprint(
+    source_tool: str, arguments: Mapping[str, Any]
+) -> str:
+    """Fingerprint the one canonical representation used by audit/evidence.
+
+    Callers pass normalized arguments.  The small normalization fallback keeps
+    direct provenance helpers deterministic for valid calls, while Runtime
+    validation remains the authority for accepting a call.
+    """
+
+    normalized = _normalize_for_provenance(source_tool, arguments)
+    encoded = json.dumps(
+        {"tool_name": source_tool, "arguments": thaw_value(normalized)},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -127,7 +154,7 @@ def build_provenance(
 
     return ObservationProvenance(
         source_tool=source_tool,
-        arguments_fingerprint=normalized_arguments_fingerprint(arguments),
+        arguments_fingerprint=canonical_tool_call_fingerprint(source_tool, arguments),
         requested_scope=requested_scope,
         observed_scope=observed_scope,
         requested_identity=requested_identity,

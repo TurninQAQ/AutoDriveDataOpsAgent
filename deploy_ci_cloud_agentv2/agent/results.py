@@ -21,6 +21,7 @@ from .field_contract import (
     read_optional_sequence,
     read_optional_string,
 )
+from .immutable import FrozenMapping
 from .provenance import ObservationScope, ScopeKind
 
 
@@ -80,7 +81,7 @@ class TaskDetailResult(NormalizedReadResult):
     task_name: str | None = None
     exists: bool | None = None
     state: TaskState | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=FrozenMapping)
 
     def qualifies_for_evidence(self) -> bool:
         return (
@@ -97,6 +98,9 @@ class TaskDetailResult(NormalizedReadResult):
 class GpuRecord:
     identifier: str
     attributes: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attributes", FrozenMapping(self.attributes))
 
 
 @dataclass(frozen=True)
@@ -324,7 +328,7 @@ def _task_detail(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> TaskDetail
         task_name=task_name,
         exists=exists,
         state=state,
-        metadata={key: value for key, value in raw.items() if key not in _COMMON_KNOWN_FIELDS | {"task_name", "state", "exists"}},
+        metadata=FrozenMapping({key: value for key, value in raw.items() if key not in _COMMON_KNOWN_FIELDS | {"task_name", "state", "exists"}}),
     )
 
 
@@ -351,7 +355,7 @@ def _gpu_pool(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> GpuPoolResult
 
 
 def _gpu_records(value: object, field: str, errors: list[str]) -> tuple[GpuRecord, ...]:
-    if not isinstance(value, list):
+    if not isinstance(value, (list, tuple)):
         errors.append(f"{field} must be a list")
         return ()
     records: list[GpuRecord] = []

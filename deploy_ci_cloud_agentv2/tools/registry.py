@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from ..agent.decisions import ToolCall
@@ -15,16 +15,34 @@ from .metadata import ToolKind, ToolSpec
 Handler = Callable[..., Any]
 
 
+class ToolCatalogIntegrityError(RuntimeError):
+    """The effective sealed catalog differs from audited Runtime metadata."""
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._specs: dict[str, ToolSpec] = {}
         self._handlers: dict[str, Handler] = {}
+        self._sealed = False
+        self._sealed_hash: str | None = None
 
     def register(self, spec: ToolSpec, handler: Handler) -> None:
+        if self._sealed:
+            raise RuntimeError("ToolRegistry is sealed")
         if spec.name in self._specs:
             raise ValueError(f"duplicate tool: {spec.name}")
         self._specs[spec.name] = spec
         self._handlers[spec.name] = handler
+
+    def seal(self) -> None:
+        if self._sealed:
+            return
+        self._sealed_hash = self._compute_catalog_hash()
+        self._sealed = True
+
+    @property
+    def is_sealed(self) -> bool:
+        return self._sealed
 
     def spec(self, name: str) -> ToolSpec:
         try:
@@ -39,6 +57,11 @@ class ToolRegistry:
         return tuple(self._specs[name] for name in sorted(self._specs))
 
     def catalog_hash(self) -> str:
+        if not self._sealed or self._sealed_hash is None:
+            raise RuntimeError("ToolRegistry must be sealed before catalog hashing")
+        return self._sealed_hash
+
+    def _compute_catalog_hash(self) -> str:
         return catalog_fingerprint(
             [
                 {
@@ -56,6 +79,8 @@ class ToolRegistry:
         )
 
     def validate_call(self, call: ToolCall, *, require_read: bool = True) -> ToolSpec:
+        if not self._sealed:
+            raise RuntimeError("ToolRegistry must be sealed before validation")
         spec = self.spec(call.tool_name)
         if require_read and spec.kind is not ToolKind.READ:
             raise ValueError(f"{call.tool_name} is not a READ tool")
@@ -72,6 +97,8 @@ class ToolRegistry:
         )
 
     async def call(self, call: ToolCall) -> Any:
+        if not self._sealed:
+            raise RuntimeError("ToolRegistry must be sealed before execution")
         handler = self.handler(call.tool_name)
         result = handler(**call.arguments)
         if inspect.isawaitable(result):
@@ -79,9 +106,9 @@ class ToolRegistry:
         return result
 
 
-def _validate_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> None:
-    if not isinstance(arguments, dict):
-        raise ValueError("tool arguments must be a dict")
+def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
+    if not isinstance(arguments, Mapping):
+        raise ValueError("tool arguments must be a mapping")
     required = tuple(schema.get("required", ()))
     missing = [name for name in required if name not in arguments]
     if missing:
@@ -100,5 +127,5 @@ def _validate_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> No
             raise ValueError(f"{name} must be an integer")
         if expected == "boolean" and not isinstance(value, bool):
             raise ValueError(f"{name} must be a boolean")
-        if expected == "array" and not isinstance(value, list):
+        if expected == "array" and not isinstance(value, (list, tuple)):
             raise ValueError(f"{name} must be an array")

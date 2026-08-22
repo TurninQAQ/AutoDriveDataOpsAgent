@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import copy
 import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .immutable import thaw_value
+from .immutable import canonical_snapshot, thaw_value
 
 
 @dataclass(frozen=True)
@@ -77,6 +76,7 @@ class EventStore:
                         f"event_id {stable_id} was already appended with different content"
                     )
                 return _copy_event(existing)
+            canonical_payload = canonical_snapshot(dict(payload))
             event = Event(
                 event_id=stable_id,
                 sequence_no=len(self._events) + 1,
@@ -85,7 +85,7 @@ class EventStore:
                 causation_id=causation_id,
                 timestamp=datetime.now(timezone.utc),
                 event_type=event_type,
-                payload=copy.deepcopy(dict(payload)),
+                payload=canonical_payload,
                 provenance=provenance,
             )
             self._events.append(event)
@@ -114,7 +114,7 @@ class EventStore:
                     "event_id": event.event_id,
                     "causation_id": event.causation_id,
                     "timestamp": event.timestamp.isoformat(),
-                    "payload": thaw_value(copy.deepcopy(event.payload)),
+                    "payload": thaw_value(event.payload),
                     "provenance": asdict(event.provenance),
                 }
             )
@@ -130,7 +130,7 @@ def _copy_event(event: Event) -> Event:
         causation_id=event.causation_id,
         timestamp=event.timestamp,
         event_type=event.event_type,
-        payload=copy.deepcopy(event.payload),
+        payload=thaw_value(event.payload),
         provenance=event.provenance,
     )
 
@@ -150,11 +150,13 @@ def _same_event_content(
         and existing.request_id == request_id
         and existing.thread_id == thread_id
         and existing.causation_id == causation_id
-        and existing.payload == payload
+        and existing.payload == canonical_snapshot(dict(payload))
         and existing.provenance == provenance
     )
 
 
 def catalog_fingerprint(catalog: list[dict[str, Any]]) -> str:
-    encoded = json.dumps(catalog, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(
+        thaw_value(catalog), sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Iterator
 from copy import deepcopy
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from typing import Any, TypeVar
 
 
@@ -57,6 +57,11 @@ class FrozenMapping(Mapping[K, V]):
     def __repr__(self) -> str:
         return f"FrozenMapping({dict(self._items)!r})"
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Mapping):
+            return dict(self.items()) == dict(other.items())
+        return NotImplemented
+
     def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenMapping[K, V]":
         memo[id(self)] = self
         return self
@@ -71,14 +76,22 @@ def freeze_value(value: Any) -> Any:
     if isinstance(value, FrozenMapping):
         return value
     if is_dataclass(value) and not isinstance(value, type):
-        # The Phase B structured dataclasses crossing this boundary are
-        # frozen and contain only immutable fields.  Preserve their typed
-        # identity; converting them to mappings would destroy the public
-        # CompletionRequirement/GoalOutcome contract.  Mutable dataclasses
-        # are defensively projected as mappings.
         params = getattr(type(value), "__dataclass_params__", None)
         if params is not None and getattr(params, "frozen", False):
-            return value
+            # Preserve typed identity for Phase B dataclasses, but recursively
+            # freeze every field first.  A frozen dataclass with a nested dict
+            # is otherwise only shallowly immutable.
+            clone = deepcopy(value)
+            try:
+                for item in fields(value):
+                    object.__setattr__(
+                        clone, item.name, freeze_value(getattr(clone, item.name))
+                    )
+                return clone
+            except (AttributeError, TypeError):
+                return FrozenMapping(
+                    {item.name: freeze_value(getattr(value, item.name)) for item in fields(value)}
+                )
         return freeze_value(asdict(value))
     if isinstance(value, Mapping):
         return FrozenMapping(value)
@@ -97,6 +110,37 @@ def isolated_copy(value: Any) -> Any:
     return deepcopy(value)
 
 
+def canonical_snapshot(value: Any) -> Any:
+    """Detach external data and recursively freeze the detached value.
+
+    This is the single ingress primitive for caller-owned objects.  The
+    deepcopy happens before freezing so a mapping/list/dataclass returned by a
+    facade or MCP adapter can never remain an alias of Runtime state.
+    """
+
+    return _freeze_external(deepcopy(value))
+
+
+def _freeze_external(value: Any) -> Any:
+    """Freeze a raw external value, projecting dataclasses as data objects."""
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return FrozenMapping(
+            {item.name: _freeze_external(getattr(value, item.name)) for item in fields(value)}
+        )
+    if isinstance(value, FrozenMapping):
+        return value
+    if isinstance(value, Mapping):
+        return FrozenMapping({key: _freeze_external(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_external(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_external(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_external(item) for item in value)
+    return value
+
+
 def thaw_value(value: Any) -> Any:
     """Return a detached, ordinary-container view for human-readable traces."""
 
@@ -105,7 +149,7 @@ def thaw_value(value: Any) -> Any:
     if isinstance(value, tuple):
         return [thaw_value(item) for item in value]
     if isinstance(value, (set, frozenset)):
-        return [thaw_value(item) for item in value]
+        return {thaw_value(item) for item in value}
     if isinstance(value, list):
         return [thaw_value(item) for item in value]
     if isinstance(value, Mapping):

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Mapping, TypeVar
+from collections.abc import Mapping, Sequence
+from typing import Any, Generic, TypeVar
 
 
 class FieldState(str, Enum):
@@ -122,13 +123,16 @@ def read_optional_int(
 
 def read_optional_sequence(
     raw: Mapping[str, Any], name: str, *, nullable: bool = False
-) -> FieldResult[list[Any] | None]:
+) -> FieldResult[Sequence[Any] | None]:
     if name not in raw:
         return _absent()
     value = raw[name]
     if nullable and value is None:
         return FieldResult(FieldState.PRESENT_VALID, None)
-    if not isinstance(value, list):
+    # Runtime ingress may already have recursively frozen an external list to
+    # a tuple.  Both are valid sequence representations here; strings/bytes
+    # and set-like containers remain invalid response shapes.
+    if not isinstance(value, (list, tuple)):
         return _invalid(name, "a list", value)
     return FieldResult(FieldState.PRESENT_VALID, value)
 

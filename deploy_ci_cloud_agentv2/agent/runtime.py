@@ -21,7 +21,7 @@ from ..platform.facade import InMemoryReadFacade, ReadFacade
 from ..providers.deterministic import DeterministicReadAgent
 from ..providers.model import AgentProvider
 from ..tools.catalog import build_read_registry
-from ..tools.registry import ToolRegistry
+from ..tools.registry import ToolCatalogIntegrityError, ToolRegistry
 from ..tools.runtime import ReadToolRuntime
 
 
@@ -166,6 +166,14 @@ async def invoke(
     )
     runtime_terminal: ControlledTerminalOutcome | None = None
     try:
+        if (
+            not system_context.tool_registry.is_sealed
+            or system_context.tool_registry.catalog_hash()
+            != system_context.tool_catalog_hash
+        ):
+            raise ToolCatalogIntegrityError(
+                "sealed ToolRegistry hash does not match SystemContext tool_catalog_hash"
+            )
         graph = build_graph(dependencies)
         final_state = await graph.ainvoke(
             state,
@@ -175,7 +183,14 @@ async def invoke(
     except Exception as exc:
         runtime_terminal = ControlledTerminalOutcome(
             code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
-            safe_facts={"graph_error_type": type(exc).__name__},
+            safe_facts={
+                "graph_error_type": type(exc).__name__,
+                **(
+                    {"reason": "TOOL_CATALOG_INTEGRITY_ERROR"}
+                    if isinstance(exc, ToolCatalogIntegrityError)
+                    else {}
+                ),
+            },
             message_template="The runtime could not safely complete this interaction.",
         )
         final_state = latest_state.current() or dict(state)

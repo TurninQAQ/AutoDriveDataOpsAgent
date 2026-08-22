@@ -9,14 +9,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
-from ..agent.decisions import ReadToolBatch, ToolCall
+from ..agent.decisions import AcceptedToolCall, ReadToolBatch, ToolCall
 from ..agent.evidence import (
     ObservationDisposition,
     ToolObservation,
     TransportStatus,
 )
 from ..agent.identity import RequestIdentity
-from ..agent.provenance import build_provenance
+from ..agent.immutable import canonical_snapshot
+from ..agent.provenance import build_provenance, canonical_tool_call_fingerprint
 from ..agent.results import ResultStatus, normalize_read_result
 from .metadata import ToolKind
 from .registry import ToolRegistry
@@ -39,19 +40,23 @@ class ReadToolRuntime:
         self.registry = registry
         self.owner = owner
 
-    def validate_single(self, call: ToolCall) -> ToolCall:
+    def validate_single(self, call: ToolCall) -> AcceptedToolCall:
         """Validate one proposed READ using the same guard as batch calls."""
         normalized = self.registry.normalize_call(call, require_read=True)
         if not _arguments_are_concrete(normalized.arguments):
             raise ValueError("tool arguments must be concrete before execution")
-        return normalized
+        return AcceptedToolCall(
+            call_id=normalized.call_id,
+            tool_name=normalized.tool_name,
+            arguments=normalized.arguments,
+        )
 
     def validate_batch(self, batch: ReadToolBatch, max_batch: int) -> ReadToolBatch:
         if not batch.calls:
             raise ValueError("READ batch must contain at least one call")
         if len(batch.calls) > max_batch:
             raise ValueError(f"READ batch exceeds configured maximum {max_batch}")
-        normalized_calls = []
+        normalized_calls: list[AcceptedToolCall] = []
         for call in batch.calls:
             normalized = self.registry.normalize_call(call, require_read=True)
             spec = self.registry.spec(normalized.tool_name)
@@ -59,8 +64,14 @@ class ReadToolRuntime:
                 raise ValueError(f"tool is not parallel-safe READ: {normalized.tool_name}")
             if not _arguments_are_concrete(normalized.arguments):
                 raise ValueError("all READ batch arguments must be concrete")
-            normalized_calls.append(normalized)
-        call_ids = {call.call_id for call in batch.calls}
+            normalized_calls.append(
+                AcceptedToolCall(
+                    call_id=normalized.call_id,
+                    tool_name=normalized.tool_name,
+                    arguments=normalized.arguments,
+                )
+            )
+        call_ids = {call.call_id for call in normalized_calls}
         if len(call_ids) != len(batch.calls):
             raise ValueError("READ batch call_id values must be unique")
         return ReadToolBatch(
@@ -70,14 +81,15 @@ class ReadToolRuntime:
 
     async def execute_single(
         self,
-        call: ToolCall,
+        call: ToolCall | AcceptedToolCall,
         *,
         max_retries: int,
         on_started=None,
     ) -> ToolObservation:
         if max_retries < 0:
             raise ValueError("max_retries is a non-negative per-call retry allowance")
-        call = self.validate_single(call)
+        accepted_call = call if isinstance(call, AcceptedToolCall) else self.validate_single(call)
+        call = accepted_call
         spec = self.registry.spec(call.tool_name)
         retries = 0
         while True:
@@ -149,10 +161,13 @@ class ReadToolRuntime:
     ) -> ReadBatchObservation:
         if max_retries < 0:
             raise ValueError("max_retries is a non-negative per-call retry allowance")
-        batch = self.validate_batch(
-            batch,
-            max_batch=max_batch if max_batch is not None else len(batch.calls),
-        )
+        if not all(isinstance(call, AcceptedToolCall) for call in batch.calls):
+            batch = self.validate_batch(
+                batch,
+                max_batch=max_batch if max_batch is not None else len(batch.calls),
+            )
+        elif max_batch is not None and len(batch.calls) > max_batch:
+            raise ValueError(f"READ batch exceeds configured maximum {max_batch}")
         results = await asyncio.gather(
             *(
                 self.execute_single(call, max_retries=max_retries, on_started=on_started)
@@ -163,7 +178,7 @@ class ReadToolRuntime:
 
 
 def _arguments_are_concrete(value: object) -> bool:
-    if isinstance(value, dict):
+    if isinstance(value, dict) or hasattr(value, "items") and not isinstance(value, (str, bytes)):
         if set(value) == {"$ref"} or set(value) == {"from_call"}:
             return False
         return all(_arguments_are_concrete(item) for item in value.values())
@@ -196,7 +211,11 @@ def _observation(
     retryable: bool = False,
     retry_count: int = 0,
 ) -> ToolObservation:
-    result = normalize_read_result(source, call.arguments, data)
+    # Snapshot exactly once at the Runtime ingress.  Normalization, evidence,
+    # audit payloads, and Agent projections all consume this same immutable
+    # representation; no later facade mutation can change the observation.
+    snapshot = canonical_snapshot(data)
+    result = normalize_read_result(source, call.arguments, snapshot)
     if transport_status is not TransportStatus.SUCCESS:
         result = None
     provenance = build_provenance(source, call.arguments, result)
@@ -214,7 +233,7 @@ def _observation(
         owner=owner,
         transport_status=transport_status,
         disposition=disposition,
-        data=data,
+        data=snapshot,
         error_code=validation_error,
         retryable=retryable,
         retry_count=retry_count,

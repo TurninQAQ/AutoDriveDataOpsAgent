@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any
 
 from .contracts import CompletionContract, RequirementKind
+from .immutable import canonical_snapshot
 from .goals import GoalDescriptor
 from .identity import RequestIdentity
 from .outcomes import GoalOutcome, GoalStatus
@@ -100,6 +101,13 @@ class ToolObservation:
     observed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
     provenance: ObservationProvenance | None = None
     result: NormalizedReadResult | None = None
+
+    def __post_init__(self) -> None:
+        # Direct test hosts and future adapters may construct an observation
+        # without going through ReadToolRuntime.  Keep the same authority
+        # boundary in that path as well: observation data is never a mutable
+        # handle to a caller-owned payload.
+        object.__setattr__(self, "data", canonical_snapshot(self.data))
 
     @property
     def requested_target(self) -> str:

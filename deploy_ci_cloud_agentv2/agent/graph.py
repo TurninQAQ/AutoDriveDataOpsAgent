@@ -10,7 +10,13 @@ import uuid
 from .budgets import BudgetState
 from .context import ContextBudgetExceeded, ContextBuilder
 from .contracts import CompletionContractCompiler
-from .decisions import AgentDecision, FinalCandidate, ReadToolBatch, SingleToolCall
+from .decisions import (
+    AcceptedToolCall,
+    AgentDecision,
+    FinalCandidate,
+    ReadToolBatch,
+    SingleToolCall,
+)
 from .evidence import (
     EvidenceTracker,
     ObservationDisposition,
@@ -28,6 +34,7 @@ from .provenance import (
     ObservationScope,
     ScopeKind,
     ScopeStatus,
+    canonical_tool_call_fingerprint,
 )
 from .state import AgentState, CurrentRequestContext, LatestStateHolder
 from ..providers.model import ProviderUnavailable
@@ -195,17 +202,27 @@ def build_graph(dependencies: GraphDependencies):
             last_event_id = contract_event.event_id
             current = contract_current
 
-        guard_reason = descriptor_error or _read_guard_reason(
-            decision,
-            dependencies.read_runtime,
-            current.budgets.limits.max_parallel_read_batch,
-        )
+        accepted_decision: AgentDecision | None = None
+        guard_reason = descriptor_error
+        if guard_reason is None:
+            try:
+                accepted_decision = _accept_decision(
+                    decision,
+                    dependencies.read_runtime,
+                    current.budgets.limits.max_parallel_read_batch,
+                )
+            except (TypeError, ValueError) as exc:
+                guard_reason = f"READ_GUARD_REJECTED: {type(exc).__name__}: {exc}"
         if guard_reason is None and current.goal_descriptor is None and descriptor is None:
             guard_reason = "Agent did not declare a structured GoalDescriptor"
         accepted_current = replace(
             current,
-            decision=decision if guard_reason is None else None,
-            final_candidate=decision if guard_reason is None and isinstance(decision, FinalCandidate) else None,
+            decision=accepted_decision if guard_reason is None else None,
+            final_candidate=(
+                accepted_decision
+                if guard_reason is None and isinstance(accepted_decision, FinalCandidate)
+                else None
+            ),
         )
         decision_event = _emit(
             state,
@@ -215,6 +232,7 @@ def build_graph(dependencies: GraphDependencies):
                 "decision_kind": getattr(decision, "kind", type(decision).__name__),
                 "accepted": guard_reason is None,
                 "rejection_reason": guard_reason,
+                **_decision_audit_payload(accepted_decision),
             },
             current=accepted_current,
             causation_id=last_event_id,
@@ -229,14 +247,14 @@ def build_graph(dependencies: GraphDependencies):
             return result
 
         current = accepted_current
-        if isinstance(decision, FinalCandidate):
+        if isinstance(accepted_decision, FinalCandidate):
             final_event = _emit(
                 state,
                 dependencies,
                 "FinalCandidateProduced",
                 {
-                    "referenced_goal_ids": list(decision.referenced_goal_ids),
-                    "response_length": len(decision.response),
+                    "referenced_goal_ids": list(accepted_decision.referenced_goal_ids),
+                    "response_length": len(accepted_decision.response),
                 },
                 current=current,
                 causation_id=last_event_id,
@@ -275,13 +293,23 @@ def build_graph(dependencies: GraphDependencies):
                     message_template="The bounded execution budget was exhausted before all goals could be completed.",
                 ),
             )
-        guard_reason = (
-            _batch_guard_reason(decision, dependencies.read_runtime, budget.limits.max_parallel_read_batch)
-            if isinstance(decision, ReadToolBatch)
-            else _single_guard_reason(decision, dependencies.read_runtime)
-        )
-        if guard_reason is not None:
-            return _read_guard_update(state, dependencies, current, guard_reason, budget)
+        # Agent node has already produced the accepted canonical decision.
+        # Re-validating/reconstructing a provider proposal here would recreate
+        # the TOCTOU boundary this runtime is required to avoid.
+        if isinstance(decision, SingleToolCall):
+            accepted_calls = (decision.call,)
+        else:
+            accepted_calls = decision.calls
+        if not all(isinstance(call, AcceptedToolCall) for call in accepted_calls):
+            return _terminal_update(
+                state,
+                dependencies,
+                ControlledTerminalOutcome(
+                    code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
+                    safe_facts={"reason": "read_executor_received_unaccepted_call"},
+                    message_template="The runtime could not execute an unaccepted read decision.",
+                ),
+            )
 
         last_event_id = state.get("last_event_id")
 
@@ -291,7 +319,17 @@ def build_graph(dependencies: GraphDependencies):
                 state,
                 dependencies,
                 "ToolCallStarted",
-                {"call_id": call.call_id, "tool_name": call.tool_name, "attempt": attempt},
+                {
+                    "call_id": call.call_id,
+                    "tool_name": call.tool_name,
+                    "arguments": call.arguments,
+                    "arguments_fingerprint": canonical_tool_call_fingerprint(
+                        call.tool_name, call.arguments
+                    ),
+                    "attempt": attempt,
+                    "request_id": current.identity.request_id,
+                    "tool_catalog_hash": dependencies.tool_catalog_hash,
+                },
                 current=current,
                 causation_id=last_event_id,
             )
@@ -539,30 +577,65 @@ def build_graph(dependencies: GraphDependencies):
     return builder.compile()
 
 
-def _read_guard_reason(decision: object, runtime: ReadToolRuntime, max_batch: int) -> str | None:
+def _accept_decision(
+    decision: AgentDecision,
+    runtime: ReadToolRuntime,
+    max_batch: int,
+) -> AgentDecision:
+    """Turn one provider proposal into the immutable Runtime decision.
+
+    This function is the only READ acceptance boundary.  The returned call(s)
+    are the exact objects subsequently stored in state and passed to the
+    executor.
+    """
+
     if isinstance(decision, SingleToolCall):
-        return _single_guard_reason(decision, runtime)
+        return SingleToolCall(
+            runtime.validate_single(decision.call),
+            decision.proposed_goal_descriptor,
+        )
     if isinstance(decision, ReadToolBatch):
-        return _batch_guard_reason(decision, runtime, max_batch)
+        accepted = runtime.validate_batch(decision, max_batch)
+        return ReadToolBatch(accepted.calls, decision.proposed_goal_descriptor)
     if isinstance(decision, FinalCandidate):
-        return None
-    return "AgentDecision is not SingleToolCall, ReadToolBatch, or FinalCandidate"
+        return decision
+    raise ValueError("AgentDecision is not SingleToolCall, ReadToolBatch, or FinalCandidate")
 
 
-def _single_guard_reason(decision: SingleToolCall, runtime: ReadToolRuntime) -> str | None:
-    try:
-        runtime.validate_single(decision.call)
-    except (TypeError, ValueError) as exc:
-        return f"SINGLE_READ_GUARD_REJECTED: {type(exc).__name__}: {exc}"
-    return None
+def _decision_audit_payload(decision: AgentDecision | None) -> dict[str, Any]:
+    """Serialize only the Runtime-accepted decision representation."""
 
-
-def _batch_guard_reason(decision: ReadToolBatch, runtime: ReadToolRuntime, max_batch: int) -> str | None:
-    try:
-        runtime.validate_batch(decision, max_batch)
-    except (TypeError, ValueError) as exc:
-        return f"BATCH_READ_GUARD_REJECTED: {type(exc).__name__}: {exc}"
-    return None
+    if isinstance(decision, SingleToolCall):
+        call = decision.call
+        return {
+            "calls": [
+                {
+                    "call_id": call.call_id,
+                    "tool_name": call.tool_name,
+                    "arguments": call.arguments,
+                    "arguments_fingerprint": canonical_tool_call_fingerprint(
+                        call.tool_name, call.arguments
+                    ),
+                }
+            ]
+        }
+    if isinstance(decision, ReadToolBatch):
+        return {
+            "calls": [
+                {
+                    "call_id": call.call_id,
+                    "tool_name": call.tool_name,
+                    "arguments": call.arguments,
+                    "arguments_fingerprint": canonical_tool_call_fingerprint(
+                        call.tool_name, call.arguments
+                    ),
+                }
+                for call in decision.calls
+            ]
+        }
+    if isinstance(decision, FinalCandidate):
+        return {"referenced_goal_ids": list(decision.referenced_goal_ids)}
+    return {}
 
 
 def _read_guard_update(

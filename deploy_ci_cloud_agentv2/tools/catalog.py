@@ -87,4 +87,5 @@ def build_read_registry(facade: ReadFacade) -> ToolRegistry:
         ),
         facade.diagnose_task,
     )
+    registry.seal()
     return registry
