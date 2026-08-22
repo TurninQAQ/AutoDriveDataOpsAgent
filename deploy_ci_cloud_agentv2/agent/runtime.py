@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -117,17 +117,18 @@ async def invoke(
     )
     started = system_context.event_store.append(
         event_type="AgentRunStarted",
-        request_id=state["request_id"],
+        request_id=state["current_request"].identity.request_id,
         thread_id=thread_id,
         payload={"user_input_length": len(user_input)},
         provenance=provenance,
     )
     state["last_event_id"] = started.event_id
+    current = state["current_request"]
     latest_state = LatestStateHolder()
     latest_state.record(state)
     dependencies = GraphDependencies(
         provider=system_context.provider,
-        read_runtime=ReadToolRuntime(system_context.tool_registry),
+        read_runtime=ReadToolRuntime(system_context.tool_registry, current.identity),
         compiler=CompletionContractCompiler(),
         evidence_tracker=EvidenceTracker(),
         completion_gate=ResponseCompletionGate(),
@@ -155,29 +156,31 @@ async def invoke(
             message_template="The runtime could not safely complete this interaction.",
         )
         final_state = latest_state.current() or dict(state)
-        final_state.update(
-            {
-                "terminal_state": terminal,
-                "termination_reason": terminal.code.value,
-            }
+        final_state["current_request"] = replace(
+            final_state["current_request"],
+            terminal_state=terminal,
+            termination_reason=terminal.code.value,
+            decision=None,
+            final_candidate=None,
         )
         terminal_event = system_context.event_store.append(
             event_type="ControlledTerminalOutcomeProduced",
-            request_id=final_state["request_id"],
-            thread_id=thread_id,
+            request_id=final_state["current_request"].identity.request_id,
+            thread_id=final_state["thread_id"],
             payload={"code": terminal.code.value, "safe_facts": terminal.safe_facts},
             provenance=provenance,
         )
         final_state["last_event_id"] = terminal_event.event_id
         latest_state.record(final_state)
-    terminal = final_state.get("terminal_state")
-    passed = bool(final_state.get("gate_passed"))
+    final_current = final_state["current_request"]
+    terminal = final_current.terminal_state
+    passed = bool(final_current.gate_passed)
     status = "COMPLETED" if passed else "CONTROLLED_TERMINAL" if terminal else "ERROR"
     completed_event = system_context.event_store.append(
         event_type="AgentRunCompleted",
-        request_id=state["request_id"],
+        request_id=final_current.identity.request_id,
         thread_id=thread_id,
-        payload={"status": status, "termination_reason": final_state.get("termination_reason")},
+        payload={"status": status, "termination_reason": final_current.termination_reason},
         provenance=provenance,
         causation_id=final_state.get("last_event_id"),
     )
@@ -186,13 +189,13 @@ async def invoke(
     # only after linking that event into state, so a checkpoint cannot lag the
     # audit trace by one event.
     system_context.checkpointer.save(final_state)
-    candidate = final_state.get("final_candidate")
+    candidate = final_current.final_candidate
     return AgentRunResult(
         thread_id=thread_id,
-        request_id=state["request_id"],
+        request_id=final_current.identity.request_id,
         status=status,
         response=candidate.response if passed and candidate is not None else None,
-        goal_outcomes=tuple(final_state.get("goal_outcomes", {}).values()),
+        goal_outcomes=tuple(final_current.goal_outcomes.values()),
         terminal_outcome=terminal,
         state=final_state,
     )

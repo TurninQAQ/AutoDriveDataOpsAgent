@@ -1,4 +1,4 @@
-"""Explicit separation of authoritative state, guidance, and untrusted data."""
+"""Bounded Agent projection over one current request and separate history."""
 
 from __future__ import annotations
 
@@ -7,22 +7,28 @@ from typing import Any
 
 from .budgets import BudgetState
 from .contracts import CompletionContract
-from .evidence import (
-    ContextBudgetExceeded,
-    EvidenceProjection,
-    EvidenceProjectionBuilder,
-    EvidenceState,
-    ToolObservation,
-)
+from .evidence import ContextBudgetExceeded, EvidenceProjection, EvidenceProjectionBuilder
 from .goals import GoalDescriptor
+from .identity import RequestIdentity
 from .outcomes import ControlledTerminalOutcome, GoalOutcome
 from .principles import OperatingPrinciplesSnapshot
+from .state import CurrentRequestContext, ThreadHistory
+
+
+@dataclass(frozen=True)
+class HistoricalRequestProjection:
+    request_id: str
+    turn_id: str
+    user_input: str
+    status: str
+    goal_ids: tuple[str, ...]
+    outcome_statuses: tuple[str, ...]
+    response: str | None
 
 
 @dataclass(frozen=True)
 class RuntimeStructuredContext:
-    request_id: str
-    thread_id: str
+    identity: RequestIdentity
     goal_descriptor: GoalDescriptor | None
     completion_contract: CompletionContract | None
     goal_outcomes: tuple[GoalOutcome, ...]
@@ -42,7 +48,7 @@ class OperatingGuidanceContext:
 
 @dataclass(frozen=True)
 class SemanticObservationContext:
-    observations: tuple[ToolObservation, ...]
+    observations: tuple[Any, ...]
     trust_label: str = "UNTRUSTED_EXTERNAL_DATA"
 
 
@@ -53,17 +59,13 @@ class AgentContext:
     runtime_structured: RuntimeStructuredContext
     operating_guidance: OperatingGuidanceContext
     semantic_observations: SemanticObservationContext
+    thread_history: tuple[HistoricalRequestProjection, ...]
     new_turn: bool
     estimated_context_chars: int
 
 
 class ContextBuilder:
-    """Build bounded typed projections without truncating runtime authority.
-
-    ``max_context_tokens`` is an explicit character approximation (4 chars per
-    token) for the entire Agent-facing projection. Canonical evidence remains
-    complete in state; only a metadata projection enters this context.
-    """
+    """Build a bounded, authority-preserving projection for one request."""
 
     def __init__(
         self,
@@ -72,47 +74,56 @@ class ContextBuilder:
         max_observations: int = 32,
         max_messages: int = 32,
         max_message_chars: int = 4_096,
+        max_history_requests: int = 8,
         evidence_projection: EvidenceProjectionBuilder | None = None,
     ):
         self.max_guidance_chars = max_guidance_chars
         self.max_observations = max_observations
         self.max_messages = max_messages
         self.max_message_chars = max_message_chars
+        self.max_history_requests = max_history_requests
         self.evidence_projection = evidence_projection or EvidenceProjectionBuilder()
 
-    def build(self, state: dict[str, Any], snapshot: OperatingPrinciplesSnapshot) -> AgentContext:
-        max_context_chars = int(state["budgets"].limits.max_context_tokens) * 4
+    def build(self, current: CurrentRequestContext, history: ThreadHistory) -> AgentContext:
+        max_context_chars = int(current.budgets.limits.max_context_tokens) * 4
         if max_context_chars < 256:
-            raise ContextBudgetExceeded("context budget is too small for critical structured state")
-
+            raise ContextBudgetExceeded("context budget is too small for critical request state")
         projection_budget = max(256, max_context_chars // 2)
         evidence_projection = self.evidence_projection.build(
-            state.get("evidence", EvidenceState()),
-            state.get("goal_descriptor"),
-            state.get("completion_contract"),
+            current.evidence,
+            current.goal_descriptor,
+            current.completion_contract,
             max_records=min(64, max(1, projection_budget // 160)),
             max_chars=projection_budget,
         )
         critical_structured = {
-            "request_id": state["request_id"],
-            "thread_id": state["thread_id"],
-            "goal_descriptor": state.get("goal_descriptor"),
-            "completion_contract": state.get("completion_contract"),
-            "goal_outcomes": tuple(state.get("goal_outcomes", {}).values()),
-            "budgets": state["budgets"],
-            "terminal_state": state.get("terminal_state"),
-            "gate_feedback": tuple(state.get("gate_feedback", ()))[:8],
+            "identity": current.identity,
+            "goal_descriptor": current.goal_descriptor,
+            "completion_contract": current.completion_contract,
+            "goal_outcomes": tuple(current.goal_outcomes.values()),
+            "evidence": evidence_projection,
+            "budgets": current.budgets,
+            "terminal_state": current.terminal_state,
+            "gate_feedback": current.gate_feedback[:8],
         }
-        structured_cost = len(repr(critical_structured)) + len(repr(evidence_projection))
+        structured_cost = len(repr(critical_structured))
         if structured_cost >= max_context_chars:
-            raise ContextBudgetExceeded("critical structured projection exceeds context budget")
-        semantic_budget_total = max_context_chars - structured_cost
+            raise ContextBudgetExceeded("critical current request projection exceeds context budget")
+        history_projection = self._history_projection(history)
+        history_cost = sum(len(repr(item)) for item in history_projection)
+        semantic_budget_total = max_context_chars - structured_cost - history_cost
+        if semantic_budget_total < 0:
+            raise ContextBudgetExceeded(
+                "critical current request plus bounded history exceeds context budget"
+            )
 
-        # Guidance has priority over semantic payloads, but remains advisory.
-        guidance_limit = min(semantic_budget_total // 3, self.max_guidance_chars)
+        # Keep room for provider-facing dataclass/dict framing.  The budget is
+        # for the whole projection, not merely the text bodies, so semantic
+        # channels use conservative shares of the remaining characters.
+        guidance_limit = min(max(0, semantic_budget_total // 6), self.max_guidance_chars)
         guidance: list[str] = []
         guidance_size = 0
-        for item in snapshot.principles:
+        for item in current.operating_principles_snapshot.principles:
             text = f"{item.principle_id}: {item.title}\n{item.text}"
             remaining = guidance_limit - guidance_size
             if remaining <= 0:
@@ -121,75 +132,107 @@ class ContextBuilder:
             guidance.append(bounded)
             guidance_size += len(bounded)
 
-        user_budget = max(32, semantic_budget_total // 4)
-        user_input = _bound_text(str(state.get("user_input", "")), user_budget)
+        user_budget = max(32, max(0, semantic_budget_total - guidance_size) // 8)
+        user_input = _bound_text(current.user_input, user_budget)
         semantic_budget = max(0, semantic_budget_total - guidance_size - len(user_input))
         observations, observation_size = self._latest_observations(
-            state.get("observations", ()), min(self.max_observations, semantic_budget // 2), semantic_budget
+            current.observations,
+            min(self.max_observations, semantic_budget // 4),
+            semantic_budget // 4,
         )
-
-        message_budget = max(
-            0, semantic_budget - observation_size
+        # Dataclass and container framing is part of the provider-facing
+        # representation too.  Reserve a fixed envelope allowance so the
+        # semantic channels cannot consume the entire remaining budget.
+        message_budget = max(0, semantic_budget - observation_size - 1_024)
+        messages = self._latest_messages(current.messages, message_budget)
+        runtime_structured = RuntimeStructuredContext(
+            identity=current.identity,
+            goal_descriptor=current.goal_descriptor,
+            completion_contract=current.completion_contract,
+            goal_outcomes=tuple(current.goal_outcomes.values()),
+            evidence=evidence_projection,
+            budgets=current.budgets,
+            terminal_state=current.terminal_state,
+            gate_feedback=current.gate_feedback,
+            new_turn=current.new_turn,
         )
-        messages = self._latest_messages(state.get("messages", ()), message_budget)
-
+        guidance_context = OperatingGuidanceContext(
+            version=current.operating_principles_snapshot.version,
+            content_hash=current.operating_principles_snapshot.content_hash,
+            principles=tuple(guidance),
+        )
+        semantic_context = SemanticObservationContext(observations=observations)
+        provisional = AgentContext(
+            user_input=user_input,
+            messages=messages,
+            runtime_structured=runtime_structured,
+            operating_guidance=guidance_context,
+            semantic_observations=semantic_context,
+            thread_history=history_projection,
+            new_turn=current.new_turn,
+            estimated_context_chars=0,
+        )
+        # The budget applies to the complete provider-facing projection, not
+        # just message content.  repr() is an intentional deterministic,
+        # dependency-free approximation for this offline Phase B boundary.
+        estimated = len(repr(provisional))
+        if estimated > max_context_chars:
+            raise ContextBudgetExceeded("Agent-facing projection exceeded the full context budget")
         return AgentContext(
             user_input=user_input,
             messages=messages,
-            runtime_structured=RuntimeStructuredContext(
-                request_id=state["request_id"],
-                thread_id=state["thread_id"],
-                goal_descriptor=state.get("goal_descriptor"),
-                completion_contract=state.get("completion_contract"),
-                goal_outcomes=tuple(state.get("goal_outcomes", {}).values()),
-                evidence=evidence_projection,
-                budgets=state["budgets"],
-                terminal_state=state.get("terminal_state"),
-                gate_feedback=tuple(state.get("gate_feedback", ())),
-                new_turn=bool(state.get("new_turn", False)),
-            ),
-            operating_guidance=OperatingGuidanceContext(
-                version=snapshot.version,
-                content_hash=snapshot.content_hash,
-                principles=tuple(guidance),
-            ),
-            semantic_observations=SemanticObservationContext(observations=observations),
-            new_turn=bool(state.get("new_turn", False)),
-            estimated_context_chars=(
-                structured_cost
-                + guidance_size
-                + len(user_input)
-                + observation_size
-                + sum(len(str(item.get("content", ""))) for item in messages)
-            ),
+            runtime_structured=runtime_structured,
+            operating_guidance=guidance_context,
+            semantic_observations=semantic_context,
+            thread_history=history_projection,
+            new_turn=current.new_turn,
+            estimated_context_chars=estimated,
+        )
+
+    def _history_projection(self, history: ThreadHistory) -> tuple[HistoricalRequestProjection, ...]:
+        selected = history.requests[-self.max_history_requests :]
+        return tuple(
+            HistoricalRequestProjection(
+                request_id=item.request_id,
+                turn_id=item.turn_id,
+                user_input=_bound_text(item.user_input, 512),
+                status=item.status,
+                goal_ids=tuple(goal.goal_id for goal in item.goal_descriptor.goals)
+                if item.goal_descriptor is not None
+                else (),
+                outcome_statuses=tuple(outcome.status.value for outcome in item.goal_outcomes),
+                response=_bound_text(item.response, 1_024) if item.response else None,
+            )
+            for item in selected
         )
 
     def _latest_observations(
         self, observations: Any, limit: int, budget: int
-    ) -> tuple[tuple[ToolObservation, ...], int]:
+    ) -> tuple[tuple[Any, ...], int]:
         selected = list(observations)[-self.max_observations :]
         if limit <= 0 or budget <= 0:
             return (), 0
-        kept: list[ToolObservation] = []
+        kept: list[Any] = []
         used = 0
-        # Walk backwards so the newest observation is never pushed out by old
-        # large logs. Restore chronological order for the Agent projection.
         for observation in reversed(selected):
             if len(kept) >= limit or used >= budget:
                 break
-            data_text = repr(observation.data)
             remaining = budget - used
-            if len(data_text) > remaining:
-                bounded_data = _with_marker(
-                    data_text, remaining, " [semantic context truncated]"
-                )
-                kept.append(replace(observation, data=bounded_data, result=None))
-                used += len(bounded_data)
+            base = _observation_projection(observation, "")
+            overhead = len(repr(base))
+            if overhead >= remaining:
                 break
-            # The normalized result can contain large knowledge/diagnostic
-            # content. It is canonical Runtime data, not a prompt payload.
-            kept.append(replace(observation, result=None))
-            used += len(data_text)
+            data_text = repr(observation.data)
+            available = remaining - overhead
+            bounded_data = _with_marker(
+                data_text, available, " [semantic context truncated]"
+            )
+            projected = _observation_projection(observation, bounded_data)
+            cost = len(repr(projected))
+            if cost > remaining:
+                break
+            kept.append(projected)
+            used += cost
         kept.reverse()
         return tuple(kept), used
 
@@ -203,21 +246,61 @@ class ContextBuilder:
                 break
             row = dict(message) if isinstance(message, dict) else {"content": str(message)}
             content = str(row.get("content", ""))
-            remaining = min(self.max_message_chars, budget - used)
-            bounded = _with_marker(content, remaining, " [message context truncated]")
-            row["content"] = bounded
-            kept.append(row)
-            used += len(bounded)
+            remaining = budget - used
+            # Only preserve the small conversational fields that are part of
+            # the provider contract.  Arbitrary message metadata is not a
+            # bounded context channel.
+            prefix = {
+                "role": _bound_text(row.get("role"), 32),
+                "kind": _bound_text(row.get("kind"), 64),
+                "candidate": bool(row.get("candidate", False)),
+            }
+            overhead = len(repr({**prefix, "content": ""}))
+            if overhead >= remaining:
+                break
+            content_limit = min(
+                self.max_message_chars,
+                max(0, remaining - overhead),
+            )
+            bounded = _with_marker(content, content_limit, " [message context truncated]")
+            projected = {**prefix, "content": bounded}
+            cost = len(repr(projected))
+            if cost > remaining:
+                break
+            kept.append(projected)
+            used += cost
         kept.reverse()
         return tuple(kept)
 
 
-def _bound_text(value: str, limit: int) -> str:
+def _observation_projection(observation: Any, bounded_data: str) -> dict[str, Any]:
+    provenance = getattr(observation, "provenance", None)
+    return {
+        "observation_id": getattr(observation, "observation_id", ""),
+        "source": getattr(observation, "source", ""),
+        "target": getattr(observation, "target", ""),
+        "transport_status": getattr(getattr(observation, "transport_status", None), "value", ""),
+        "disposition": getattr(getattr(observation, "disposition", None), "value", ""),
+        "trust": getattr(observation, "trust", "UNTRUSTED_EXTERNAL_DATA"),
+        "error_code": getattr(observation, "error_code", None),
+        "observed_at": getattr(observation, "observed_at", None),
+        "provenance": {
+            "requested_identity": getattr(provenance, "requested_identity", None),
+            "observed_identity": getattr(provenance, "observed_identity", None),
+            "identity_status": getattr(getattr(provenance, "identity_status", None), "value", ""),
+            "scope_status": getattr(getattr(provenance, "scope_status", None), "value", ""),
+        },
+        "data": bounded_data,
+    }
+
+
+def _bound_text(value: str | None, limit: int) -> str:
+    text = "" if value is None else str(value)
     if limit <= 0:
         return ""
-    if len(value) <= limit:
-        return value
-    return value[: max(0, limit - len("…"))] + "…"
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
 
 
 def _with_marker(value: str, limit: int, marker: str) -> str:

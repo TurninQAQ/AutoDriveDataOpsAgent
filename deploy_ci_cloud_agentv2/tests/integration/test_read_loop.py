@@ -164,10 +164,10 @@ def test_parallel_read_and_partial_failure_then_agent_retry():
     )
     result, context = run(provider, facade, thread_id="parallel")
     assert result.status == "COMPLETED"
-    assert [item.status for item in result.state["observations"]] == [
+    assert [item.transport_status.value for item in result.state["current_request"].observations] == [
         "SUCCESS",
         "SUCCESS",
-        "READ_FAILURE",
+        "TIMEOUT",
         "SUCCESS",
     ]
     assert [call[0] for call in facade.calls].count("get_task_detail") == 1
@@ -240,11 +240,11 @@ def test_observation_prompt_injection_remains_untrusted_data():
         thread_id="injection",
     )
     assert result.status == "COMPLETED"
-    observation = result.state["observations"][0]
+    observation = result.state["current_request"].observations[0]
     assert observation.trust == "UNTRUSTED_EXTERNAL_DATA"
     assert observation.data["log"] == injection
-    assert result.state["goal_descriptor"] == descriptor
-    assert result.state["terminal_state"] is None
+    assert result.state["current_request"].goal_descriptor == descriptor
+    assert result.state["current_request"].terminal_state is None
 
 
 def test_one_run_keeps_a_frozen_operating_principles_snapshot(tmp_path):

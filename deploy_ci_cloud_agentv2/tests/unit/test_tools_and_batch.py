@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from deploy_ci_cloud_agentv2.agent.decisions import ReadToolBatch, ToolCall
+from deploy_ci_cloud_agentv2.agent.identity import RequestIdentity
 from deploy_ci_cloud_agentv2.platform import InMemoryReadFacade
 from deploy_ci_cloud_agentv2.tools.catalog import build_read_registry
 from deploy_ci_cloud_agentv2.tools.metadata import ToolKind
@@ -20,7 +21,7 @@ def test_phase_b_tool_specs_have_read_retry_and_parallel_metadata():
 
 
 def test_batch_rejects_non_parallel_safe_tool_and_dependency_reference():
-    runtime = ReadToolRuntime(build_read_registry(InMemoryReadFacade()))
+    runtime = ReadToolRuntime(build_read_registry(InMemoryReadFacade()), RequestIdentity("t", "r", "turn"))
     with pytest.raises(ValueError, match="parallel-safe"):
         runtime.validate_batch(
             ReadToolBatch((ToolCall("c1", "diagnose_task", {"task_name": "task_A"}),)),
@@ -48,7 +49,7 @@ def test_partial_batch_failure_preserves_successful_siblings():
             ]
         },
     )
-    runtime = ReadToolRuntime(build_read_registry(facade))
+    runtime = ReadToolRuntime(build_read_registry(facade), RequestIdentity("t", "r", "turn"))
     result = asyncio.run(
         runtime.execute_batch(
             ReadToolBatch(
@@ -61,10 +62,10 @@ def test_partial_batch_failure_preserves_successful_siblings():
             max_retries=2,
         )
     )
-    assert [item.status for item in result.results] == [
+    assert [item.transport_status.value for item in result.results] == [
         "SUCCESS",
         "SUCCESS",
-        "READ_FAILURE",
+        "TIMEOUT",
     ]
     assert [item.data for item in result.results[:2]] == [
         {"task_name": "task_A", "state": "running"},
@@ -79,12 +80,12 @@ def test_read_timeout_has_bounded_side_effect_free_retry():
             "get_gpu_pool": [ReadFailure("READ_TIMEOUT", "timeout", retryable=True), None]
         },
     )
-    runtime = ReadToolRuntime(build_read_registry(facade))
+    runtime = ReadToolRuntime(build_read_registry(facade), RequestIdentity("t", "r", "turn"))
     result = asyncio.run(
         runtime.execute_single(
             ToolCall("gpu", "get_gpu_pool", {}), max_retries=2
         )
     )
-    assert result.status == "SUCCESS"
+    assert result.transport_status.value == "SUCCESS"
     assert result.retry_count == 1
     assert [call[0] for call in facade.calls] == ["get_gpu_pool", "get_gpu_pool"]

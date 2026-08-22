@@ -176,7 +176,9 @@ class DeterministicReadAgent:
     @staticmethod
     def _has_evidence(context: AgentContext, kind: EvidenceKind, target: str) -> bool:
         return any(
-            item.kind is kind and item.target == target and item.status == "VALID"
+            item.kind is kind
+            and item.target == target
+            and item.freshness.is_current()
             for item in context.runtime_structured.evidence.records
         )
 

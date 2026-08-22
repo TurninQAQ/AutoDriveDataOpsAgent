@@ -1,18 +1,15 @@
-"""Runtime-owned observations, qualified evidence, and bounded projections.
-
-Raw tool payloads remain untrusted external data.  Only normalized result
-contracts can cross into an :class:`EvidenceRecord`.
-"""
+"""Owned observations, fresh qualified evidence, and bounded projections."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 from .contracts import CompletionContract, RequirementKind
 from .goals import GoalDescriptor
+from .identity import RequestIdentity
 from .outcomes import GoalOutcome, GoalStatus
 from .provenance import (
     IdentityStatus,
@@ -20,7 +17,6 @@ from .provenance import (
     ObservationScope,
     ScopeKind,
     ScopeStatus,
-    build_provenance,
 )
 from .results import (
     DiagnosticResult,
@@ -28,8 +24,8 @@ from .results import (
     KnowledgeResult,
     NormalizedReadResult,
     QueueResult,
+    ResultStatus,
     TaskDetailResult,
-    normalize_read_result,
 )
 
 
@@ -42,13 +38,60 @@ class EvidenceKind(str, Enum):
     DIAGNOSTIC_CONTEXT = "DIAGNOSTIC_CONTEXT"
 
 
+class TransportStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    TIMEOUT = "TIMEOUT"
+    ERROR = "ERROR"
+
+
+class ObservationDisposition(str, Enum):
+    NORMALIZED = "NORMALIZED"
+    NORMALIZED_NO_QUALIFIED_EVIDENCE = "NORMALIZED_NO_QUALIFIED_EVIDENCE"
+    ABSENT = "ABSENT"
+    EXTERNAL_ERROR = "EXTERNAL_ERROR"
+    MALFORMED = "MALFORMED"
+    TRANSPORT_FAILURE = "TRANSPORT_FAILURE"
+    READ_GUARD_REJECTED = "READ_GUARD_REJECTED"
+
+
+class EvidenceValidity(str, Enum):
+    CURRENT = "CURRENT"
+    EXPIRED = "EXPIRED"
+    INVALIDATED = "INVALIDATED"
+
+
+@dataclass(frozen=True)
+class EvidenceFreshness:
+    observed_at: datetime
+    expires_at: datetime | None
+    validity: EvidenceValidity = EvidenceValidity.CURRENT
+
+    def is_current(self, now: datetime | None = None) -> bool:
+        if self.validity is not EvidenceValidity.CURRENT:
+            return False
+        moment = now or datetime.now(timezone.utc)
+        return self.expires_at is None or moment <= self.expires_at
+
+
+@dataclass(frozen=True)
+class EvidenceFreshnessPolicy:
+    """Explicit default freshness policy for mutable READ observations."""
+
+    default_ttl: timedelta | None = timedelta(minutes=5)
+
+    def expiration(self, observed_at: datetime) -> datetime | None:
+        return None if self.default_ttl is None else observed_at + self.default_ttl
+
+
 @dataclass(frozen=True)
 class ToolObservation:
     observation_id: str
     call_id: str
+    owner: RequestIdentity
     source: str
     target: str
-    status: str
+    transport_status: TransportStatus
+    disposition: ObservationDisposition
     data: object | None
     trust: str = "UNTRUSTED_EXTERNAL_DATA"
     error_code: str | None = None
@@ -73,24 +116,14 @@ class EvidenceRecord:
     kind: EvidenceKind
     target: str
     observation_id: str
+    owner: RequestIdentity
     provenance: ObservationProvenance
-    observed_at: datetime
+    freshness: EvidenceFreshness
     entity_version: str | None = None
-    valid_until: datetime | None = None
-    status: str = "VALID"
-    invalidated_by: str | None = None
 
     @property
     def source_tool(self) -> str:
         return self.provenance.source_tool
-
-    @property
-    def requested_target(self) -> str:
-        return self.provenance.requested_target
-
-    @property
-    def observed_target(self) -> str | None:
-        return self.provenance.observed_target
 
     @property
     def requested_scope(self) -> ObservationScope:
@@ -100,35 +133,39 @@ class EvidenceRecord:
     def observed_scope(self) -> ObservationScope:
         return self.provenance.observed_scope
 
+    @property
+    def observed_target(self) -> str | None:
+        return self.provenance.observed_target
+
     def is_current(self, now: datetime | None = None) -> bool:
-        if self.status != "VALID":
-            return False
-        if self.valid_until is None:
-            return True
-        return (now or datetime.now(timezone.utc)) <= self.valid_until
+        return self.freshness.is_current(now)
 
 
 @dataclass(frozen=True)
 class EvidenceState:
+    owner: RequestIdentity
     records: tuple[EvidenceRecord, ...] = ()
 
+    def __post_init__(self) -> None:
+        if any(record.owner != self.owner for record in self.records):
+            raise ValueError("EvidenceState contains a record owned by another request")
+
     def current(self, now: datetime | None = None) -> tuple[EvidenceRecord, ...]:
-        moment = now or datetime.now(timezone.utc)
-        return tuple(record for record in self.records if record.is_current(moment))
+        return tuple(record for record in self.records if record.is_current(now))
 
 
 @dataclass(frozen=True)
 class EvidenceProjectionRecord:
-    """Small, deterministic metadata only; never contains raw payload."""
+    """Bounded metadata; it contains no raw payload or semantic content."""
 
     evidence_id: str
     kind: EvidenceKind
     target: str
     observation_id: str
+    request_id: str
+    turn_id: str
     source_tool: str
-    observed_at: datetime
-    status: str
-    valid_until: datetime | None
+    freshness: EvidenceFreshness
     entity_version: str | None
     requested_scope: ObservationScope
     observed_scope: ObservationScope
@@ -150,19 +187,6 @@ class ContextBudgetExceeded(RuntimeError):
     """The critical structured projection cannot fit the explicit budget."""
 
 
-def build_observation_provenance(
-    source_tool: str, arguments: Mapping[str, Any], data: object
-) -> ObservationProvenance:
-    """Compatibility helper for callers constructing test observations.
-
-    Production Runtime calls normalization before this helper.  It is kept
-    narrow and deterministic for V2-local tests and host integrations.
-    """
-
-    result = normalize_read_result(source_tool, arguments, data)
-    return build_provenance(source_tool, arguments, result)
-
-
 class EvidenceTracker:
     """The only component allowed to create evidence records from reads."""
 
@@ -174,37 +198,32 @@ class EvidenceTracker:
         "diagnose_task": (DiagnosticResult, EvidenceKind.DIAGNOSTIC_CONTEXT),
     }
 
-    def __init__(self, *, freshness_seconds: int | None = None) -> None:
-        if freshness_seconds is not None and freshness_seconds < 0:
-            raise ValueError("freshness_seconds must not be negative")
-        self.freshness_seconds = freshness_seconds
+    def __init__(self, freshness_policy: EvidenceFreshnessPolicy | None = None) -> None:
+        self.freshness_policy = freshness_policy or EvidenceFreshnessPolicy()
 
     def record_observations(
-        self, state: EvidenceState, observations: tuple[ToolObservation, ...] | list[ToolObservation]
+        self,
+        state: EvidenceState,
+        observations: tuple[ToolObservation, ...] | list[ToolObservation],
+        owner: RequestIdentity,
     ) -> tuple[EvidenceState, tuple[EvidenceRecord, ...]]:
+        if state.owner != owner:
+            raise ValueError("EvidenceTracker owner does not match EvidenceState owner")
         records = list(state.records)
         created: list[EvidenceRecord] = []
         for observation in observations:
-            record = self._qualify(observation)
+            record = self._qualify(observation, owner)
             if record is not None:
-                if self.freshness_seconds is not None:
-                    record = EvidenceRecord(
-                        **{
-                            **record.__dict__,
-                            "valid_until": record.observed_at
-                            + timedelta(seconds=self.freshness_seconds),
-                        }
-                    )
                 records.append(record)
                 created.append(record)
-        return EvidenceState(tuple(records)), tuple(created)
+        return EvidenceState(owner=owner, records=tuple(records)), tuple(created)
 
     def refresh_goal_outcomes(
         self,
         descriptor: GoalDescriptor,
         contract: CompletionContract,
         evidence: EvidenceState,
-        outcomes: Mapping[str, GoalOutcome],
+        outcomes: dict[str, GoalOutcome],
     ) -> dict[str, GoalOutcome]:
         current = evidence.current()
         refreshed: dict[str, GoalOutcome] = {}
@@ -228,12 +247,24 @@ class EvidenceTracker:
             refreshed[goal.goal_id] = GoalOutcome(
                 goal_id=goal.goal_id,
                 status=GoalStatus.SATISFIED if satisfied else GoalStatus.PENDING,
-                reason_code="QUALIFIED_EVIDENCE_SATISFIED" if satisfied else "REQUIRED_EVIDENCE_MISSING",
+                reason_code=(
+                    "QUALIFIED_EVIDENCE_SATISFIED"
+                    if satisfied
+                    else "REQUIRED_EVIDENCE_MISSING"
+                ),
             )
         return refreshed
 
-    def _qualify(self, observation: ToolObservation) -> EvidenceRecord | None:
-        if observation.status != "SUCCESS" or observation.result is None:
+    def _qualify(
+        self, observation: ToolObservation, owner: RequestIdentity
+    ) -> EvidenceRecord | None:
+        if observation.owner != owner:
+            return None
+        if (
+            observation.transport_status is not TransportStatus.SUCCESS
+            or observation.disposition is not ObservationDisposition.NORMALIZED
+            or observation.result is None
+        ):
             return None
         result = observation.result
         expected = self._tool_kinds.get(observation.source)
@@ -264,13 +295,19 @@ class EvidenceTracker:
             kind=kind,
             target=target,
             observation_id=observation.observation_id,
+            owner=owner,
             provenance=provenance,
-            observed_at=observation.observed_at,
+            freshness=EvidenceFreshness(
+                observed_at=observation.observed_at,
+                expires_at=self.freshness_policy.expiration(observation.observed_at),
+            ),
             entity_version=result.entity_version,
         )
 
     @staticmethod
-    def _has_requirement(records: tuple[EvidenceRecord, ...], kind: RequirementKind, target: str) -> bool:
+    def _has_requirement(
+        records: tuple[EvidenceRecord, ...], kind: RequirementKind, target: str
+    ) -> bool:
         try:
             evidence_kind = EvidenceKind(kind.value)
         except ValueError:
@@ -291,20 +328,18 @@ class EvidenceProjectionBuilder:
         max_chars: int = 8_000,
     ) -> EvidenceProjection:
         all_records = list(state.records)
-        current = [record for record in all_records if record.status == "VALID"]
+        current = list(state.current())
         required: set[tuple[EvidenceKind, str]] = set()
         if contract is not None:
             for requirements in contract.requirements_by_goal.values():
                 for requirement in requirements:
                     if requirement.kind is not RequirementKind.TARGET_BINDING:
                         required.add((EvidenceKind(requirement.kind.value), requirement.target))
-
         critical: list[EvidenceRecord] = []
         for kind, target in sorted(required, key=lambda item: (item[0].value, item[1])):
             matches = [record for record in current if record.kind is kind and record.target == target]
             if matches:
-                critical.append(max(matches, key=lambda record: record.observed_at))
-
+                critical.append(max(matches, key=lambda record: record.freshness.observed_at))
         if len(critical) > max_records:
             raise ContextBudgetExceeded("critical evidence record count exceeds context budget")
         selected = list(critical)
@@ -317,7 +352,7 @@ class EvidenceProjectionBuilder:
             [record for record in current if record.evidence_id not in selected_ids],
             key=lambda record: (
                 0 if record.target in targets else 1,
-                -record.observed_at.timestamp(),
+                -record.freshness.observed_at.timestamp(),
             ),
         )
         selected.extend(ranked)
@@ -327,7 +362,7 @@ class EvidenceProjectionBuilder:
             if len(projected) >= max_records:
                 break
             item = _project_record(record)
-            cost = _projection_cost(item)
+            cost = len(repr(item))
             if used + cost > max_chars:
                 if record in critical:
                     raise ContextBudgetExceeded("critical evidence metadata exceeds context budget")
@@ -348,10 +383,10 @@ def _project_record(record: EvidenceRecord) -> EvidenceProjectionRecord:
         kind=record.kind,
         target=record.target,
         observation_id=record.observation_id,
+        request_id=record.owner.request_id,
+        turn_id=record.owner.turn_id,
         source_tool=record.source_tool,
-        observed_at=record.observed_at,
-        status=record.status,
-        valid_until=record.valid_until,
+        freshness=record.freshness,
         entity_version=record.entity_version,
         requested_scope=record.requested_scope,
         observed_scope=record.observed_scope,
@@ -360,7 +395,3 @@ def _project_record(record: EvidenceRecord) -> EvidenceProjectionRecord:
         identity_status=record.provenance.identity_status,
         scope_status=record.provenance.scope_status,
     )
-
-
-def _projection_cost(item: EvidenceProjectionRecord) -> int:
-    return len(repr(item))

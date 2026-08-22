@@ -44,8 +44,8 @@ def test_entity_mismatch_cannot_satisfy_task_or_diagnosis_goal():
         thread_id="mismatch-task",
     )
     assert result.status != "COMPLETED"
-    assert result.state["evidence"].records == ()
-    assert result.state["goal_outcomes"]["g1"].status.value == "PENDING"
+    assert result.state["current_request"].evidence.records == ()
+    assert result.state["current_request"].goal_outcomes["g1"].status.value == "PENDING"
     assert not any(
         event.payload.get("passed")
         for event in context.event_store.for_thread("mismatch-task")
@@ -78,7 +78,7 @@ def test_entity_mismatch_cannot_satisfy_task_or_diagnosis_goal():
     assert result.status != "COMPLETED"
     assert not any(
         record.kind == "DIAGNOSTIC_CONTEXT"
-        for record in result.state["evidence"].records
+        for record in result.state["current_request"].evidence.records
     )
 
 
@@ -104,7 +104,7 @@ def test_invalid_single_read_decision_is_bounded_and_agent_recovers():
     assert result.status == "COMPLETED"
     assert result.terminal_outcome is None
     assert any(
-        item.status == "READ_GUARD_REJECTED" for item in result.state["observations"]
+        item.disposition.value == "READ_GUARD_REJECTED" for item in result.state["current_request"].observations
     )
     assert not any(
         event.payload.get("code") == TerminalCode.UNRECOVERABLE_RUNTIME_ERROR.value
@@ -133,7 +133,7 @@ def test_invalid_batch_read_decision_is_bounded_and_agent_recovers():
         thread_id="invalid-batch",
     )
     assert result.status == "COMPLETED"
-    assert any(item.status == "READ_GUARD_REJECTED" for item in result.state["observations"])
+    assert any(item.disposition.value == "READ_GUARD_REJECTED" for item in result.state["current_request"].observations)
 
 
 def test_partial_batch_success_is_preserved_and_retry_budget_is_per_call():
@@ -170,12 +170,12 @@ def test_partial_batch_success_is_preserved_and_retry_budget_is_per_call():
         budgets=RuntimeBudgets(max_runtime_read_retries_per_call=1),
     )
     assert result.status == "COMPLETED"
-    assert [item.status for item in result.state["observations"]] == [
+    assert [item.transport_status.value for item in result.state["current_request"].observations] == [
         "SUCCESS",
-        "READ_FAILURE",
+        "TIMEOUT",
     ]
-    assert any(record.kind == "LIVE_TASK" for record in result.state["evidence"].records)
-    assert result.state["budgets"].runtime_read_retries_used == 1
+    assert any(record.kind == "LIVE_TASK" for record in result.state["current_request"].evidence.records)
+    assert result.state["current_request"].budgets.runtime_read_retries_used == 1
 
 
 def test_completed_checkpoint_points_to_event_store_tail():

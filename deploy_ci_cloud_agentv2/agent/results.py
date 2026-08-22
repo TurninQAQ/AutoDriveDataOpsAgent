@@ -128,14 +128,26 @@ class KnowledgeResult(NormalizedReadResult):
 class QueueEntry:
     task_name: str | None
     position: int | None
-    state: str | None
+    state: "QueueState | None"
+
+
+class QueueState(str, Enum):
+    QUEUED = "QUEUED"
+    PENDING = "PENDING"
+    WAITING = "WAITING"
+    RUNNING = "RUNNING"
+    ACTIVE = "ACTIVE"
+    DRAINING = "DRAINING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    UNKNOWN_EXTERNAL_STATE = "UNKNOWN_EXTERNAL_STATE"
 
 
 @dataclass(frozen=True)
 class QueueResult(NormalizedReadResult):
     task_name: str | None = None
     position: int | None = None
-    state: str | None = None
+    state: QueueState | None = None
     entries: tuple[QueueEntry, ...] = ()
 
     def qualifies_for_evidence(self) -> bool:
@@ -378,7 +390,13 @@ def _queue(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> QueueResult:
     if position is not None and (not isinstance(position, int) or isinstance(position, bool) or position < 0):
         errors.append("position must be a non-negative integer")
         position = None
-    state = _text(raw.get("state")) or _text(raw.get("queue_state"))
+    state = _queue_state(_text(raw.get("state")) or _text(raw.get("queue_state")), errors)
+    for field in ("active", "pending", "running"):
+        value = raw.get(field)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+        ):
+            errors.append(f"{field} must be a non-negative integer")
     entries: list[QueueEntry] = []
     if "queue" in raw:
         queue = raw["queue"]
@@ -398,7 +416,11 @@ def _queue(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> QueueResult:
                     errors.append(f"queue[{index}].position must be non-negative integer")
                     continue
                 entries.append(
-                    QueueEntry(_text(item.get("task_name")), entry_position, _text(item.get("state")))
+                    QueueEntry(
+                        _text(item.get("task_name")),
+                        entry_position,
+                        _queue_state(_text(item.get("state")), errors),
+                    )
                 )
     if envelope.is_success and not any(
         key in raw for key in ("queue", "position", "state", "queue_state", "active", "pending", "running")
@@ -451,6 +473,18 @@ def _observed_scope(
     # A bare position is task-like but has no identity; fail closed rather than
     # silently promoting it to platform scope.
     return ObservationScope(ScopeKind.UNKNOWN), errors
+
+
+_QUEUE_STATES = {item.value: item for item in QueueState}
+
+
+def _queue_state(value: str | None, errors: list[str]) -> QueueState | None:
+    if value is None:
+        return None
+    normalized = _QUEUE_STATES.get(value.upper())
+    if normalized is None:
+        errors.append(f"unknown queue state: {value}")
+    return normalized
 
 
 def _diagnosis(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> DiagnosticResult:

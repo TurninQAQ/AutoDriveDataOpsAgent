@@ -10,9 +10,14 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from ..agent.decisions import ReadToolBatch, ToolCall
-from ..agent.evidence import ToolObservation
+from ..agent.evidence import (
+    ObservationDisposition,
+    ToolObservation,
+    TransportStatus,
+)
+from ..agent.identity import RequestIdentity
 from ..agent.provenance import build_provenance
-from ..agent.results import normalize_read_result
+from ..agent.results import ResultStatus, normalize_read_result
 from .metadata import ToolKind
 from .registry import ToolRegistry
 
@@ -30,8 +35,9 @@ class ReadBatchObservation:
 
 
 class ReadToolRuntime:
-    def __init__(self, registry: ToolRegistry):
+    def __init__(self, registry: ToolRegistry, owner: RequestIdentity):
         self.registry = registry
+        self.owner = owner
 
     def validate_single(self, call: ToolCall) -> ToolCall:
         """Validate one proposed READ using the same guard as batch calls."""
@@ -84,7 +90,8 @@ class ReadToolRuntime:
                 return _observation(
                     call,
                     spec.name,
-                    status="SUCCESS",
+                    owner=self.owner,
+                    transport_status=TransportStatus.SUCCESS,
                     data=data,
                     retry_count=retries,
                 )
@@ -95,7 +102,12 @@ class ReadToolRuntime:
                 return _observation(
                     call,
                     spec.name,
-                    status="READ_FAILURE",
+                    owner=self.owner,
+                    transport_status=(
+                        TransportStatus.TIMEOUT
+                        if exc.error_code == "READ_TIMEOUT"
+                        else TransportStatus.ERROR
+                    ),
                     data=None,
                     error_code=exc.error_code,
                     retryable=exc.retryable,
@@ -108,7 +120,8 @@ class ReadToolRuntime:
                 return _observation(
                     call,
                     spec.name,
-                    status="READ_FAILURE",
+                    owner=self.owner,
+                    transport_status=TransportStatus.TIMEOUT,
                     data=None,
                     error_code="READ_TIMEOUT",
                     retryable=True,
@@ -118,7 +131,8 @@ class ReadToolRuntime:
                 return _observation(
                     call,
                     spec.name,
-                    status="READ_FAILURE",
+                    owner=self.owner,
+                    transport_status=TransportStatus.ERROR,
                     data=None,
                     error_code="READ_ERROR",
                     retryable=False,
@@ -175,27 +189,45 @@ def _observation(
     call: ToolCall,
     source: str,
     *,
-    status: str,
+    owner: RequestIdentity,
+    transport_status: TransportStatus,
     data: object | None,
     error_code: str | None = None,
     retryable: bool = False,
     retry_count: int = 0,
 ) -> ToolObservation:
     result = normalize_read_result(source, call.arguments, data)
-    if status != "SUCCESS":
+    if transport_status is not TransportStatus.SUCCESS:
         result = None
     provenance = build_provenance(source, call.arguments, result)
-    validation_error = (
-        "RESULT_VALIDATION_FAILED"
-        if result is not None and result.validation_errors
-        else error_code
-    )
+    if transport_status is not TransportStatus.SUCCESS:
+        disposition = ObservationDisposition.TRANSPORT_FAILURE
+    elif result is None:
+        disposition = ObservationDisposition.MALFORMED
+    elif result.envelope.status in {
+        ResultStatus.NOT_FOUND,
+        ResultStatus.NO_DATA,
+        ResultStatus.UNAVAILABLE,
+        ResultStatus.EMPTY,
+    }:
+        disposition = ObservationDisposition.ABSENT
+    elif result.envelope.status is ResultStatus.ERROR:
+        disposition = ObservationDisposition.EXTERNAL_ERROR
+    elif result.validation_errors or not result.is_valid:
+        disposition = ObservationDisposition.MALFORMED
+    elif result.qualifies_for_evidence():
+        disposition = ObservationDisposition.NORMALIZED
+    else:
+        disposition = ObservationDisposition.NORMALIZED_NO_QUALIFIED_EVIDENCE
+    validation_error = "RESULT_VALIDATION_FAILED" if result is not None and result.validation_errors else error_code
     return ToolObservation(
         observation_id=f"obs_{uuid.uuid4().hex}",
         call_id=call.call_id,
         source=source,
         target=_target_for(call),
-        status=status,
+        owner=owner,
+        transport_status=transport_status,
+        disposition=disposition,
         data=data,
         error_code=validation_error,
         retryable=retryable,
