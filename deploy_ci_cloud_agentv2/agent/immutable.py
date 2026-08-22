@@ -1,43 +1,48 @@
-"""Small immutable projection primitives used at authority boundaries.
+"""Closed immutable values used at Runtime authority boundaries.
 
-The runtime keeps complete canonical state internally, but values handed to a
-provider must not be writable handles into that state.  ``FrozenMapping`` is a
-deliberately small immutable Mapping implementation whose values are
-recursively frozen.  It is also deepcopy-safe, which keeps the checkpoint host
-compatible with the immutable model.
+The Runtime never treats an arbitrary Python object as canonical data. Values
+crossing an ingress boundary are detached and reduced to the small
+``CanonicalValue`` domain below. This is intentionally stricter than
+``deepcopy``: copying an object does not make an SDK object or a byte buffer a
+deterministic audit value.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Iterator
 from copy import deepcopy
-from dataclasses import asdict, fields, is_dataclass
-from typing import Any, TypeVar
+from dataclasses import fields, is_dataclass
+from datetime import date, datetime, time
+from enum import Enum
+import math
+from typing import Any, TypeAlias, TypeVar
+from uuid import UUID
 
 
 K = TypeVar("K")
 V = TypeVar("V")
 
 
-class FrozenMapping(Mapping[K, V]):
-    """A recursively immutable, deepcopy-safe mapping.
+class CanonicalizationError(ValueError):
+    """A value is outside the closed Runtime canonical value domain."""
 
-    The backing representation is a tuple rather than a dict.  This avoids
-    exposing a mutable private dictionary through an otherwise read-only
-    interface and is sufficient for the small structured projections in Phase
-    B.
-    """
+
+class FrozenMapping(Mapping[K, V]):
+    """A recursively immutable mapping with string keys."""
 
     __slots__ = ("_items",)
 
     def __init__(self, value: Mapping[K, V] | None = None, **kwargs: V) -> None:
-        items = list((value or {}).items())
+        if value is not None and not isinstance(value, Mapping):
+            raise CanonicalizationError("FrozenMapping requires a mapping")
+        items: list[tuple[Any, Any]] = list(value.items()) if value is not None else []
         items.extend(kwargs.items())
-        object.__setattr__(
-            self,
-            "_items",
-            tuple((key, freeze_value(item)) for key, item in items),
-        )
+        frozen: list[tuple[str, Any]] = []
+        for key, item in items:
+            if not isinstance(key, str):
+                raise CanonicalizationError("canonical mapping keys must be strings")
+            frozen.append((key, _freeze_internal(item)))
+        object.__setattr__(self, "_items", tuple(frozen))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise TypeError("FrozenMapping is immutable")
@@ -70,86 +75,158 @@ class FrozenMapping(Mapping[K, V]):
         return self
 
 
+CanonicalValue: TypeAlias = (
+    type(None)
+    | bool
+    | int
+    | float
+    | str
+    | tuple["CanonicalValue", ...]
+    | FrozenMapping[str, "CanonicalValue"]
+)
+
+
 def freeze_value(value: Any) -> Any:
-    """Recursively convert mutable containers to immutable projections."""
+    """Canonicalize a Runtime-owned value and reject unknown leaves."""
 
     if isinstance(value, FrozenMapping):
         return value
     if is_dataclass(value) and not isinstance(value, type):
         params = getattr(type(value), "__dataclass_params__", None)
         if params is not None and getattr(params, "frozen", False):
-            # Preserve typed identity for Phase B dataclasses, but recursively
-            # freeze every field first.  A frozen dataclass with a nested dict
-            # is otherwise only shallowly immutable.
             clone = deepcopy(value)
             try:
                 for item in fields(value):
-                    object.__setattr__(
-                        clone, item.name, freeze_value(getattr(clone, item.name))
-                    )
+                    object.__setattr__(clone, item.name, _freeze_internal(getattr(clone, item.name)))
                 return clone
-            except (AttributeError, TypeError):
+            except (AttributeError, TypeError, CanonicalizationError):
                 return FrozenMapping(
-                    {item.name: freeze_value(getattr(value, item.name)) for item in fields(value)}
+                    {item.name: _freeze_internal(getattr(value, item.name)) for item in fields(value)}
                 )
-        return freeze_value(asdict(value))
-    if isinstance(value, Mapping):
-        return FrozenMapping(value)
-    if isinstance(value, list):
-        return tuple(freeze_value(item) for item in value)
-    if isinstance(value, tuple):
-        return tuple(freeze_value(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(freeze_value(item) for item in value)
-    return value
+        return FrozenMapping(
+            {item.name: _freeze_internal(getattr(value, item.name)) for item in fields(value)}
+        )
+    return _freeze_internal(value)
 
 
 def isolated_copy(value: Any) -> Any:
-    """Make a detached mutable snapshot for read-only audit projections."""
+    """Make a detached mutable projection from canonical data."""
 
     return deepcopy(value)
 
 
 def canonical_snapshot(value: Any) -> Any:
-    """Detach external data and recursively freeze the detached value.
+    """Detach external JSON-like data and return a closed immutable snapshot.
 
-    This is the single ingress primitive for caller-owned objects.  The
-    deepcopy happens before freezing so a mapping/list/dataclass returned by a
-    facade or MCP adapter can never remain an alias of Runtime state.
+    External tool payloads are intentionally strict: sets, bytes, buffers and
+    arbitrary objects are not JSON-like and must be normalized by the adapter
+    before ingress. Dataclasses and supported scalar special types are
+    deterministically projected to canonical data.
     """
 
-    return _freeze_external(deepcopy(value))
-
-
-def _freeze_external(value: Any) -> Any:
-    """Freeze a raw external value, projecting dataclasses as data objects."""
-
-    if is_dataclass(value) and not isinstance(value, type):
-        return FrozenMapping(
-            {item.name: _freeze_external(getattr(value, item.name)) for item in fields(value)}
-        )
     if isinstance(value, FrozenMapping):
+        # FrozenMapping construction already proved every reachable child is
+        # canonical; retaining this immutable object avoids a second ingress
+        # representation for ToolObservation.data.
         return value
+    try:
+        detached = deepcopy(value)
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        raise CanonicalizationError(f"value cannot be detached: {type(value).__name__}") from exc
+    return _canonicalize(detached, allow_sets=False, dataclass_as_mapping=True)
+
+
+def _freeze_internal(value: Any) -> Any:
+    return _canonicalize(value, allow_sets=False, dataclass_as_mapping=False)
+
+
+def _canonicalize(value: Any, *, allow_sets: bool, dataclass_as_mapping: bool) -> Any:
+    # bool must precede int because bool is an int subclass.
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise CanonicalizationError("non-finite floats are not canonical values")
+        return value
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Enum):
+        return _canonicalize(value.value, allow_sets=allow_sets, dataclass_as_mapping=dataclass_as_mapping)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raise CanonicalizationError(f"unsupported binary value: {type(value).__name__}")
+    if callable(value):
+        raise CanonicalizationError("callable values are not canonical")
+    if is_dataclass(value) and not isinstance(value, type):
+        params = getattr(type(value), "__dataclass_params__", None)
+        if not dataclass_as_mapping and params is not None and getattr(params, "frozen", False):
+            clone = deepcopy(value)
+            try:
+                for item in fields(value):
+                    object.__setattr__(
+                        clone,
+                        item.name,
+                        _canonicalize(
+                            getattr(clone, item.name),
+                            allow_sets=allow_sets,
+                            dataclass_as_mapping=False,
+                        ),
+                    )
+                return clone
+            except (AttributeError, TypeError, CanonicalizationError):
+                # A typed frozen dataclass with an unsupported child is not a
+                # canonical value merely because its outer shell is frozen.
+                raise CanonicalizationError(
+                    f"frozen dataclass {type(value).__name__} contains a non-canonical field"
+                )
+        return FrozenMapping(
+            {
+                item.name: _canonicalize(
+                    getattr(value, item.name),
+                    allow_sets=allow_sets,
+                    dataclass_as_mapping=True,
+                )
+                for item in fields(value)
+            }
+        )
     if isinstance(value, Mapping):
-        return FrozenMapping({key: _freeze_external(item) for key, item in value.items()})
+        items: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise CanonicalizationError("canonical mapping keys must be strings")
+            items[key] = _canonicalize(
+                item, allow_sets=allow_sets, dataclass_as_mapping=dataclass_as_mapping
+            )
+        return FrozenMapping(items)
     if isinstance(value, list):
-        return tuple(_freeze_external(item) for item in value)
+        return tuple(
+            _canonicalize(item, allow_sets=allow_sets, dataclass_as_mapping=dataclass_as_mapping)
+            for item in value
+        )
     if isinstance(value, tuple):
-        return tuple(_freeze_external(item) for item in value)
+        return tuple(
+            _canonicalize(item, allow_sets=allow_sets, dataclass_as_mapping=dataclass_as_mapping)
+            for item in value
+        )
     if isinstance(value, (set, frozenset)):
-        return frozenset(_freeze_external(item) for item in value)
-    return value
+        if not allow_sets:
+            raise CanonicalizationError("set values must be explicitly normalized before ingress")
+        raise CanonicalizationError("sets are not part of the canonical value domain")
+    raise CanonicalizationError(f"unsupported canonical value: {type(value).__name__}")
 
 
 def thaw_value(value: Any) -> Any:
-    """Return a detached, ordinary-container view for human-readable traces."""
+    """Return a detached ordinary-container projection for read APIs."""
 
     if isinstance(value, FrozenMapping):
         return {key: thaw_value(item) for key, item in value.items()}
     if isinstance(value, tuple):
         return [thaw_value(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        return {thaw_value(item) for item in value}
     if isinstance(value, list):
         return [thaw_value(item) for item in value]
     if isinstance(value, Mapping):

@@ -156,6 +156,19 @@ class QueueEntry:
     position: int | None
     state: QueueState | None
 
+    @property
+    def is_meaningful(self) -> bool:
+        """A queue entry needs an independently useful queue fact.
+
+        Identity alone is not treated as a queue status.  A position or a
+        known (non-UNKNOWN) state is the minimum evidence; an UNKNOWN state
+        may accompany those facts without erasing their usefulness.
+        """
+
+        return self.position is not None or (
+            self.state is not None and self.state is not QueueState.UNKNOWN_EXTERNAL_STATE
+        )
+
 
 @dataclass(frozen=True)
 class QueueResult(NormalizedReadResult):
@@ -470,11 +483,15 @@ def _queue(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> QueueResult:
     # UNKNOWN_EXTERNAL_STATE is not a queue answer by itself.  It only becomes
     # useful when another independently validated queue fact is present.  An
     # explicit queue collection or numeric position/count is such a fact.
+    meaningful_entries = tuple(entry for entry in entries if entry.is_meaningful)
     meaningful = (
         position_field.is_valid
         or bool(count_values)
-        or (queue_field.is_valid and bool(entries))
-        or (queue_field.is_valid and state is None)
+        or bool(meaningful_entries)
+        # An explicitly present empty queue is an independently meaningful
+        # aggregate fact (the platform queue is known to be empty). A
+        # non-empty collection of UNKNOWN-only entries is not.
+        or (queue_field.is_valid and queue_field.value is not None and len(queue_field.value) == 0)
         or (state is not None and state is not QueueState.UNKNOWN_EXTERNAL_STATE)
     )
     if envelope.is_success and not meaningful:

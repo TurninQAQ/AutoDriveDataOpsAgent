@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Union
 
 from .goals import GoalDescriptor
-from .immutable import FrozenMapping
+from .immutable import CanonicalizationError, FrozenMapping, canonical_snapshot
 
 
 @dataclass(frozen=True)
@@ -17,11 +17,15 @@ class ToolCall:
     arguments: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        if not self.call_id.strip() or not self.tool_name.strip():
-            raise ValueError("ToolCall requires call_id and tool_name")
-        if not isinstance(self.arguments, Mapping):
-            raise TypeError("ToolCall arguments must be a concrete mapping")
-        object.__setattr__(self, "arguments", FrozenMapping(self.arguments))
+        # This is still an untrusted provider proposal.  Freeze ordinary
+        # JSON-like arguments for the common path, but retain malformed input
+        # only as proposal data so the ingress validator can reject it with a
+        # bounded decision error instead of leaking a constructor TypeError.
+        if isinstance(self.arguments, Mapping):
+            try:
+                object.__setattr__(self, "arguments", canonical_snapshot(self.arguments))
+            except CanonicalizationError:
+                pass
 
 
 @dataclass(frozen=True)
@@ -38,11 +42,13 @@ class AcceptedToolCall:
     arguments: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        if not self.call_id.strip() or not self.tool_name.strip():
-            raise ValueError("AcceptedToolCall requires call_id and tool_name")
-        if not isinstance(self.arguments, Mapping):
-            raise TypeError("AcceptedToolCall arguments must be a mapping")
-        object.__setattr__(self, "arguments", FrozenMapping(self.arguments))
+        if isinstance(self.arguments, Mapping):
+            try:
+                object.__setattr__(self, "arguments", canonical_snapshot(self.arguments))
+            except CanonicalizationError:
+                # A manually constructed object is not a capability.  The
+                # executor performs the defensive assertion before use.
+                pass
 
 
 @dataclass(frozen=True)
@@ -59,12 +65,11 @@ class ReadToolBatch:
     kind: str = "READ_TOOL_BATCH"
 
     def __post_init__(self) -> None:
-        if not self.calls:
-            raise ValueError("ReadToolBatch requires at least one call")
-        calls = tuple(self.calls)
-        if not all(isinstance(call, (ToolCall, AcceptedToolCall)) for call in calls):
-            raise TypeError("ReadToolBatch calls must be ToolCall values")
-        object.__setattr__(self, "calls", calls)
+        # Shape validation belongs to AgentDecisionIngressValidator.  Copy
+        # ordinary proposal sequences, but do not let malformed provider data
+        # fail in a Python constructor before the Runtime can classify it.
+        if isinstance(self.calls, (list, tuple)):
+            object.__setattr__(self, "calls", tuple(self.calls))
 
 
 @dataclass(frozen=True)
@@ -75,9 +80,11 @@ class FinalCandidate:
     kind: str = "FINAL_CANDIDATE"
 
     def __post_init__(self) -> None:
-        if not self.response.strip():
-            raise ValueError("FinalCandidate response must not be empty")
-        object.__setattr__(self, "referenced_goal_ids", tuple(self.referenced_goal_ids))
+        # FinalCandidate is also an untrusted proposal.  The ingress validator
+        # owns exact type/non-empty checks; preserving malformed fields here
+        # allows the graph to emit a bounded rejection and continue.
+        if isinstance(self.referenced_goal_ids, (list, tuple)):
+            object.__setattr__(self, "referenced_goal_ids", tuple(self.referenced_goal_ids))
 
 
 AgentDecision = Union[SingleToolCall, ReadToolBatch, FinalCandidate]

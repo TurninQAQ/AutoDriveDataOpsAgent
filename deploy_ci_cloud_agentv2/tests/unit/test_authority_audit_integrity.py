@@ -21,7 +21,7 @@ def _provenance() -> EventProvenance:
 
 def test_event_store_snapshots_nested_input_and_all_read_projections():
     store = EventStore()
-    payload = {"nested": {"items": [1], "mapping": {"x": "before"}}, "tags": {"a"}}
+    payload = {"nested": {"items": [1], "mapping": {"x": "before"}}, "tags": ["a"]}
     store.append(
         event_type="ToolObservationRecorded",
         request_id="r",
@@ -43,7 +43,7 @@ def test_event_store_snapshots_nested_input_and_all_read_projections():
 
     assert store.all()[0].payload == {
         "nested": {"items": [1], "mapping": {"x": "before"}},
-        "tags": {"a"},
+        "tags": ["a"],
     }
     assert store.for_thread("other") == ()
 

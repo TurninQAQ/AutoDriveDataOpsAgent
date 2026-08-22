@@ -152,7 +152,11 @@ async def invoke(
     latest_state.record(state)
     dependencies = GraphDependencies(
         provider=system_context.provider,
-        read_runtime=ReadToolRuntime(system_context.tool_registry, current.identity),
+        read_runtime=ReadToolRuntime(
+            system_context.tool_registry,
+            current.identity,
+            expected_catalog_hash=system_context.tool_catalog_hash,
+        ),
         compiler=CompletionContractCompiler(),
         evidence_tracker=EvidenceTracker(),
         completion_gate=ResponseCompletionGate(),

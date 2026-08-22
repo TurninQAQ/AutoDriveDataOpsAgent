@@ -10,6 +10,7 @@ import uuid
 from .budgets import BudgetState
 from .context import ContextBudgetExceeded, ContextBuilder
 from .contracts import CompletionContractCompiler
+from .decision_ingress import AgentDecisionIngressValidator, AgentDecisionValidationError
 from .decisions import (
     AcceptedToolCall,
     AgentDecision,
@@ -100,7 +101,7 @@ def build_graph(dependencies: GraphDependencies):
                 budgets=budget,
             )
         try:
-            decision: AgentDecision = await dependencies.provider.generate(context)
+            proposal = await dependencies.provider.generate(context)
         except ProviderUnavailable as exc:
             return _terminal_update(
                 state,
@@ -123,6 +124,20 @@ def build_graph(dependencies: GraphDependencies):
                 ),
                 budgets=budget,
             )
+
+        try:
+            decision: AgentDecision = AgentDecisionIngressValidator().validate(proposal)
+        except AgentDecisionValidationError as exc:
+            rejection = _agent_decision_rejection_update(
+                state,
+                dependencies,
+                current_for_context,
+                reason=str(exc),
+                budgets=budget,
+                proposal_type=type(proposal).__name__,
+            )
+            _remember(dependencies, state, rejection)
+            return rejection
 
         current = replace(
             current_for_context,
@@ -696,6 +711,86 @@ def _read_guard_update(
         causation_id=last_event_id or state.get("last_event_id"),
     )
     return {"current_request": updated, "last_event_id": event.event_id}
+
+
+def _agent_decision_rejection_update(
+    state: AgentState,
+    dependencies: GraphDependencies,
+    current: CurrentRequestContext,
+    *,
+    reason: str,
+    budgets: BudgetState,
+    proposal_type: str,
+) -> dict[str, Any]:
+    """Record malformed provider structure as a bounded recoverable observation."""
+
+    observation = ToolObservation(
+        observation_id=f"obs_decision_{uuid.uuid4().hex}",
+        call_id="agent-decision-ingress",
+        owner=current.identity,
+        source="agent_decision_ingress",
+        target="platform",
+        transport_status=TransportStatus.ERROR,
+        disposition=ObservationDisposition.AGENT_DECISION_REJECTED,
+        data={
+            "error_code": "MALFORMED_AGENT_DECISION",
+            "proposal_type": proposal_type,
+            "reason": reason,
+        },
+        trust="RUNTIME_STRUCTURED",
+        error_code="MALFORMED_AGENT_DECISION",
+        observed_at=datetime.now(timezone.utc),
+        provenance=ObservationProvenance(
+            source_tool="agent_decision_ingress",
+            arguments_fingerprint="",
+            requested_scope=ObservationScope(ScopeKind.PLATFORM),
+            observed_scope=ObservationScope(ScopeKind.UNKNOWN),
+            requested_identity=None,
+            observed_identity=None,
+            identity_status=IdentityStatus.NOT_APPLICABLE,
+            scope_status=ScopeStatus.UNKNOWN,
+        ),
+    )
+    updated = replace(
+        current,
+        budgets=budgets,
+        step_count=current.step_count + 1,
+        decision=None,
+        final_candidate=None,
+        observations=current.observations + (observation,),
+        gate_feedback=(f"AGENT_DECISION_REJECTED: {reason}",),
+        continue_after_read_guard=True,
+    )
+    rejection_event = _emit(
+        state,
+        dependencies,
+        "AgentDecisionRejected",
+        {
+            "proposal_type": proposal_type,
+            "reason": reason,
+            "error_code": "MALFORMED_AGENT_DECISION",
+        },
+        current=updated,
+        causation_id=state.get("last_event_id"),
+    )
+    observation_event = _emit(
+        state,
+        dependencies,
+        "ToolObservationRecorded",
+        {
+            "observation_id": observation.observation_id,
+            "call_id": observation.call_id,
+            "source": observation.source,
+            "owner": asdict(observation.owner),
+            "disposition": observation.disposition.value,
+            "trust": observation.trust,
+            "error_code": observation.error_code,
+            "data": observation.data,
+        },
+        current=updated,
+        causation_id=rejection_event.event_id,
+    )
+    return {"current_request": updated, "last_event_id": observation_event.event_id}
 
 
 def _emit(

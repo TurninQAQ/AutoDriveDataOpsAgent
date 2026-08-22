@@ -53,6 +53,7 @@ class ObservationDisposition(str, Enum):
     MALFORMED = "MALFORMED"
     TRANSPORT_FAILURE = "TRANSPORT_FAILURE"
     READ_GUARD_REJECTED = "READ_GUARD_REJECTED"
+    AGENT_DECISION_REJECTED = "AGENT_DECISION_REJECTED"
 
 
 class EvidenceValidity(str, Enum):

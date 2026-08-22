@@ -145,18 +145,15 @@ def test_tool_call_arguments_are_detached_and_accepted_call_is_frozen():
     assert nested_accepted.arguments["filters"]["datasets"] == ("A",)
 
 
-def test_canonical_snapshot_detaches_dataclass_and_set_like_payloads():
+def test_canonical_snapshot_rejects_set_like_payloads_in_closed_domain():
     @dataclass(frozen=True)
     class ExternalPayload:
         metadata: dict
         tags: set
 
     source = ExternalPayload({"items": ["safe"]}, {"one"})
-    snapshot = canonical_snapshot(source)
-    source.metadata["items"].append("changed")
-    source.tags.add("changed")
-    assert snapshot["metadata"]["items"] == ("safe",)
-    assert snapshot["tags"] == {"one"}
+    with pytest.raises(ValueError):
+        canonical_snapshot(source)
 
 
 def test_batch_and_final_candidate_collections_are_canonicalized():

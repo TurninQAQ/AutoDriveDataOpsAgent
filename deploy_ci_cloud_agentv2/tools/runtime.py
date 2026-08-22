@@ -16,11 +16,11 @@ from ..agent.evidence import (
     TransportStatus,
 )
 from ..agent.identity import RequestIdentity
-from ..agent.immutable import canonical_snapshot
+from ..agent.immutable import CanonicalizationError, canonical_snapshot
 from ..agent.provenance import build_provenance, canonical_tool_call_fingerprint
 from ..agent.results import ResultStatus, normalize_read_result
 from .metadata import ToolKind
-from .registry import ToolRegistry
+from .registry import ToolCatalogIntegrityError, ToolRegistry
 
 
 class ReadFailure(Exception):
@@ -36,20 +36,28 @@ class ReadBatchObservation:
 
 
 class ReadToolRuntime:
-    def __init__(self, registry: ToolRegistry, owner: RequestIdentity):
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        owner: RequestIdentity,
+        expected_catalog_hash: str | None = None,
+    ):
         self.registry = registry
         self.owner = owner
+        self.expected_catalog_hash = expected_catalog_hash
 
     def validate_single(self, call: ToolCall) -> AcceptedToolCall:
         """Validate one proposed READ using the same guard as batch calls."""
         normalized = self.registry.normalize_call(call, require_read=True)
         if not _arguments_are_concrete(normalized.arguments):
             raise ValueError("tool arguments must be concrete before execution")
-        return AcceptedToolCall(
+        accepted = AcceptedToolCall(
             call_id=normalized.call_id,
             tool_name=normalized.tool_name,
             arguments=normalized.arguments,
         )
+        self._assert_accepted_call(accepted, batch=False)
+        return accepted
 
     def validate_batch(self, batch: ReadToolBatch, max_batch: int) -> ReadToolBatch:
         if not batch.calls:
@@ -58,19 +66,21 @@ class ReadToolRuntime:
             raise ValueError(f"READ batch exceeds configured maximum {max_batch}")
         normalized_calls: list[AcceptedToolCall] = []
         for call in batch.calls:
+            if not isinstance(call, (ToolCall, AcceptedToolCall)):
+                raise ValueError("READ batch contains a non-tool-call proposal")
             normalized = self.registry.normalize_call(call, require_read=True)
             spec = self.registry.spec(normalized.tool_name)
             if spec.kind is not ToolKind.READ or not spec.parallel_safe:
                 raise ValueError(f"tool is not parallel-safe READ: {normalized.tool_name}")
             if not _arguments_are_concrete(normalized.arguments):
                 raise ValueError("all READ batch arguments must be concrete")
-            normalized_calls.append(
-                AcceptedToolCall(
+            accepted = AcceptedToolCall(
                     call_id=normalized.call_id,
                     tool_name=normalized.tool_name,
                     arguments=normalized.arguments,
                 )
-            )
+            self._assert_accepted_call(accepted, batch=True)
+            normalized_calls.append(accepted)
         call_ids = {call.call_id for call in normalized_calls}
         if len(call_ids) != len(batch.calls):
             raise ValueError("READ batch call_id values must be unique")
@@ -89,6 +99,7 @@ class ReadToolRuntime:
         if max_retries < 0:
             raise ValueError("max_retries is a non-negative per-call retry allowance")
         accepted_call = call if isinstance(call, AcceptedToolCall) else self.validate_single(call)
+        self._assert_accepted_call(accepted_call, batch=False)
         call = accepted_call
         spec = self.registry.spec(call.tool_name)
         retries = 0
@@ -139,6 +150,17 @@ class ReadToolRuntime:
                     retryable=True,
                     retry_count=retries,
                 )
+            except CanonicalizationError as exc:
+                return _observation(
+                    call,
+                    spec.name,
+                    owner=self.owner,
+                    transport_status=TransportStatus.ERROR,
+                    data=None,
+                    error_code="UNSUPPORTED_EXTERNAL_PAYLOAD",
+                    retryable=False,
+                    retry_count=retries,
+                )
             except Exception as exc:  # external read errors become data, not authority
                 return _observation(
                     call,
@@ -168,6 +190,10 @@ class ReadToolRuntime:
             )
         elif max_batch is not None and len(batch.calls) > max_batch:
             raise ValueError(f"READ batch exceeds configured maximum {max_batch}")
+        for call in batch.calls:
+            self._assert_accepted_call(call, batch=True)
+        if len({call.call_id for call in batch.calls}) != len(batch.calls):
+            raise ValueError("READ batch call_id values must be unique")
         results = await asyncio.gather(
             *(
                 self.execute_single(call, max_retries=max_retries, on_started=on_started)
@@ -175,6 +201,48 @@ class ReadToolRuntime:
             )
         )
         return ReadBatchObservation(tuple(results))
+
+    def _assert_accepted_call(self, call: AcceptedToolCall, *, batch: bool) -> None:
+        """Defensively prove an AcceptedToolCall is still executable.
+
+        The public constructor is not a capability.  This assertion is the
+        final boundary for direct/internal callers that manually instantiate
+        AcceptedToolCall values.
+        """
+
+        if not isinstance(call, AcceptedToolCall):
+            raise ValueError("read executor requires AcceptedToolCall")
+        if not isinstance(call.call_id, str) or not call.call_id.strip():
+            raise ValueError("accepted call_id must be a non-empty string")
+        if not isinstance(call.tool_name, str) or not call.tool_name.strip():
+            raise ValueError("accepted tool_name must be a non-empty string")
+        if not self.registry.is_sealed:
+            raise ToolCatalogIntegrityError("ToolRegistry must be sealed before execution")
+        if (
+            self.expected_catalog_hash is not None
+            and self.registry.catalog_hash() != self.expected_catalog_hash
+        ):
+            raise ToolCatalogIntegrityError("sealed tool catalog hash does not match Runtime context")
+        spec = self.registry.spec(call.tool_name)
+        if spec.kind is not ToolKind.READ:
+            raise ValueError(f"{call.tool_name} is not a READ tool")
+        if batch and not spec.parallel_safe:
+            raise ValueError(f"tool is not parallel-safe READ: {call.tool_name}")
+        if not isinstance(call.arguments, dict) and not hasattr(call.arguments, "items"):
+            raise ValueError("accepted tool arguments must be a mapping")
+        try:
+            canonical_args = canonical_snapshot(
+                self.registry.normalize_call(
+                    ToolCall(call.call_id, call.tool_name, call.arguments),
+                    require_read=True,
+                ).arguments
+            )
+        except (CanonicalizationError, TypeError, ValueError) as exc:
+            raise ValueError(f"accepted tool arguments are not canonical: {exc}") from exc
+        if canonical_args != call.arguments:
+            raise ValueError("accepted tool arguments are not the normalized canonical arguments")
+        if not _arguments_are_concrete(call.arguments):
+            raise ValueError("accepted tool arguments must be concrete")
 
 
 def _arguments_are_concrete(value: object) -> bool:
