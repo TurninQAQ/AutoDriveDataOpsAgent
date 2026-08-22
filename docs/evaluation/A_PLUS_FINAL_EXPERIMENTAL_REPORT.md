@@ -13,9 +13,12 @@ split contains 12. Formal evaluation uses three independent repetitions of the
 complete test split. Every repetition is scored from its first attempt; there
 is no best-of-N aggregation.
 
-The deterministic safety split contains 56 cases and is evaluated separately
-from LLM effectiveness. It covers target provenance, policy boundaries,
-preconditions, scope freeze, concurrency, verification and no-retry behavior.
+The deterministic safety split contains 56 contracts and is evaluated
+separately from LLM effectiveness. It covers target provenance, policy
+boundaries, preconditions, scope freeze, concurrency, verification and
+no-retry behavior. Each contract has an authoritative production-test node
+reference; the validator checks the mapping and does not claim that metadata
+self-checks executed production logic.
 
 ### Dataset composition
 
@@ -47,8 +50,9 @@ evaluation is 36 scenarios × 3 independent repetitions (108 FULL attempts),
 with no best-of-N selection. A full B0+B1 comparison would add 216 baseline
 attempts, for 324 attempts across all three systems. The runner rejects
 incomplete or duplicate `case_id`/`repetition`/`system` coverage when
-trajectory input is supplied. The current turn only validates the harness and
-deliberately does not make model calls.
+trajectory input is supplied. Concrete scripted FULL/B1/B0 runners are used
+only for the quota-free 324-attempt dry-run; the current turn only validates
+the harness and deliberately does not make external model calls.
 
 ## Systems / Baselines
 
@@ -101,13 +105,12 @@ zero.
 ## Safety Results
 
 The 56-case deterministic safety suite is frozen as a separate evaluation
-layer. `safety_runner.py` executes every case through deterministic contract
-checks and records a reference to the corresponding production regression
-family. The current harness validation result is **56/56 executed, 56 pass,
-0 fail, 0 blocked, 0 unsafe mutations, 0 duplicate mutations**. This is not a
-replacement for the production pytest/integration suite; it is the machine-
-verifiable evaluation mapping that prevents an unexecuted manifest from being
-reported as a pass.
+layer. `safety_runner.py` validates every case and its authoritative
+production-test reference. The gate result is **56/56 contracts backed, 0
+unbacked**; local validation is mapping validation, not a replacement for the
+production pytest/integration suite. The current project state includes the
+prior Reviewer-verified production safety results; this document does not
+turn a contract self-check into a new production execution claim.
 
 ## Autonomy and Goal Verification
 
@@ -165,12 +168,13 @@ dbd338133139da7785722b0efa1a5718461e62c4df6f888bb133c0ea78199e42
 
 ## Current Status
 
-Harness construction status: READY. Formal model attempts: NOT RUN. The
-current environment does not provide the `pytest` command, so the added pytest
-module could not execute through pytest here; the same 19 test functions were
-run directly with the standard library, and the collector, 56-case safety
-runner, and `READY_NOT_RUN` dev validation completed. JSON schema/count
-validation, Python byte-compilation and diff checks were also run without
-model calls. The next action is a deliberate operator decision to run the
+Harness construction status: READY_FOR_FORMAL_EVALUATION. Formal model
+attempts: NOT RUN. The
+current environment does not provide the `pytest` command, so the harness test
+module was run directly with the standard library (30 test functions). The
+324-attempt scripted dry-run, 56-contract production-reference mapping,
+fixture resolution and `READY_NOT_RUN` dev validation completed. JSON
+schema/count validation, Python byte-compilation and diff checks were also run
+without model calls. The next action is a deliberate operator decision to run the
 36 × 3 FULL protocol in a fully provisioned environment with a single
 compatible free-tier Text/tool-calling model.

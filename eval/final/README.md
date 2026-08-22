@@ -2,8 +2,8 @@
 
 This directory defines the frozen evaluation layer for the already-frozen A+
 Agent architecture. It does not change production behavior and does not call
-an LLM during harness validation. The collector only calls a model when an
-operator injects a concrete adapter runner.
+an external LLM during harness validation. The default formal runners use a
+deterministic scripted model and isolated fixture registry for dry-runs.
 
 ## Protocol
 
@@ -23,11 +23,17 @@ operator injects a concrete adapter runner.
 ## Components
 
 - `schema.py`: standard-library schema, signatures and frozen split validation.
-- `collector.py`: raw-facts-only adapters and immutable run directories.
+- `fixture_registry.py`: deterministic task/platform fixtures; every formal
+  scenario must resolve before collection.
+- `formal_runners.py`: concrete FULL/B1/B0 scripted runners for quota-free
+  execution-gate dry-runs, not formal model results.
+- `collector.py`: raw-facts-only adapters, quota stop semantics and immutable
+  run directories.
 - `runner.py`: deterministic scoring, coverage and repetition aggregation.
 - `evaluators.py`: system-aware resolution, authorization and tool judgments.
 - `metrics.py`: six headline metrics and secondary diagnostics.
-- `safety_runner.py`: executable 56-case deterministic contract suite.
+- `safety_runner.py`: safety contract validator backed by authoritative
+  production-test node references; it does not reimplement production safety.
 - `baselines.py` / `ablations.py`: frozen comparison and counterfactual modes.
 
 ## Headline metrics
@@ -81,7 +87,22 @@ PYTHONPATH=. python -m eval.final.runner \
 An existing run id is rejected. Collector records may contain observations,
 tool calls, policy, authorization, verification, latency and token facts, but
 not `resolved`, `functional_valid`, `unsafe_auto`, or evaluator-derived tool
-counts.
+counts. `FreeTierOnly` stops a run immediately and marks it
+`INCOMPLETE_QUOTA_BLOCKED`; it never retries or switches models inside the
+same run.
+
+The quota-free execution-gate dry-run is deliberately executable before live
+evaluation:
+
+```bash
+PYTHONPATH=. python - <<'PY'
+from eval.final.collector import run_fake_benchmark
+from eval.final.schema import load_scenarios
+records, summary = run_fake_benchmark(load_scenarios("eval/final/test.jsonl"))
+assert len(records) == 324
+assert summary["external_model_calls"] == 0
+PY
+```
 
 The B1 baseline changes only authorization semantics: safe AUTO-eligible cases
 become HITL and receive standardized oracle approval before the same guarded

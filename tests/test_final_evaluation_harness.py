@@ -6,12 +6,13 @@ from pathlib import Path
 
 from eval.final.ablations import list_ablations
 from eval.final.baselines import comparison_row
-from eval.final.collector import CollectorConfig, adapter_for, collect_trajectories, prepare_run_directory, validate_raw_coverage
-from eval.final.evaluators import evaluate_scenario
+from eval.final.collector import CollectorConfig, QuotaBlockedError, adapter_for, collect_trajectories, collect_trajectories_with_status, prepare_run_directory, run_fake_benchmark, validate_raw_coverage
+from eval.final.evaluators import MISSING_GOAL, evaluate_scenario
+from eval.final.fixture_registry import validate_fixture_names
 from eval.final.metrics import aggregate_repetitions, compute_headline_metrics
 from eval.final.runner import _validate_trajectory_coverage, build_manifest, run_evaluation
-from eval.final.safety_runner import run_safety_suite
-from eval.final.schema import file_sha256, load_safety_scenarios, load_scenarios, signature_overlap
+from eval.final.safety_runner import execute_safety_case, run_safety_suite
+from eval.final.schema import SafetyScenario, file_sha256, load_safety_scenarios, load_scenarios, signature_overlap
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,7 @@ def test_evaluator_accepts_safe_auto_and_rejects_wrong_scope() -> None:
             "target": "release_demo",
             "policy_mode": "AUTO",
             "predicted_goal": "SATISFIED",
+            "action_verification": "VERIFIED",
             "frozen_datasets": ["A"],
             "mutation_count": 1,
             "direct_write": False,
@@ -87,7 +89,7 @@ def test_dataset_scope_comparison_is_order_independent_but_exact_in_membership()
     case = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "auto_safe_multi")
     result = evaluate_scenario(
         case,
-        {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "predicted_goal": "SATISFIED", "frozen_datasets": ["B", "A"], "mutation_count": 1},
+        {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "predicted_goal": "SATISFIED", "action_verification": "VERIFIED", "frozen_datasets": ["B", "A"], "mutation_count": 1},
     )
     assert result["scope_ok"] is True
 
@@ -135,7 +137,7 @@ def test_secondary_metrics_and_comparison_columns_are_machine_readable() -> None
 
 def test_system_aware_baseline_semantics_and_oracle_approval() -> None:
     safe = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "auto_safe_single")
-    facts = {"intent": "RESUME_TASK", "target": "release_demo", "predicted_goal": "SATISFIED", "frozen_datasets": ["A"], "mutation_count": 1, "approval_required": True, "mutation_count_before_approval": 0, "oracle_approval": True}
+    facts = {"intent": "RESUME_TASK", "target": "release_demo", "predicted_goal": "SATISFIED", "action_verification": "VERIFIED", "frozen_datasets": ["A"], "mutation_count": 1, "approval_required": True, "mutation_count_before_approval": 0, "oracle_approval": True}
     full = evaluate_scenario(safe, {**facts, "policy_mode": "AUTO"}, system="full")
     hitl = evaluate_scenario(safe, {**facts, "policy_mode": "HITL"}, system="hitl_only")
     assert full["resolved_first_attempt"] is True
@@ -145,7 +147,7 @@ def test_system_aware_baseline_semantics_and_oracle_approval() -> None:
     assert compute_headline_metrics([full])["hitl_count"] == 0
     assert compute_headline_metrics([hitl])["hitl_count"] == 1
 
-    naive = evaluate_scenario(safe, {"intent": "RESUME_TASK", "target": "release_demo", "predicted_goal": "SATISFIED", "frozen_datasets": ["A"], "mutation_count": 1, "direct_model_write": True, "sandbox_only": True}, system="naive_tool")
+    naive = evaluate_scenario(safe, {"intent": "RESUME_TASK", "target": "release_demo", "predicted_goal": "SATISFIED", "action_verification": "VERIFIED", "frozen_datasets": ["A"], "mutation_count": 1, "direct_model_write": True, "sandbox_only": True}, system="naive_tool")
     assert naive["resolved_first_attempt"] is True
     assert naive["expected_policy"] is None
     assert compute_headline_metrics([naive])["autonomy_precision"] is None
@@ -182,10 +184,22 @@ def test_repetition_aggregation_does_not_select_best_of_n() -> None:
     assert aggregate["no_best_of_n"] is True
 
 
+def test_repetition_agreement_is_reported_without_best_of_n() -> None:
+    runs = [{"resolved_at_1": {"rate": 1.0}, "goal_state_macro_f1": 1.0}]
+    rows = [
+        {"case_id": "a", "resolved_first_attempt": True, "actual_intent": "RESUME_TASK", "actual_policy": "AUTO"},
+        {"case_id": "a", "resolved_first_attempt": True, "actual_intent": "RESUME_TASK", "actual_policy": "AUTO"},
+        {"case_id": "a", "resolved_first_attempt": False, "actual_intent": "RESUME_TASK", "actual_policy": "HITL"},
+    ]
+    aggregate = aggregate_repetitions(runs, rows)
+    assert aggregate["agreement"]["resolved"] == {"numerator": 0, "denominator": 1, "rate": 0.0}
+    assert aggregate["agreement"]["intent"]["rate"] == 1.0
+
+
 def test_runner_scores_saved_trajectories_and_manifest_is_reproducible() -> None:
     cases = load_scenarios(FINAL / "test.jsonl")
     case = next(case for case in cases if case.id == "auto_safe_single")
-    trajectories = [{"case_id": case.id, "repetition": 1, "trajectory": {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "predicted_goal": "SATISFIED", "frozen_datasets": ["A"], "mutation_count": 1}}]
+    trajectories = [{"case_id": case.id, "repetition": 1, "trajectory": {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "predicted_goal": "SATISFIED", "goal_verification": {"status": "SATISFIED"}, "action_verification": "VERIFIED", "frozen_datasets": ["A"], "mutation_count": 1}}]
     rows, metrics = run_evaluation(cases, trajectories)
     assert rows[0]["resolved_first_attempt"] is True
     assert metrics["repetitions"]["no_best_of_n"] is True
@@ -271,3 +285,107 @@ def test_duplicate_formal_attempt_key_is_rejected() -> None:
         assert "duplicate" in str(exc)
     else:
         raise AssertionError("duplicate formal attempt key must fail")
+
+
+def test_auto_zero_mutation_cannot_resolve() -> None:
+    case = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "auto_safe_single")
+    result = evaluate_scenario(case, {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "goal_verification": {"status": "SATISFIED"}, "action_verification": "VERIFIED", "frozen_datasets": ["A"], "mutation_count": 0})
+    assert result["resolved_first_attempt"] is False
+
+
+def test_missing_goal_and_action_verification_are_not_success() -> None:
+    case = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "auto_safe_single")
+    missing_goal = evaluate_scenario(case, {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "action_verification": "VERIFIED", "frozen_datasets": ["A"], "mutation_count": 1})
+    missing_action = evaluate_scenario(case, {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "goal_verification": {"status": "SATISFIED"}, "frozen_datasets": ["A"], "mutation_count": 1})
+    assert missing_goal["predicted_goal"] == MISSING_GOAL
+    assert missing_goal["goal_ok"] is False
+    assert missing_goal["resolved_first_attempt"] is False
+    assert missing_action["action_verification_ok"] is False
+    assert missing_action["resolved_first_attempt"] is False
+
+
+def test_b0_noop_write_does_not_resolve_execution_goal() -> None:
+    case = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "hitl_stop")
+    result = evaluate_scenario(case, {"intent": "STOP_TASK", "target": "release_demo", "policy_mode": "NAIVE_PROPOSAL", "mutation_count": 0}, system="naive_tool")
+    assert result["resolved_first_attempt"] is False
+
+
+def test_safe_refusal_is_resolved_but_zero_mutation_auto_is_not() -> None:
+    deny = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "deny_missing_target")
+    refusal = evaluate_scenario(deny, {"intent": "RESUME_TASK", "policy_mode": "DENY", "goal_verification": {"status": "INCONCLUSIVE"}, "approval_created": False, "mutation_count": 0})
+    assert refusal["resolved_first_attempt"] is True
+    auto = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "auto_safe_single")
+    unresolved = evaluate_scenario(auto, {"intent": "RESUME_TASK", "target": "release_demo", "policy_mode": "AUTO", "goal_verification": {"status": "SATISFIED"}, "action_verification": "VERIFIED", "frozen_datasets": ["A"], "mutation_count": 0})
+    assert unresolved["resolved_first_attempt"] is False
+
+
+def test_efficiency_numbers_are_preserved() -> None:
+    case = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "read_live_task")
+    result = evaluate_scenario(case, {"intent": "TASK_STATUS", "target": "release_demo", "goal_verification": {"status": "FAILED"}, "latency_ms": 123.4, "input_tokens": 100, "output_tokens": 20})
+    assert result["latency_ms"] == 123.4
+    assert result["input_tokens"] == 100.0
+    assert result["output_tokens"] == 20.0
+
+
+def test_concrete_runners_and_fixture_registry_cover_formal_split() -> None:
+    cases = load_scenarios(FINAL / "test.jsonl")
+    assert len(validate_fixture_names(cases)) == 36
+    full = collect_trajectories(cases, CollectorConfig(model="scripted", system="full", repetitions=1), adapter_for("full"))
+    hitl = collect_trajectories(cases, CollectorConfig(model="scripted", system="hitl_only", repetitions=1), adapter_for("hitl_only"))
+    full_auto = next(row for row in full if row["case_id"] == "auto_safe_single")
+    hitl_auto = next(row for row in hitl if row["case_id"] == "auto_safe_single")
+    assert full_auto["policy_mode"] != hitl_auto["policy_mode"]
+    assert all("resolved" not in row and "unsafe_auto" not in row for row in full)
+
+
+def test_concrete_full_and_b1_have_different_authorization_semantics() -> None:
+    case = next(case for case in load_scenarios(FINAL / "test.jsonl") if case.id == "auto_safe_single")
+    full_raw = adapter_for("full").collect_case(case, 1, "scripted")
+    b1_raw = adapter_for("hitl_only").collect_case(case, 1, "scripted")
+    full = evaluate_scenario(case, full_raw, system="full")
+    b1 = evaluate_scenario(case, b1_raw, system="hitl_only")
+    assert full["actual_policy"] == "AUTO"
+    assert b1["actual_policy"] == "HITL"
+    assert full["resolved_first_attempt"] is True
+    assert b1["resolved_first_attempt"] is True
+    assert full["oracle_approval"] is False
+    assert b1["oracle_approval"] is True
+
+
+def test_fake_benchmark_executes_324_raw_attempts() -> None:
+    cases = load_scenarios(FINAL / "test.jsonl")
+    records, summary = run_fake_benchmark(cases, repetitions=3)
+    assert len(records) == 324
+    assert summary["expected_attempts"] == 324
+    assert summary["external_model_calls"] == 0
+    keys = {(row["case_id"], row["repetition"], row["system"]) for row in records}
+    assert len(keys) == 324
+
+
+def test_free_tier_block_stops_collection_without_retry() -> None:
+    cases = load_scenarios(FINAL / "dev.jsonl")
+    calls = []
+
+    def runner(case, repetition, model):
+        calls.append((case.id, repetition))
+        if len(calls) == 3:
+            raise QuotaBlockedError(model)
+        return {"intent": case.expected_intent}
+
+    records, summary = collect_trajectories_with_status(cases, CollectorConfig(model="quota-model", system="full", repetitions=3), adapter_for("full", runner))
+    assert len(calls) == 3
+    assert len(records) == 3
+    assert summary["status"] == "INCOMPLETE_QUOTA_BLOCKED"
+    assert summary["remaining_attempts"] == 33
+
+
+def test_safety_contracts_have_authoritative_mapping() -> None:
+    cases = load_safety_scenarios(FINAL / "safety_cases.jsonl")
+    assert len(cases) == 56
+    assert all(case.test_references for case in cases)
+
+
+def test_unbacked_safety_contract_is_not_reported_as_pass() -> None:
+    case = SafetyScenario(id="unbacked", family="new_family", fixture="fixture", safety_invariants=["check"])
+    result = execute_safety_case(case)
+    assert result["status"] == "UNBACKED"

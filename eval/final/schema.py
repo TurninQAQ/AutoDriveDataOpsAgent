@@ -11,6 +11,16 @@ ScenarioCategory = Literal["read", "planning", "safe_auto", "hitl", "deny", "adv
 SCENARIO_CATEGORIES = {"read", "planning", "safe_auto", "hitl", "deny", "adversarial"}
 POLICY_MODES = {"AUTO", "HITL", "DENY"}
 GOAL_STATES = {"SATISFIED", "IN_PROGRESS", "FAILED", "INCONCLUSIVE"}
+OUTCOME_TYPES = {"read_answer", "diagnosis", "plan", "safe_auto_execution", "hitl_execution", "safe_refusal"}
+DEFAULT_SAFETY_TEST_REFERENCES = {
+    "entity_provenance": ["tests/test_evidence_invariants_v164.py::test_argument_payload_conflict_does_not_create_target_bound_context"],
+    "diagnostic_context": ["tests/test_diagnostic_context_v163.py::test_empty_or_non_contract_diagnosis_payload_is_not_context"],
+    "autonomy_policy": ["tests/test_autonomy_policy_v170.py::test_safe_single_dataset_is_auto"],
+    "atomicity": ["tests/test_autonomy_concurrency_v180.py::test_same_trace_same_action_concurrent_reservation_creates_one_record"],
+    "verification": ["tests/test_goal_verification_v164.py::test_multidataset_complete_coverage_is_satisfied"],
+    "planning": ["tests/test_task_planning_merge_v162.py::test_dataset_output_path_is_not_treated_as_input_dataset"],
+    "adversarial": ["tests/test_bounded_autonomy_v170.py::test_non_resume_write_never_becomes_auto"],
+}
 
 
 def _required_string(payload: dict[str, Any], key: str) -> str:
@@ -50,6 +60,20 @@ def _nonnegative_int(payload: dict[str, Any], key: str, default: int = 0) -> int
     return value
 
 
+def _default_outcome_type(category: str, expected_intent: str, expected_policy: str | None) -> str:
+    if expected_policy == "AUTO":
+        return "safe_auto_execution"
+    if expected_policy == "HITL":
+        return "hitl_execution"
+    if expected_policy == "DENY":
+        return "safe_refusal"
+    if category == "planning":
+        return "plan"
+    if category == "read":
+        return "diagnosis" if expected_intent.upper().endswith("DIAGNOSIS") else "read_answer"
+    return "read_answer"
+
+
 @dataclass(frozen=True)
 class Scenario:
     """Frozen deterministic ground truth for one benchmark scenario."""
@@ -63,9 +87,11 @@ class Scenario:
     expected_policy: str | None = None
     expected_goal: str | None = None
     goal_eval: bool = False
+    outcome_type: str | None = None
     risk_class: str | None = None
     expected_datasets: list[str] = field(default_factory=list)
     fixture_payload: dict[str, Any] = field(default_factory=dict)
+    min_mutations: int = 0
     max_mutations: int = 0
     required_tools: list[str] = field(default_factory=list)
     allowed_optional_tools: list[str] = field(default_factory=list)
@@ -81,19 +107,23 @@ class Scenario:
         goal_eval = payload.get("goal_eval", False)
         if not isinstance(goal_eval, bool):
             raise ValueError("goal_eval must be boolean")
+        expected_intent = _required_string(payload, "expected_intent")
+        expected_policy = _optional_string(payload, "expected_policy")
         return cls(
             id=_required_string(payload, "id"),
             category=category,  # type: ignore[arg-type]
             prompt=_required_string(payload, "prompt"),
             fixture=_required_string(payload, "fixture"),
-            expected_intent=_required_string(payload, "expected_intent"),
+            expected_intent=expected_intent,
             expected_target=_optional_string(payload, "expected_target"),
-            expected_policy=_optional_string(payload, "expected_policy"),
+            expected_policy=expected_policy,
             expected_goal=_optional_string(payload, "expected_goal"),
             goal_eval=goal_eval,
+            outcome_type=_optional_string(payload, "outcome_type") or _default_outcome_type(category, expected_intent, expected_policy),
             risk_class=_optional_string(payload, "risk_class"),
             expected_datasets=_string_list(payload, "expected_datasets"),
             fixture_payload=_dict_value(payload, "fixture_payload"),
+            min_mutations=_nonnegative_int(payload, "min_mutations"),
             max_mutations=_nonnegative_int(payload, "max_mutations"),
             required_tools=_string_list(payload, "required_tools"),
             allowed_optional_tools=_string_list(payload, "allowed_optional_tools"),
@@ -105,6 +135,8 @@ class Scenario:
             raise ValueError(f"{self.id}: invalid expected_policy={self.expected_policy!r}")
         if self.expected_goal is not None and self.expected_goal.upper() not in GOAL_STATES:
             raise ValueError(f"{self.id}: invalid expected_goal={self.expected_goal!r}")
+        if self.outcome_type is not None and self.outcome_type not in OUTCOME_TYPES:
+            raise ValueError(f"{self.id}: invalid outcome_type={self.outcome_type!r}")
         if self.goal_eval and self.expected_goal is None:
             raise ValueError(f"{self.id}: goal_eval scenarios require expected_goal")
         if self.risk_class is not None and self.risk_class not in {"AUTO_ELIGIBLE", "HITL_REQUIRED", "DENY_REQUIRED", "NONE"}:
@@ -119,6 +151,24 @@ class Scenario:
             raise ValueError(f"{self.id}: deny scenarios must expect DENY")
         if self.expected_policy == "AUTO" and self.max_mutations != 1:
             raise ValueError(f"{self.id}: AUTO scenarios must cap mutations at one")
+        if self.min_mutations > self.max_mutations:
+            raise ValueError(f"{self.id}: min_mutations cannot exceed max_mutations")
+
+    @property
+    def effective_outcome_type(self) -> str:
+        if self.outcome_type:
+            return self.outcome_type
+        if self.expected_policy == "AUTO":
+            return "safe_auto_execution"
+        if self.expected_policy == "HITL":
+            return "hitl_execution"
+        if self.expected_policy == "DENY":
+            return "safe_refusal"
+        if self.category == "planning":
+            return "plan"
+        if self.category == "read":
+            return "diagnosis" if self.expected_intent.upper().endswith("DIAGNOSIS") else "read_answer"
+        return "read_answer"
 
     @property
     def effective_risk_class(self) -> str:
@@ -148,19 +198,25 @@ class SafetyScenario:
     expected_policy: str | None = None
     expected_goal: str | None = None
     expected_mutations: int = 0
+    test_references: list[str] = field(default_factory=list)
     safety_invariants: list[str] = field(default_factory=list)
 
     @classmethod
     def model_validate(cls, payload: Any) -> "SafetyScenario":
         if not isinstance(payload, dict):
             raise ValueError("safety scenario must be an object")
+        family = _required_string(payload, "family")
+        references = _string_list(payload, "test_references")
+        if not references:
+            references = list(DEFAULT_SAFETY_TEST_REFERENCES.get(family, ()))
         return cls(
             id=_required_string(payload, "id"),
-            family=_required_string(payload, "family"),
+            family=family,
             fixture=_required_string(payload, "fixture"),
             expected_policy=_optional_string(payload, "expected_policy"),
             expected_goal=_optional_string(payload, "expected_goal"),
             expected_mutations=_nonnegative_int(payload, "expected_mutations"),
+            test_references=references,
             safety_invariants=_string_list(payload, "safety_invariants"),
         )
 

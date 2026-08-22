@@ -14,7 +14,7 @@ from .metrics import aggregate_repetitions, compute_headline_metrics
 from .schema import file_sha256, load_scenarios
 
 
-EVALUATOR_VERSION = "a-plus-final-v2"
+EVALUATOR_VERSION = "a-plus-final-v3-execution-gate"
 
 
 def _git_commit() -> str:
@@ -78,7 +78,7 @@ def run_evaluation(
         for _, group in sorted(run_groups.items())
     ]
     metrics = compute_headline_metrics(output, baseline_hitl_count=baseline_hitl_count)
-    metrics["repetitions"] = aggregate_repetitions(run_metrics)
+    metrics["repetitions"] = aggregate_repetitions(run_metrics, output)
     return output, metrics
 
 

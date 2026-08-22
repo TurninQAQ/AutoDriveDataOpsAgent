@@ -2,8 +2,8 @@
 
 The collector is deliberately separate from scoring.  An adapter records
 observed facts from a model/system run; deterministic evaluators decide
-whether those facts resolved the scenario.  The default adapters require an
-injected runner so this module cannot accidentally spend model quota.
+whether those facts resolved the scenario.  The default adapters use the
+evaluation-only scripted runners and never call a provider.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
 
-COLLECTOR_VERSION = "a-plus-final-collector-v1"
+COLLECTOR_VERSION = "a-plus-final-collector-v2"
 DERIVED_FIELDS = frozenset(
     {
         "resolved",
@@ -26,6 +26,8 @@ DERIVED_FIELDS = frozenset(
         "unexpected_tool_calls",
         "required_tool_recall",
         "goal_state_macro_f1",
+        "safety_pass",
+        "goal_ok",
     }
 )
 
@@ -41,15 +43,27 @@ class CollectorConfig:
     repetitions: int = 3
 
 
+class QuotaBlockedError(RuntimeError):
+    """Free-tier stop signal; the collector must not retry or continue."""
+
+    def __init__(self, model: str, provider: str = "Alibaba Bailian", status_code: int = 403, error_code: str = "AllocationQuota.FreeTierOnly") -> None:
+        self.model = model
+        self.provider = provider
+        self.status_code = status_code
+        self.error_code = error_code
+        super().__init__(f"{error_code} ({status_code}) for {model}")
+
+
 class Adapter:
     system: str
 
     def __init__(self, runner: CaseRunner | None = None):
+        if runner is None:
+            from .formal_runners import formal_runner_for
+            runner = formal_runner_for(self.system)
         self._runner = runner
 
     def collect_case(self, scenario: Any, repetition: int, model: str) -> Mapping[str, Any]:
-        if self._runner is None:
-            raise RuntimeError(f"{self.__class__.__name__} requires an injected evaluation runner")
         return self._runner(scenario, repetition, model)
 
 
@@ -110,6 +124,59 @@ def collect_trajectories(cases: list[Any], config: CollectorConfig, adapter: Ada
                     )
                 )
     return records
+
+
+def collect_trajectories_with_status(cases: list[Any], config: CollectorConfig, adapter: Adapter) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Collect one run, stopping immediately on ``FreeTierOnly``.
+
+    Ordinary attempt failures are retained as ``ERROR`` records.  A quota
+    block is terminal for this model/run, so no later case is invoked.
+    """
+    if adapter.system != config.system:
+        raise ValueError(f"Adapter/system mismatch: {adapter.system} != {config.system}")
+    if config.repetitions < 1:
+        raise ValueError("repetitions must be positive")
+    records: list[dict[str, Any]] = []
+    total = len(cases) * config.repetitions
+    for repetition in range(1, config.repetitions + 1):
+        for scenario in cases:
+            try:
+                facts = adapter.collect_case(scenario, repetition, config.model)
+                if not isinstance(facts, Mapping):
+                    raise TypeError("adapter must return a mapping of raw facts")
+                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts=facts))
+            except QuotaBlockedError as exc:
+                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="BLOCKED", error=str(exc)))
+                completed = len(records)
+                return records, {
+                    "status": "INCOMPLETE_QUOTA_BLOCKED",
+                    "completed_attempts": completed,
+                    "remaining_attempts": max(0, total - completed),
+                    "quota_blocked": True,
+                    "model": exc.model,
+                    "provider": exc.provider,
+                    "http_status": exc.status_code,
+                    "error_code": exc.error_code,
+                }
+            except Exception as exc:
+                records.append(_raw_record(case_id=scenario.id, repetition=repetition, system=config.system, model=config.model, facts={}, status="ERROR", error=f"{type(exc).__name__}: {exc}"))
+    return records, {"status": "COMPLETE", "completed_attempts": len(records), "remaining_attempts": 0, "quota_blocked": False, "model": config.model}
+
+
+def run_fake_benchmark(cases: list[Any], *, repetitions: int = 3, model: str = "scripted-model") -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Execute all systems against deterministic runners; never calls a model provider."""
+    from .fixture_registry import validate_fixture_names
+    validate_fixture_names(cases)
+    all_records: list[dict[str, Any]] = []
+    summaries: dict[str, Any] = {}
+    for system in ("full", "hitl_only", "naive_tool"):
+        config = CollectorConfig(model=model, system=system, repetitions=repetitions)
+        records, summary = collect_trajectories_with_status(cases, config, adapter_for(system))
+        if summary["status"] == "COMPLETE":
+            validate_raw_coverage(records, cases, system=system, repetitions=repetitions)
+        all_records.extend(records)
+        summaries[system] = summary
+    return all_records, {"systems": summaries, "expected_attempts": len(cases) * repetitions * 3, "external_model_calls": 0}
 
 
 def write_raw_trajectories(records: list[Mapping[str, Any]], path: str | Path) -> None:

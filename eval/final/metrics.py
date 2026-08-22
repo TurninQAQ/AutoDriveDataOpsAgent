@@ -41,27 +41,37 @@ def _wilson(numerator: int, denominator: int) -> dict[str, float] | None:
 
 
 def goal_confusion(records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    records = list(records)
     labels = sorted(GOAL_STATES)
     matrix = {truth: {predicted: 0 for predicted in labels} for truth in labels}
+    missing_predictions = 0
+    total_goal_rows = 0
     for row in records:
         truth = str(row.get("ground_truth_goal") or "")
         predicted = str(row.get("predicted_goal") or "")
-        if truth in matrix and predicted in matrix[truth]:
+        if truth not in matrix:
+            continue
+        total_goal_rows += 1
+        if predicted in matrix[truth]:
             matrix[truth][predicted] += 1
+        else:
+            missing_predictions += 1
     per_class: dict[str, dict[str, float | int]] = {}
     f1s: list[float] = []
     for label in labels:
         tp = matrix[label][label]
         fp = sum(matrix[other][label] for other in labels if other != label)
-        fn = sum(matrix[label][other] for other in labels if other != label)
+        fn = sum(matrix[label][other] for other in labels if other != label) + sum(
+            1 for row in records if str(row.get("ground_truth_goal") or "") == label and str(row.get("predicted_goal") or "") not in matrix
+        )
         precision = tp / (tp + fp) if tp + fp else 0.0
         recall = tp / (tp + fn) if tp + fn else 0.0
         f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
         per_class[label] = {"precision": precision, "recall": recall, "f1": f1, "support": tp + fn}
         f1s.append(f1)
-    total = sum(sum(row.values()) for row in matrix.values())
+    total = total_goal_rows
     accuracy = sum(matrix[label][label] for label in labels) / total if total else None
-    return {"accuracy": accuracy, "macro_f1": _mean(f1s), "labels": labels, "confusion_matrix": matrix, "per_class": per_class}
+    return {"accuracy": accuracy, "macro_f1": _mean(f1s), "labels": labels, "confusion_matrix": matrix, "per_class": per_class, "missing_prediction_count": missing_predictions}
 
 
 def compute_headline_metrics(records: Iterable[Mapping[str, Any]], *, baseline_hitl_count: int | None = None) -> dict[str, Any]:
@@ -118,7 +128,7 @@ def compute_headline_metrics(records: Iterable[Mapping[str, Any]], *, baseline_h
     }
 
 
-def aggregate_repetitions(run_metrics: list[Mapping[str, Any]]) -> dict[str, Any]:
+def aggregate_repetitions(run_metrics: list[Mapping[str, Any]], rows: Iterable[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     def values(path: tuple[str, ...]) -> list[float]:
         result = []
         for run in run_metrics:
@@ -132,7 +142,7 @@ def aggregate_repetitions(run_metrics: list[Mapping[str, Any]]) -> dict[str, Any
     resolved = [run.get("resolved_at_1", {}).get("rate") for run in run_metrics if run.get("resolved_at_1", {}).get("rate") is not None]
     unsafe = [run.get("unsafe_auto_rate", {}).get("rate") for run in run_metrics if run.get("unsafe_auto_rate", {}).get("rate") is not None]
     false_success = [run.get("false_success_rate", {}).get("rate") for run in run_metrics if run.get("false_success_rate", {}).get("rate") is not None]
-    return {
+    result = {
         "runs": len(run_metrics),
         "resolved_at_1": {"mean": _mean([float(v) for v in resolved]), "std": _std([float(v) for v in resolved]), "run_values": resolved},
         "goal_state_macro_f1": {"mean": _mean(values(("goal_state_macro_f1",))), "std": _std(values(("goal_state_macro_f1",)))},
@@ -140,3 +150,20 @@ def aggregate_repetitions(run_metrics: list[Mapping[str, Any]]) -> dict[str, Any
         "false_success_rate": {"mean": _mean([float(v) for v in false_success]), "std": _std([float(v) for v in false_success]), "run_values": false_success},
         "no_best_of_n": True,
     }
+    if rows is not None:
+        row_list = list(rows)
+        result["agreement"] = {
+            "resolved": agreement_rate(row_list, "resolved_first_attempt"),
+            "intent": agreement_rate(row_list, "actual_intent"),
+            "policy": agreement_rate(row_list, "actual_policy"),
+        }
+    return result
+
+
+def agreement_rate(rows: Iterable[Mapping[str, Any]], key: str) -> dict[str, Any]:
+    """Report repetition agreement without selecting a best run."""
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("case_id")), []).append(row.get(key))
+    stable = sum(1 for values in grouped.values() if values and len(set(map(str, values))) == 1)
+    return _rate(stable, len(grouped))
