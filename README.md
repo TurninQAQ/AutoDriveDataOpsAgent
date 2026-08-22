@@ -35,9 +35,16 @@ completion gate also requires a `FinalCandidate` to reference every declared
 goal. Invalid READ proposals become bounded guard observations and return to
 the Agent. Runtime READ retries are side-effect-free and bounded per tool call.
 
+The Runtime boundary is explicit: raw external payloads are normalized into
+typed results for the five READ tools, then scope/identity provenance is
+validated before evidence qualification. Canonical evidence remains complete;
+the Agent receives only a bounded metadata projection that preserves current
+contract-relevant evidence. `None` is the only global queue scope value;
+whitespace identifiers and malformed result envelopes are rejected.
+
 Run the local tests from the repository root:
 
 ```bash
-PYTHONPATH=/home/ubuntu/project/AutoDriveDataOpsAgent \
+PYTHONPATH=. \
   .venv/bin/pytest -q deploy_ci_cloud_agentv2/tests
 ```

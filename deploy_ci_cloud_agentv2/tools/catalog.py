@@ -16,7 +16,7 @@ def build_read_registry(facade: ReadFacade) -> ToolRegistry:
             risk=RiskLevel.LOW,
             schema={
                 "type": "object",
-                "properties": {"task_name": {"type": "string"}},
+                "properties": {"task_name": {"type": "string", "nullable": True}},
                 "required": ["task_name"],
             },
             parallel_safe=True,
@@ -64,7 +64,7 @@ def build_read_registry(facade: ReadFacade) -> ToolRegistry:
             risk=RiskLevel.LOW,
             schema={
                 "type": "object",
-                "properties": {"task_name": {"type": "string"}},
+                "properties": {"task_name": {"type": "string", "nullable": True}},
                 "required": [],
             },
             parallel_safe=True,

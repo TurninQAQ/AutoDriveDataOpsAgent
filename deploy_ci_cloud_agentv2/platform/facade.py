@@ -21,7 +21,7 @@ class ReadFacade(Protocol):
 
     def search_knowledge(self, query: str, top_k: int = 5) -> Any: ...
 
-    def get_queue_state(self, task_name: str = "") -> Any: ...
+    def get_queue_state(self, task_name: str | None = None) -> Any: ...
 
     def diagnose_task(self, task_name: str) -> Any: ...
 
@@ -69,8 +69,12 @@ class InMemoryReadFacade:
             "search_knowledge", {"query": query, "top_k": top_k}, default
         )
 
-    def get_queue_state(self, task_name: str = "") -> Any:
-        default = {"status": "NO_DATA", "task_name": task_name, "queue": []}
+    def get_queue_state(self, task_name: str | None = None) -> Any:
+        default = (
+            {"status": "NO_DATA", "scope": "TASK", "task_name": task_name, "queue": []}
+            if task_name is not None
+            else {"status": "NO_DATA", "scope": "PLATFORM", "queue": []}
+        )
         return self._result("get_queue_state", {"task_name": task_name}, default)
 
     def diagnose_task(self, task_name: str) -> Any:

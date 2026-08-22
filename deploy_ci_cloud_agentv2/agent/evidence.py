@@ -1,39 +1,45 @@
-"""Runtime-owned observations, entity provenance, and qualified evidence.
+"""Runtime-owned observations, qualified evidence, and bounded projections.
 
-An observation is a report from a READ boundary. It is not evidence merely
-because the transport returned successfully. This module is the deterministic
-boundary that decides whether a report is correctly bound to its queried
-identity and meaningful for a completion requirement.
+Raw tool payloads remain untrusted external data.  Only normalized result
+contracts can cross into an :class:`EvidenceRecord`.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
+from .contracts import CompletionContract, RequirementKind
+from .goals import GoalDescriptor
 from .outcomes import GoalOutcome, GoalStatus
+from .provenance import (
+    IdentityStatus,
+    ObservationProvenance,
+    ObservationScope,
+    ScopeKind,
+    ScopeStatus,
+    build_provenance,
+)
+from .results import (
+    DiagnosticResult,
+    GpuPoolResult,
+    KnowledgeResult,
+    NormalizedReadResult,
+    QueueResult,
+    TaskDetailResult,
+    normalize_read_result,
+)
 
 
-class IdentityStatus(str, Enum):
-    MATCHED = "MATCHED"
-    NOT_APPLICABLE = "NOT_APPLICABLE"
-    MISSING = "MISSING"
-    CONFLICT = "CONFLICT"
-
-
-@dataclass(frozen=True)
-class ObservationProvenance:
-    """Identity facts used to bind an external observation."""
-
-    requested_target: str
-    observed_target: str | None
-    source_tool: str
-    arguments_fingerprint: str
-    identity_status: IdentityStatus
+class EvidenceKind(str, Enum):
+    TARGET_BINDING = "TARGET_BINDING"
+    LIVE_TASK = "LIVE_TASK"
+    GPU_POOL = "GPU_POOL"
+    QUEUE_STATE = "QUEUE_STATE"
+    KNOWLEDGE = "KNOWLEDGE"
+    DIAGNOSTIC_CONTEXT = "DIAGNOSTIC_CONTEXT"
 
 
 @dataclass(frozen=True)
@@ -41,8 +47,6 @@ class ToolObservation:
     observation_id: str
     call_id: str
     source: str
-    # Display/compatibility field: this is the requested identity, not an
-    # authority-bearing evidence target. Evidence uses provenance below.
     target: str
     status: str
     data: object | None
@@ -52,6 +56,7 @@ class ToolObservation:
     retry_count: int = 0
     observed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
     provenance: ObservationProvenance | None = None
+    result: NormalizedReadResult | None = None
 
     @property
     def requested_target(self) -> str:
@@ -65,9 +70,7 @@ class ToolObservation:
 @dataclass(frozen=True)
 class EvidenceRecord:
     evidence_id: str
-    kind: str
-    # Authoritative only after qualification. For an entity-bound record this
-    # is the observed identity, never merely the request argument.
+    kind: EvidenceKind
     target: str
     observation_id: str
     provenance: ObservationProvenance
@@ -89,11 +92,20 @@ class EvidenceRecord:
     def observed_target(self) -> str | None:
         return self.provenance.observed_target
 
+    @property
+    def requested_scope(self) -> ObservationScope:
+        return self.provenance.requested_scope
+
+    @property
+    def observed_scope(self) -> ObservationScope:
+        return self.provenance.observed_scope
+
     def is_current(self, now: datetime | None = None) -> bool:
         if self.status != "VALID":
             return False
-        check_time = now or datetime.now(timezone.utc)
-        return self.valid_until is None or self.valid_until > check_time
+        if self.valid_until is None:
+            return True
+        return (now or datetime.now(timezone.utc)) <= self.valid_until
 
 
 @dataclass(frozen=True)
@@ -101,259 +113,254 @@ class EvidenceState:
     records: tuple[EvidenceRecord, ...] = ()
 
     def current(self, now: datetime | None = None) -> tuple[EvidenceRecord, ...]:
-        return tuple(record for record in self.records if record.is_current(now))
+        moment = now or datetime.now(timezone.utc)
+        return tuple(record for record in self.records if record.is_current(moment))
+
+
+@dataclass(frozen=True)
+class EvidenceProjectionRecord:
+    """Small, deterministic metadata only; never contains raw payload."""
+
+    evidence_id: str
+    kind: EvidenceKind
+    target: str
+    observation_id: str
+    source_tool: str
+    observed_at: datetime
+    status: str
+    valid_until: datetime | None
+    entity_version: str | None
+    requested_scope: ObservationScope
+    observed_scope: ObservationScope
+    requested_identity: str | None
+    observed_identity: str | None
+    identity_status: IdentityStatus
+    scope_status: ScopeStatus
+
+
+@dataclass(frozen=True)
+class EvidenceProjection:
+    records: tuple[EvidenceProjectionRecord, ...]
+    total_records: int
+    omitted_records: int
+    estimated_chars: int
+
+
+class ContextBudgetExceeded(RuntimeError):
+    """The critical structured projection cannot fit the explicit budget."""
 
 
 def build_observation_provenance(
-    source_tool: str, arguments: Mapping[str, Any], data: object | None
+    source_tool: str, arguments: Mapping[str, Any], data: object
 ) -> ObservationProvenance:
-    """Derive identity provenance from request and response deterministically."""
+    """Compatibility helper for callers constructing test observations.
 
-    requested = _requested_identity(source_tool, arguments)
-    observed = _observed_identity(source_tool, data)
-    if source_tool == "get_gpu_pool" or (
-        source_tool == "get_queue_state" and not requested
-    ):
-        status = IdentityStatus.NOT_APPLICABLE
-    elif observed is None:
-        status = IdentityStatus.MISSING
-    elif requested == observed:
-        status = IdentityStatus.MATCHED
-    else:
-        status = IdentityStatus.CONFLICT
-    encoded = json.dumps(dict(arguments), sort_keys=True, separators=(",", ":"), default=str)
-    return ObservationProvenance(
-        requested_target=requested,
-        observed_target=observed,
-        source_tool=source_tool,
-        arguments_fingerprint=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-        identity_status=status,
-    )
+    Production Runtime calls normalization before this helper.  It is kept
+    narrow and deterministic for V2-local tests and host integrations.
+    """
+
+    result = normalize_read_result(source_tool, arguments, data)
+    return build_provenance(source_tool, arguments, result)
 
 
 class EvidenceTracker:
-    """Runtime-owned evidence writer; the Agent cannot manufacture records."""
+    """The only component allowed to create evidence records from reads."""
 
-    def __init__(self, freshness_seconds: int = 300):
+    _tool_kinds = {
+        "get_task_detail": (TaskDetailResult, EvidenceKind.LIVE_TASK),
+        "get_gpu_pool": (GpuPoolResult, EvidenceKind.GPU_POOL),
+        "search_knowledge": (KnowledgeResult, EvidenceKind.KNOWLEDGE),
+        "get_queue_state": (QueueResult, EvidenceKind.QUEUE_STATE),
+        "diagnose_task": (DiagnosticResult, EvidenceKind.DIAGNOSTIC_CONTEXT),
+    }
+
+    def __init__(self, *, freshness_seconds: int | None = None) -> None:
+        if freshness_seconds is not None and freshness_seconds < 0:
+            raise ValueError("freshness_seconds must not be negative")
         self.freshness_seconds = freshness_seconds
 
     def record_observations(
-        self, state: EvidenceState, observations: Iterable[ToolObservation]
+        self, state: EvidenceState, observations: tuple[ToolObservation, ...] | list[ToolObservation]
     ) -> tuple[EvidenceState, tuple[EvidenceRecord, ...]]:
-        created: list[EvidenceRecord] = []
         records = list(state.records)
+        created: list[EvidenceRecord] = []
         for observation in observations:
             record = self._qualify(observation)
-            if record is None:
-                continue
-            records.append(record)
-            created.append(record)
+            if record is not None:
+                if self.freshness_seconds is not None:
+                    record = EvidenceRecord(
+                        **{
+                            **record.__dict__,
+                            "valid_until": record.observed_at
+                            + timedelta(seconds=self.freshness_seconds),
+                        }
+                    )
+                records.append(record)
+                created.append(record)
         return EvidenceState(tuple(records)), tuple(created)
 
     def refresh_goal_outcomes(
         self,
-        descriptor,
-        contract,
+        descriptor: GoalDescriptor,
+        contract: CompletionContract,
         evidence: EvidenceState,
-        existing: dict[str, GoalOutcome],
+        outcomes: Mapping[str, GoalOutcome],
     ) -> dict[str, GoalOutcome]:
         current = evidence.current()
-        result: dict[str, GoalOutcome] = {}
+        refreshed: dict[str, GoalOutcome] = {}
         for goal in descriptor.goals:
-            prior = existing.get(goal.goal_id, GoalOutcome(goal.goal_id))
-            if prior.status in {
+            previous = outcomes.get(goal.goal_id)
+            if previous and previous.status in {
                 GoalStatus.DENIED,
                 GoalStatus.REJECTED,
                 GoalStatus.FAILED,
                 GoalStatus.INCONCLUSIVE,
                 GoalStatus.BLOCKED,
             }:
-                result[goal.goal_id] = prior
+                refreshed[goal.goal_id] = previous
                 continue
             requirements = contract.requirements_by_goal[goal.goal_id]
-            refs = tuple(
-                record.evidence_id
-                for requirement in requirements
-                if requirement.kind.value != "TARGET_BINDING"
-                for record in current
-                if record.kind == requirement.kind.value
-                and _target_matches(requirement.target, record.target, requirement.kind.value)
-            )
-            complete = all(
-                requirement.kind.value == "TARGET_BINDING"
-                or any(
-                    record.kind == requirement.kind.value
-                    and _target_matches(
-                        requirement.target, record.target, requirement.kind.value
-                    )
-                    for record in current
-                )
+            satisfied = all(
+                requirement.kind is RequirementKind.TARGET_BINDING
+                or self._has_requirement(current, requirement.kind, requirement.target)
                 for requirement in requirements
             )
-            result[goal.goal_id] = GoalOutcome(
+            refreshed[goal.goal_id] = GoalOutcome(
                 goal_id=goal.goal_id,
-                status=GoalStatus.SATISFIED if complete else GoalStatus.PENDING,
-                reason_code=None if complete else "REQUIRED_EVIDENCE_MISSING",
-                evidence_refs=tuple(dict.fromkeys(refs)),
+                status=GoalStatus.SATISFIED if satisfied else GoalStatus.PENDING,
+                reason_code="QUALIFIED_EVIDENCE_SATISFIED" if satisfied else "REQUIRED_EVIDENCE_MISSING",
             )
-        return result
+        return refreshed
 
     def _qualify(self, observation: ToolObservation) -> EvidenceRecord | None:
-        if observation.status != "SUCCESS" or observation.data is None:
+        if observation.status != "SUCCESS" or observation.result is None:
+            return None
+        result = observation.result
+        expected = self._tool_kinds.get(observation.source)
+        if expected is None or not isinstance(result, expected[0]):
             return None
         provenance = observation.provenance
-        if provenance is None:
-            # No explicit provenance means no target-bound evidence. Fail
-            # closed for all tools so a future tool cannot bypass this gate.
+        if provenance is None or not result.is_valid or not result.qualifies_for_evidence():
             return None
-        kind = self._kind_for(observation.source)
-        if kind is None or not _identity_is_valid(observation.source, provenance):
+        kind = expected[1]
+        if provenance.scope_status is not ScopeStatus.MATCHED:
             return None
-        if not _meaningful_for(kind, observation.data):
-            return None
-        observed_at = observation.observed_at
-        target = _evidence_target(provenance)
+        if kind is EvidenceKind.GPU_POOL:
+            if provenance.identity_status is not IdentityStatus.NOT_APPLICABLE:
+                return None
+            target = "platform"
+        elif kind is EvidenceKind.QUEUE_STATE and provenance.requested_scope.kind is ScopeKind.PLATFORM:
+            if provenance.identity_status is not IdentityStatus.NOT_APPLICABLE:
+                return None
+            target = "platform"
+        else:
+            if provenance.identity_status is not IdentityStatus.MATCHED:
+                return None
+            target = provenance.observed_identity
+            if target is None:
+                return None
         return EvidenceRecord(
             evidence_id=f"ev_{observation.observation_id}",
             kind=kind,
             target=target,
             observation_id=observation.observation_id,
             provenance=provenance,
-            observed_at=observed_at,
-            entity_version=self._entity_version(observation.data),
-            valid_until=observed_at + timedelta(seconds=self.freshness_seconds),
+            observed_at=observation.observed_at,
+            entity_version=result.entity_version,
         )
 
     @staticmethod
-    def _kind_for(source: str) -> str | None:
-        return {
-            "get_task_detail": "LIVE_TASK",
-            "get_gpu_pool": "GPU_POOL",
-            "search_knowledge": "KNOWLEDGE",
-            "get_queue_state": "QUEUE_STATE",
-            "diagnose_task": "DIAGNOSTIC_CONTEXT",
-        }.get(source)
-
-    @staticmethod
-    def _entity_version(data: object) -> str | None:
-        if isinstance(data, Mapping):
-            for key in ("entity_version", "generation", "revision", "etag", "version"):
-                if data.get(key) is not None:
-                    return str(data[key])
-        return None
-
-
-def _requested_identity(source_tool: str, arguments: Mapping[str, Any]) -> str:
-    if source_tool in {"get_task_detail", "get_queue_state", "diagnose_task"}:
-        return str(arguments.get("task_name", ""))
-    if source_tool == "search_knowledge":
-        return str(arguments.get("query", ""))
-    return "platform"
-
-
-def _observed_identity(source_tool: str, data: object | None) -> str | None:
-    if not isinstance(data, Mapping):
-        return None
-    if source_tool in {"get_task_detail", "get_queue_state", "diagnose_task"}:
-        value = data.get("task_name")
-    elif source_tool == "search_knowledge":
-        value = data.get("query")
-    else:
-        return None
-    return str(value) if isinstance(value, str) and value.strip() else None
-
-
-def _identity_is_valid(source: str, provenance: ObservationProvenance) -> bool:
-    if source == "get_gpu_pool":
-        return provenance.identity_status is IdentityStatus.NOT_APPLICABLE
-    if source == "get_queue_state" and not provenance.requested_target:
-        return provenance.identity_status is IdentityStatus.NOT_APPLICABLE
-    return provenance.identity_status is IdentityStatus.MATCHED
-
-
-def _evidence_target(provenance: ObservationProvenance) -> str:
-    if provenance.identity_status is IdentityStatus.NOT_APPLICABLE:
-        return "platform"
-    # This function is reached only after MATCHED qualification.
-    return str(provenance.observed_target)
-
-
-_PLACEHOLDER_TEXT = {
-    "",
-    "unknown",
-    "no data",
-    "no_data",
-    "not found",
-    "not_found",
-    "unavailable",
-    "no diagnostic facts",
-    "no_diagnostic_facts",
-    "placeholder",
-}
-
-
-def _meaningful_value(value: object) -> bool:
-    if value is None or isinstance(value, bool):
-        return False
-    if isinstance(value, str):
-        return value.strip().lower() not in _PLACEHOLDER_TEXT
-    if isinstance(value, Mapping):
-        return bool(value) and any(_meaningful_value(item) for item in value.values())
-    if isinstance(value, (list, tuple, set)):
-        return bool(value) and any(_meaningful_value(item) for item in value)
-    return True
-
-
-def _not_data_payload(data: Mapping[str, Any]) -> bool:
-    marker = data.get("status")
-    return isinstance(marker, str) and marker.strip().lower() in {
-        "no_data",
-        "not_found",
-        "unavailable",
-        "empty_result",
-    }
-
-
-def _meaningful_for(kind: str, data: object) -> bool:
-    if not isinstance(data, Mapping) or _not_data_payload(data):
-        return False
-    if kind == "LIVE_TASK":
-        if data.get("exists") is False:
+    def _has_requirement(records: tuple[EvidenceRecord, ...], kind: RequirementKind, target: str) -> bool:
+        try:
+            evidence_kind = EvidenceKind(kind.value)
+        except ValueError:
             return False
-        return isinstance(data.get("state"), str) and _meaningful_value(data.get("state"))
-    if kind == "KNOWLEDGE":
-        results = data.get("results")
-        if not isinstance(results, list) or not results:
-            return False
-        for item in results:
-            if isinstance(item, str) and _meaningful_value(item):
-                return True
-            if isinstance(item, Mapping) and any(
-                key in item and _meaningful_value(item[key])
-                for key in ("content", "text", "title", "answer", "snippet", "description")
-            ):
-                return True
-        return False
-    if kind == "DIAGNOSTIC_CONTEXT":
-        return any(
-            _meaningful_value(data.get(key))
-            for key in ("diagnosis", "root_cause", "reason", "facts", "details", "summary")
-        )
-    if kind == "GPU_POOL":
-        return isinstance(data.get("devices"), list) or isinstance(
-            data.get("reservations"), list
-        )
-    if kind == "QUEUE_STATE":
-        for key in ("state", "status", "position", "queue", "active", "pending", "running"):
-            if key in data and (
-                isinstance(data[key], list) or _meaningful_value(data[key])
-            ):
-                return True
-        return False
-    return False
+        return any(record.kind is evidence_kind and record.target == target for record in records)
 
 
-def _target_matches(required: str, actual: str, kind: str) -> bool:
-    if kind in {"GPU_POOL", "QUEUE_STATE"} and required == "platform":
-        return actual == "platform"
-    return required == actual
+class EvidenceProjectionBuilder:
+    """Project complete canonical evidence into bounded Agent-facing metadata."""
+
+    def build(
+        self,
+        state: EvidenceState,
+        descriptor: GoalDescriptor | None,
+        contract: CompletionContract | None,
+        *,
+        max_records: int = 64,
+        max_chars: int = 8_000,
+    ) -> EvidenceProjection:
+        all_records = list(state.records)
+        current = [record for record in all_records if record.status == "VALID"]
+        required: set[tuple[EvidenceKind, str]] = set()
+        if contract is not None:
+            for requirements in contract.requirements_by_goal.values():
+                for requirement in requirements:
+                    if requirement.kind is not RequirementKind.TARGET_BINDING:
+                        required.add((EvidenceKind(requirement.kind.value), requirement.target))
+
+        critical: list[EvidenceRecord] = []
+        for kind, target in sorted(required, key=lambda item: (item[0].value, item[1])):
+            matches = [record for record in current if record.kind is kind and record.target == target]
+            if matches:
+                critical.append(max(matches, key=lambda record: record.observed_at))
+
+        if len(critical) > max_records:
+            raise ContextBudgetExceeded("critical evidence record count exceeds context budget")
+        selected = list(critical)
+        selected_ids = {record.evidence_id for record in selected}
+        targets = {
+            goal.target if hasattr(goal, "target") and getattr(goal, "target") else getattr(goal, "topic", None)
+            for goal in (descriptor.goals if descriptor else ())
+        }
+        ranked = sorted(
+            [record for record in current if record.evidence_id not in selected_ids],
+            key=lambda record: (
+                0 if record.target in targets else 1,
+                -record.observed_at.timestamp(),
+            ),
+        )
+        selected.extend(ranked)
+        projected: list[EvidenceProjectionRecord] = []
+        used = 0
+        for record in selected:
+            if len(projected) >= max_records:
+                break
+            item = _project_record(record)
+            cost = _projection_cost(item)
+            if used + cost > max_chars:
+                if record in critical:
+                    raise ContextBudgetExceeded("critical evidence metadata exceeds context budget")
+                continue
+            projected.append(item)
+            used += cost
+        return EvidenceProjection(
+            records=tuple(projected),
+            total_records=len(all_records),
+            omitted_records=max(0, len(all_records) - len(projected)),
+            estimated_chars=used,
+        )
+
+
+def _project_record(record: EvidenceRecord) -> EvidenceProjectionRecord:
+    return EvidenceProjectionRecord(
+        evidence_id=record.evidence_id,
+        kind=record.kind,
+        target=record.target,
+        observation_id=record.observation_id,
+        source_tool=record.source_tool,
+        observed_at=record.observed_at,
+        status=record.status,
+        valid_until=record.valid_until,
+        entity_version=record.entity_version,
+        requested_scope=record.requested_scope,
+        observed_scope=record.observed_scope,
+        requested_identity=record.provenance.requested_identity,
+        observed_identity=record.provenance.observed_identity,
+        identity_status=record.provenance.identity_status,
+        scope_status=record.provenance.scope_status,
+    )
+
+
+def _projection_cost(item: EvidenceProjectionRecord) -> int:
+    return len(repr(item))

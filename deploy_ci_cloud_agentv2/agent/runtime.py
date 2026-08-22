@@ -15,7 +15,7 @@ from .evidence import EvidenceTracker
 from .gate import ResponseCompletionGate
 from .graph import GraphDependencies, build_graph
 from .principles import load_operating_principles
-from .state import AgentState, InMemoryCheckpointer, new_state
+from .state import AgentState, InMemoryCheckpointer, LatestStateHolder, new_state
 from ..platform.facade import InMemoryReadFacade, ReadFacade
 from ..providers.deterministic import DeterministicReadAgent
 from ..providers.model import AgentProvider
@@ -39,6 +39,7 @@ class SystemContext:
     tool_registry: ToolRegistry
     principles_path: str
     budgets: RuntimeBudgets
+    context_builder: ContextBuilder | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ def build_system_context(
     environment: str = "offline",
     operator_id: str = "phase-b-test-operator",
     trust_domain: str = "phase-b-test-domain",
+    context_builder: ContextBuilder | None = None,
 ) -> SystemContext:
     facade = read_facade or InMemoryReadFacade()
     registry = build_read_registry(facade)
@@ -83,6 +85,7 @@ def build_system_context(
         tool_registry=registry,
         principles_path=str(source),
         budgets=budgets or RuntimeBudgets(),
+        context_builder=context_builder,
     )
 
 
@@ -120,18 +123,21 @@ async def invoke(
         provenance=provenance,
     )
     state["last_event_id"] = started.event_id
+    latest_state = LatestStateHolder()
+    latest_state.record(state)
     dependencies = GraphDependencies(
         provider=system_context.provider,
         read_runtime=ReadToolRuntime(system_context.tool_registry),
         compiler=CompletionContractCompiler(),
         evidence_tracker=EvidenceTracker(),
         completion_gate=ResponseCompletionGate(),
-        context_builder=ContextBuilder(),
+        context_builder=system_context.context_builder or ContextBuilder(),
         event_store=system_context.event_store,
         model_version=getattr(system_context.provider, "model_version", "unknown"),
         prompt_version=getattr(system_context.provider, "prompt_version", "unknown"),
         tool_catalog_hash=system_context.tool_catalog_hash,
         policy_version=system_context.policy_version,
+        latest_state_holder=latest_state,
     )
     try:
         graph = build_graph(dependencies)
@@ -139,6 +145,7 @@ async def invoke(
             state,
             config={"recursion_limit": system_context.budgets.max_agent_steps * 4 + 12},
         )
+        latest_state.record(final_state)
     except Exception as exc:
         from .outcomes import ControlledTerminalOutcome, TerminalCode
 
@@ -147,7 +154,7 @@ async def invoke(
             safe_facts={"graph_error_type": type(exc).__name__},
             message_template="The runtime could not safely complete this interaction.",
         )
-        final_state = dict(state)
+        final_state = latest_state.current() or dict(state)
         final_state.update(
             {
                 "terminal_state": terminal,
@@ -156,12 +163,13 @@ async def invoke(
         )
         terminal_event = system_context.event_store.append(
             event_type="ControlledTerminalOutcomeProduced",
-            request_id=state["request_id"],
+            request_id=final_state["request_id"],
             thread_id=thread_id,
             payload={"code": terminal.code.value, "safe_facts": terminal.safe_facts},
             provenance=provenance,
         )
         final_state["last_event_id"] = terminal_event.event_id
+        latest_state.record(final_state)
     terminal = final_state.get("terminal_state")
     passed = bool(final_state.get("gate_passed"))
     status = "COMPLETED" if passed else "CONTROLLED_TERMINAL" if terminal else "ERROR"

@@ -23,7 +23,6 @@ class GoalOutcome:
     status: GoalStatus = GoalStatus.PENDING
     reason_code: str | None = None
     evidence_refs: tuple[str, ...] = ()
-    write_transaction_id: str | None = None
 
 
 class TerminalCode(str, Enum):

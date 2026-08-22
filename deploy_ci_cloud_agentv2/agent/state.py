@@ -52,6 +52,19 @@ class InMemoryCheckpointer:
         self._states[state["thread_id"]] = copy.deepcopy(state)
 
 
+class LatestStateHolder:
+    """Crash-path projection of the latest state returned by a graph node."""
+
+    def __init__(self) -> None:
+        self._state: AgentState | None = None
+
+    def record(self, state: AgentState) -> None:
+        self._state = copy.deepcopy(state)
+
+    def current(self) -> AgentState | None:
+        return copy.deepcopy(self._state) if self._state is not None else None
+
+
 def new_state(
     *,
     user_input: str,

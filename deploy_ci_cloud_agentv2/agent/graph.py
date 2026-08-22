@@ -22,8 +22,8 @@ from .context import ContextBuilder
 from .contracts import CompletionContractCompiler
 from .decisions import AgentDecision, FinalCandidate, ReadToolBatch, SingleToolCall
 from .evidence import (
+    ContextBudgetExceeded,
     EvidenceTracker,
-    IdentityStatus,
     ObservationProvenance,
     ToolObservation,
 )
@@ -31,7 +31,8 @@ from .events import EventProvenance, EventStore
 from .gate import ResponseCompletionGate
 from .outcomes import ControlledTerminalOutcome, GoalOutcome, TerminalCode
 from .principles import OperatingPrinciplesSnapshot
-from .state import AgentState
+from .provenance import IdentityStatus, ObservationScope, ScopeKind, ScopeStatus
+from .state import AgentState, LatestStateHolder
 from ..providers.model import ProviderUnavailable
 from ..tools.runtime import ReadToolRuntime
 
@@ -49,6 +50,7 @@ class GraphDependencies:
     prompt_version: str
     tool_catalog_hash: str
     policy_version: str
+    latest_state_holder: LatestStateHolder | None = None
 
 
 def build_graph(dependencies: GraphDependencies):
@@ -81,9 +83,21 @@ def build_graph(dependencies: GraphDependencies):
             )
 
         budget = budget.with_agent_step()
-        context = dependencies.context_builder.build(
-            {**state, "budgets": budget}, state["operating_principles_snapshot"]
-        )
+        try:
+            context = dependencies.context_builder.build(
+                {**state, "budgets": budget}, state["operating_principles_snapshot"]
+            )
+        except ContextBudgetExceeded as exc:
+            return _terminal_update(
+                state,
+                ControlledTerminalOutcome(
+                    code=TerminalCode.BUDGET_EXHAUSTED,
+                    safe_facts={"reason": "CONTEXT_BUDGET_EXCEEDED", "detail": str(exc)},
+                    message_template="The bounded Agent context could not preserve required runtime state.",
+                ),
+                dependencies,
+                budgets=budget,
+            )
         try:
             decision: AgentDecision = await dependencies.provider.generate(context)
         except ProviderUnavailable as exc:
@@ -186,6 +200,11 @@ def build_graph(dependencies: GraphDependencies):
                 causation_id=last_event_id,
             )
             last_event_id = contract_event.event_id
+            _remember(
+                dependencies,
+                state,
+                {**updates, "last_event_id": last_event_id},
+            )
 
         guard_reason = descriptor_error or _read_guard_reason(
             decision, dependencies.read_runtime, budget.limits.max_parallel_read_batch
@@ -207,7 +226,7 @@ def build_graph(dependencies: GraphDependencies):
         last_event_id = decision_event.event_id
 
         if guard_reason is not None:
-            return {
+            result = {
                 **updates,
                 **_read_guard_update(
                     state,
@@ -217,6 +236,8 @@ def build_graph(dependencies: GraphDependencies):
                     last_event_id=last_event_id,
                 ),
             }
+            _remember(dependencies, state, result)
+            return result
 
         updates["decision"] = decision
         updates["final_candidate"] = decision if isinstance(decision, FinalCandidate) else None
@@ -233,6 +254,7 @@ def build_graph(dependencies: GraphDependencies):
                 causation_id=last_event_id,
             )
             updates["last_event_id"] = final_event.event_id
+        _remember(dependencies, state, updates)
         return updates
 
     async def read_executor(state: AgentState) -> dict[str, Any]:
@@ -364,7 +386,7 @@ def build_graph(dependencies: GraphDependencies):
                 causation_id=last_event_id,
             )
             last_event_id = event.event_id
-        return {
+        result = {
             "budgets": budget.with_read_calls(len(calls)).with_retries(
                 sum(item.retry_count for item in observations)
             ),
@@ -375,6 +397,8 @@ def build_graph(dependencies: GraphDependencies):
             "decision": None,
             "last_event_id": last_event_id,
         }
+        _remember(dependencies, state, result)
+        return result
 
     async def response_completion_gate(state: AgentState) -> dict[str, Any]:
         candidate = state.get("final_candidate")
@@ -431,6 +455,7 @@ def build_graph(dependencies: GraphDependencies):
             last_event_id = event.event_id
         updates["last_event_id"] = last_event_id
         if evaluation.passed:
+            _remember(dependencies, state, updates)
             return updates
         budget = state["budgets"].with_gate_rejection()
         if budget.completion_gate_rejections > budget.limits.max_completion_gate_rejections:
@@ -450,11 +475,13 @@ def build_graph(dependencies: GraphDependencies):
                 budgets=budget,
                 causation_id=last_event_id,
             )
-        return {
+        result = {
             **updates,
             "budgets": budget,
             "gate_feedback": tuple(evaluation.facts + evaluation.missing),
         }
+        _remember(dependencies, state, result)
+        return result
 
     def after_agent(state: AgentState) -> str:
         if state.get("terminal_state") is not None:
@@ -546,11 +573,14 @@ def _read_guard_update(
         error_code="INVALID_READ_DECISION",
         observed_at=datetime.now(timezone.utc),
         provenance=ObservationProvenance(
-            requested_target="platform",
-            observed_target=None,
             source_tool="read_guard",
             arguments_fingerprint="",
+            requested_scope=ObservationScope(ScopeKind.PLATFORM),
+            observed_scope=ObservationScope(ScopeKind.UNKNOWN),
+            requested_identity=None,
+            observed_identity=None,
             identity_status=IdentityStatus.NOT_APPLICABLE,
+            scope_status=ScopeStatus.UNKNOWN,
         ),
     )
     event = _emit(
@@ -568,7 +598,7 @@ def _read_guard_update(
         },
         causation_id=last_event_id or state.get("last_event_id"),
     )
-    return {
+    result = {
         "decision": None,
         "final_candidate": None,
         "budgets": budgets,
@@ -577,6 +607,8 @@ def _read_guard_update(
         "continue_after_read_guard": True,
         "last_event_id": event.event_id,
     }
+    _remember(dependencies, state, result)
+    return result
 
 
 def _emit(
@@ -625,7 +657,7 @@ def _terminal_update(
         },
         causation_id=causation_id,
     )
-    return {
+    result = {
         "terminal_state": outcome,
         "termination_reason": outcome.code.value,
         "decision": None,
@@ -633,3 +665,13 @@ def _terminal_update(
         "budgets": budgets or state["budgets"],
         "last_event_id": event.event_id,
     }
+    _remember(dependencies, state, result)
+    return result
+
+
+def _remember(dependencies: GraphDependencies, state: AgentState, updates: dict[str, Any]) -> None:
+    if dependencies.latest_state_holder is None:
+        return
+    merged = dict(state)
+    merged.update(updates)
+    dependencies.latest_state_holder.record(merged)

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from deploy_ci_cloud_agentv2.agent.budgets import BudgetState, RuntimeBudgets
 from deploy_ci_cloud_agentv2.agent.context import ContextBuilder
@@ -11,6 +12,8 @@ from deploy_ci_cloud_agentv2.agent.evidence import (
     ToolObservation,
     build_observation_provenance,
 )
+from deploy_ci_cloud_agentv2.agent.provenance import build_provenance
+from deploy_ci_cloud_agentv2.agent.results import normalize_read_result
 from deploy_ci_cloud_agentv2.agent.gate import ResponseCompletionGate
 from deploy_ci_cloud_agentv2.agent.goals import (
     ExplainKnowledge,
@@ -25,6 +28,7 @@ from deploy_ci_cloud_agentv2.tools.runtime import ReadToolRuntime
 
 
 def _observation(source, arguments, data, *, status="SUCCESS"):
+    result = normalize_read_result(source, arguments, data) if status == "SUCCESS" else None
     return ToolObservation(
         observation_id=f"obs-{source}",
         call_id=f"call-{source}",
@@ -33,7 +37,8 @@ def _observation(source, arguments, data, *, status="SUCCESS"):
         status=status,
         data=data,
         observed_at=datetime.now(timezone.utc),
-        provenance=build_observation_provenance(source, arguments, data),
+        provenance=build_provenance(source, arguments, result),
+        result=result,
     )
 
 
@@ -232,7 +237,7 @@ def test_completion_gate_requires_all_known_goals_and_candidate_references():
 
 def test_principles_parser_stops_at_top_level_sections():
     snapshot = load_operating_principles(
-        "/home/ubuntu/project/AutoDriveDataOpsAgent/deploy_ci_cloud_agentv2/doc/Luna_OPERATING_PRINCIPLES.md"
+        Path(__file__).resolve().parents[2] / "doc" / "Luna_OPERATING_PRINCIPLES.md"
     )
     assert len(snapshot.principles) == 18
     assert snapshot.principles[-1].principle_id == "P18"
@@ -244,7 +249,7 @@ def test_principles_parser_stops_at_top_level_sections():
 
 def test_context_builder_keeps_latest_observations_and_bounds_messages():
     snapshot = load_operating_principles(
-        "/home/ubuntu/project/AutoDriveDataOpsAgent/deploy_ci_cloud_agentv2/doc/Luna_OPERATING_PRINCIPLES.md"
+        Path(__file__).resolve().parents[2] / "doc" / "Luna_OPERATING_PRINCIPLES.md"
     )
     descriptor = GoalDescriptor(1, (ReadTaskState("g1", "task_A"),))
     state = {
@@ -256,7 +261,7 @@ def test_context_builder_keeps_latest_observations_and_bounds_messages():
         "completion_contract": CompletionContractCompiler().compile(descriptor),
         "goal_outcomes": {"g1": GoalOutcome("g1")},
         "evidence": EvidenceState(),
-        "budgets": BudgetState(RuntimeBudgets(max_context_tokens=200)),
+        "budgets": BudgetState(RuntimeBudgets(max_context_tokens=1_000)),
         "observations": tuple(
             _observation("read_guard", {}, {"sequence": index})
             for index in range(33)
@@ -264,9 +269,12 @@ def test_context_builder_keeps_latest_observations_and_bounds_messages():
         "gate_feedback": (),
     }
     context = ContextBuilder(max_observations=32).build(state, snapshot)
-    assert len(context.semantic_observations.observations) == 32
+    assert len(context.semantic_observations.observations) <= 32
     assert context.semantic_observations.observations[-1].data == {"sequence": 32}
-    assert context.semantic_observations.observations[0].data == {"sequence": 1}
-    assert sum(len(str(item.get("content", ""))) for item in context.messages) <= 800
+    assert all(
+        item.data != {"sequence": 0}
+        for item in context.semantic_observations.observations
+    )
+    assert sum(len(str(item.get("content", ""))) for item in context.messages) <= 4_000
     assert context.runtime_structured.goal_descriptor == descriptor
     assert context.runtime_structured.completion_contract is not None

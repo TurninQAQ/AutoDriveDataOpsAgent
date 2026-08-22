@@ -10,7 +10,7 @@ import re
 
 from ..agent.context import AgentContext
 from ..agent.decisions import FinalCandidate, ReadToolBatch, SingleToolCall, ToolCall
-from ..agent.evidence import ToolObservation
+from ..agent.evidence import EvidenceKind, ToolObservation
 from ..agent.goals import (
     DiagnoseTask,
     ExplainKnowledge,
@@ -31,7 +31,6 @@ class DeterministicReadAgent:
     async def generate(self, context: AgentContext):
         prompt = context.user_input.strip()
         descriptor = context.runtime_structured.goal_descriptor
-        observations = context.semantic_observations.observations
         version = (descriptor.descriptor_version + 1) if descriptor else 1
 
         if descriptor is None or context.new_turn:
@@ -40,11 +39,11 @@ class DeterministicReadAgent:
 
         if self._requirements_satisfied(context):
             return FinalCandidate(
-                self._compose(prompt, descriptor, observations),
+                self._compose(prompt, descriptor, context),
                 referenced_goal_ids=tuple(goal.goal_id for goal in descriptor.goals),
             )
 
-        return self._next_action(prompt, descriptor, observations)
+        return self._next_action(prompt, descriptor, context)
 
     def _understand(self, prompt: str, version: int) -> GoalDescriptor:
         lower = prompt.lower()
@@ -68,7 +67,7 @@ class DeterministicReadAgent:
         elif any(token in lower for token in ("gpu", "显卡")):
             goals.append(InspectGPU("g1"))
         elif any(token in lower for token in ("queue", "队列")):
-            goals.append(InspectQueue("g1", task if task != "task_A" else ""))
+            goals.append(InspectQueue("g1", task if task != "task_A" else None))
         elif any(token in lower for token in ("什么意思", "meaning", "explain", "解释")):
             topic = "task_exclusive" if "exclusive" in lower else prompt
             goals.append(ExplainKnowledge("g1", topic))
@@ -94,22 +93,12 @@ class DeterministicReadAgent:
         return self._call_for_goal(goal, descriptor)
 
     def _next_action(
-        self, prompt: str, descriptor: GoalDescriptor, observations: tuple[ToolObservation, ...]
+        self, prompt: str, descriptor: GoalDescriptor, context: AgentContext
     ):
         for goal in descriptor.goals:
             if isinstance(goal, DiagnoseTask):
-                has_detail = any(
-                    item.source == "get_task_detail"
-                    and item.target == goal.target
-                    and item.status == "SUCCESS"
-                    for item in observations
-                )
-                has_diagnosis = any(
-                    item.source == "diagnose_task"
-                    and item.target == goal.target
-                    and item.status == "SUCCESS"
-                    for item in observations
-                )
+                has_detail = self._has_evidence(context, EvidenceKind.LIVE_TASK, goal.target)
+                has_diagnosis = self._has_evidence(context, EvidenceKind.DIAGNOSTIC_CONTEXT, goal.target)
                 if has_detail and not has_diagnosis:
                     return SingleToolCall(
                         ToolCall("c_diagnosis", "diagnose_task", {"task_name": goal.target})
@@ -119,35 +108,21 @@ class DeterministicReadAgent:
                         ToolCall("c_task_retry", "get_task_detail", {"task_name": goal.target})
                     )
             elif isinstance(goal, ExplainKnowledge):
-                if not any(
-                    item.source == "search_knowledge"
-                    and item.target == goal.topic
-                    and item.status == "SUCCESS"
-                    for item in observations
-                ):
+                if not self._has_evidence(context, EvidenceKind.KNOWLEDGE, goal.topic):
                     return SingleToolCall(
                         ToolCall("c_knowledge_retry", "search_knowledge", {"query": goal.topic})
                     )
             elif isinstance(goal, ReadTaskState):
-                if not any(
-                    item.source == "get_task_detail"
-                    and item.target == goal.target
-                    and item.status == "SUCCESS"
-                    for item in observations
-                ):
+                if not self._has_evidence(context, EvidenceKind.LIVE_TASK, goal.target):
                     return SingleToolCall(
                         ToolCall("c_task_retry", "get_task_detail", {"task_name": goal.target})
                     )
             elif isinstance(goal, InspectGPU):
-                if not any(item.source == "get_gpu_pool" and item.status == "SUCCESS" for item in observations):
+                if not self._has_evidence(context, EvidenceKind.GPU_POOL, "platform"):
                     return SingleToolCall(ToolCall("c_gpu_retry", "get_gpu_pool", {}))
             elif isinstance(goal, InspectQueue):
-                if not any(
-                    item.source == "get_queue_state"
-                    and item.status == "SUCCESS"
-                    and (not goal.target or item.target == goal.target)
-                    for item in observations
-                ):
+                target = goal.target or "platform"
+                if not self._has_evidence(context, EvidenceKind.QUEUE_STATE, target):
                     return SingleToolCall(
                         ToolCall("c_queue_retry", "get_queue_state", {"task_name": goal.target})
                     )
@@ -186,28 +161,35 @@ class DeterministicReadAgent:
         return match.group(1) if match else None
 
     @staticmethod
-    def _compose(prompt, descriptor, observations):
+    def _compose(prompt, descriptor, context):
         parts = []
+        evidence = context.runtime_structured.evidence.records
         for goal in descriptor.goals:
             relevant = [
-                item.data
-                for item in observations
-                if item.status == "SUCCESS"
-                and (
-                    isinstance(goal, InspectGPU) and item.source == "get_gpu_pool"
-                    or isinstance(goal, ExplainKnowledge)
-                    and item.source == "search_knowledge"
-                    and item.target == goal.topic
-                    or isinstance(goal, DiagnoseTask)
-                    and item.source in {"get_task_detail", "diagnose_task"}
-                    and item.target == goal.target
-                    or isinstance(goal, ReadTaskState)
-                    and item.source == "get_task_detail"
-                    and item.target == goal.target
-                    or isinstance(goal, InspectQueue)
-                    and item.source == "get_queue_state"
-                    and (not goal.target or item.target == goal.target)
-                )
+                {"kind": item.kind.value, "target": item.target, "source": item.source_tool}
+                for item in evidence
+                if _goal_matches_evidence(goal, item.kind, item.target)
             ]
-            parts.append(f"{goal.goal_id} {goal.kind}: {relevant}")
+            parts.append(f"{goal.goal_id} {goal.kind}: qualified_evidence={relevant}")
         return "\n".join(parts)
+
+    @staticmethod
+    def _has_evidence(context: AgentContext, kind: EvidenceKind, target: str) -> bool:
+        return any(
+            item.kind is kind and item.target == target and item.status == "VALID"
+            for item in context.runtime_structured.evidence.records
+        )
+
+
+def _goal_matches_evidence(goal, kind: EvidenceKind, target: str) -> bool:
+    if isinstance(goal, InspectGPU):
+        return kind is EvidenceKind.GPU_POOL and target == "platform"
+    if isinstance(goal, ExplainKnowledge):
+        return kind is EvidenceKind.KNOWLEDGE and target == goal.topic
+    if isinstance(goal, DiagnoseTask):
+        return kind in {EvidenceKind.LIVE_TASK, EvidenceKind.DIAGNOSTIC_CONTEXT} and target == goal.target
+    if isinstance(goal, ReadTaskState):
+        return kind is EvidenceKind.LIVE_TASK and target == goal.target
+    if isinstance(goal, InspectQueue):
+        return kind is EvidenceKind.QUEUE_STATE and target == (goal.target or "platform")
+    return False

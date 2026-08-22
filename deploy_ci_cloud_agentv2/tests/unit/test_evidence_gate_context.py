@@ -10,6 +10,8 @@ from deploy_ci_cloud_agentv2.agent.evidence import (
     ToolObservation,
     build_observation_provenance,
 )
+from deploy_ci_cloud_agentv2.agent.provenance import build_provenance
+from deploy_ci_cloud_agentv2.agent.results import normalize_read_result
 from deploy_ci_cloud_agentv2.agent.gate import ResponseCompletionGate
 from deploy_ci_cloud_agentv2.agent.goals import GoalDescriptor, ReadTaskState
 from deploy_ci_cloud_agentv2.agent.outcomes import GoalStatus
@@ -18,6 +20,9 @@ from deploy_ci_cloud_agentv2.agent.principles import load_operating_principles
 
 def test_evidence_records_provenance_and_freshness():
     now = datetime.now(timezone.utc)
+    result = normalize_read_result(
+        "get_task_detail", {"task_name": "task_A"}, {"task_name": "task_A", "state": "failed"}
+    )
     observation = ToolObservation(
         "obs1",
         "call1",
@@ -26,9 +31,8 @@ def test_evidence_records_provenance_and_freshness():
         "SUCCESS",
         {"task_name": "task_A", "state": "failed"},
         observed_at=now,
-        provenance=build_observation_provenance(
-            "get_task_detail", {"task_name": "task_A"}, {"task_name": "task_A", "state": "failed"}
-        ),
+        provenance=build_provenance("get_task_detail", {"task_name": "task_A"}, result),
+        result=result,
     )
     state, records = EvidenceTracker(freshness_seconds=1).record_observations(
         EvidenceState(), [observation]

@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from ..agent.decisions import ReadToolBatch, ToolCall
-from ..agent.evidence import ToolObservation, build_observation_provenance
+from ..agent.evidence import ToolObservation
+from ..agent.provenance import build_provenance
+from ..agent.results import normalize_read_result
 from .metadata import ToolKind
 from .registry import ToolRegistry
 
@@ -31,26 +33,34 @@ class ReadToolRuntime:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
 
-    def validate_single(self, call: ToolCall) -> None:
+    def validate_single(self, call: ToolCall) -> ToolCall:
         """Validate one proposed READ using the same guard as batch calls."""
-        self.registry.validate_call(call, require_read=True)
-        if not _arguments_are_concrete(call.arguments):
+        normalized = self.registry.normalize_call(call, require_read=True)
+        if not _arguments_are_concrete(normalized.arguments):
             raise ValueError("tool arguments must be concrete before execution")
+        return normalized
 
-    def validate_batch(self, batch: ReadToolBatch, max_batch: int) -> None:
+    def validate_batch(self, batch: ReadToolBatch, max_batch: int) -> ReadToolBatch:
         if not batch.calls:
             raise ValueError("READ batch must contain at least one call")
         if len(batch.calls) > max_batch:
             raise ValueError(f"READ batch exceeds configured maximum {max_batch}")
+        normalized_calls = []
         for call in batch.calls:
-            spec = self.registry.validate_call(call, require_read=True)
+            normalized = self.registry.normalize_call(call, require_read=True)
+            spec = self.registry.spec(normalized.tool_name)
             if spec.kind is not ToolKind.READ or not spec.parallel_safe:
-                raise ValueError(f"tool is not parallel-safe READ: {call.tool_name}")
-            if not _arguments_are_concrete(call.arguments):
+                raise ValueError(f"tool is not parallel-safe READ: {normalized.tool_name}")
+            if not _arguments_are_concrete(normalized.arguments):
                 raise ValueError("all READ batch arguments must be concrete")
+            normalized_calls.append(normalized)
         call_ids = {call.call_id for call in batch.calls}
         if len(call_ids) != len(batch.calls):
             raise ValueError("READ batch call_id values must be unique")
+        return ReadToolBatch(
+            calls=tuple(normalized_calls),
+            proposed_goal_descriptor=batch.proposed_goal_descriptor,
+        )
 
     async def execute_single(
         self,
@@ -61,7 +71,7 @@ class ReadToolRuntime:
     ) -> ToolObservation:
         if max_retries < 0:
             raise ValueError("max_retries is a non-negative per-call retry allowance")
-        self.validate_single(call)
+        call = self.validate_single(call)
         spec = self.registry.spec(call.tool_name)
         retries = 0
         while True:
@@ -125,7 +135,7 @@ class ReadToolRuntime:
     ) -> ReadBatchObservation:
         if max_retries < 0:
             raise ValueError("max_retries is a non-negative per-call retry allowance")
-        self.validate_batch(
+        batch = self.validate_batch(
             batch,
             max_batch=max_batch if max_batch is not None else len(batch.calls),
         )
@@ -152,8 +162,10 @@ def _arguments_are_concrete(value: object) -> bool:
 
 def _target_for(call: ToolCall) -> str:
     arguments = call.arguments
-    if call.tool_name in {"get_task_detail", "get_queue_state", "diagnose_task"}:
-        return str(arguments.get("task_name", "")) or "platform"
+    if call.tool_name in {"get_task_detail", "diagnose_task"}:
+        return str(arguments.get("task_name", ""))
+    if call.tool_name == "get_queue_state":
+        return str(arguments["task_name"]) if arguments.get("task_name") is not None else "platform"
     if call.tool_name == "search_knowledge":
         return str(arguments.get("query", ""))
     return "platform"
@@ -169,6 +181,15 @@ def _observation(
     retryable: bool = False,
     retry_count: int = 0,
 ) -> ToolObservation:
+    result = normalize_read_result(source, call.arguments, data)
+    if status != "SUCCESS":
+        result = None
+    provenance = build_provenance(source, call.arguments, result)
+    validation_error = (
+        "RESULT_VALIDATION_FAILED"
+        if result is not None and result.validation_errors
+        else error_code
+    )
     return ToolObservation(
         observation_id=f"obs_{uuid.uuid4().hex}",
         call_id=call.call_id,
@@ -176,9 +197,10 @@ def _observation(
         target=_target_for(call),
         status=status,
         data=data,
-        error_code=error_code,
+        error_code=validation_error,
         retryable=retryable,
         retry_count=retry_count,
         observed_at=datetime.now(timezone.utc),
-        provenance=build_observation_provenance(source, call.arguments, data),
+        provenance=provenance,
+        result=result,
     )

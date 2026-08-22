@@ -8,6 +8,7 @@ from typing import Any
 
 from ..agent.decisions import ToolCall
 from ..agent.events import catalog_fingerprint
+from ..agent.results import normalize_tool_arguments
 from .metadata import ToolKind, ToolSpec
 
 
@@ -59,7 +60,16 @@ class ToolRegistry:
         if require_read and spec.kind is not ToolKind.READ:
             raise ValueError(f"{call.tool_name} is not a READ tool")
         _validate_arguments(spec.schema, call.arguments)
+        normalize_tool_arguments(call.tool_name, call.arguments)
         return spec
+
+    def normalize_call(self, call: ToolCall, *, require_read: bool = True) -> ToolCall:
+        spec = self.validate_call(call, require_read=require_read)
+        return ToolCall(
+            call_id=call.call_id,
+            tool_name=call.tool_name,
+            arguments=normalize_tool_arguments(spec.name, call.arguments),
+        )
 
     async def call(self, call: ToolCall) -> Any:
         handler = self.handler(call.tool_name)
@@ -82,6 +92,8 @@ def _validate_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> No
         raise ValueError(f"unknown tool arguments: {', '.join(unknown)}")
     for name, value in arguments.items():
         expected = properties.get(name, {}).get("type")
+        if value is None and properties.get(name, {}).get("nullable"):
+            continue
         if expected == "string" and not isinstance(value, str):
             raise ValueError(f"{name} must be a string")
         if expected == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
