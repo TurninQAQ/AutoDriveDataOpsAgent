@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from .immutable import thaw_value
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,10 @@ class Event:
     provenance: EventProvenance
 
 
+class EventIntegrityError(RuntimeError):
+    """A reused event id carries content different from its first append."""
+
+
 class EventStore:
     """In-memory idempotent append store; suitable for the Phase B test host."""
 
@@ -57,7 +64,19 @@ class EventStore:
         with self._lock:
             existing = self._by_id.get(stable_id)
             if existing is not None:
-                return existing
+                if not _same_event_content(
+                    existing,
+                    event_type=event_type,
+                    request_id=request_id,
+                    thread_id=thread_id,
+                    causation_id=causation_id,
+                    payload=payload,
+                    provenance=provenance,
+                ):
+                    raise EventIntegrityError(
+                        f"event_id {stable_id} was already appended with different content"
+                    )
+                return _copy_event(existing)
             event = Event(
                 event_id=stable_id,
                 sequence_no=len(self._events) + 1,
@@ -66,20 +85,24 @@ class EventStore:
                 causation_id=causation_id,
                 timestamp=datetime.now(timezone.utc),
                 event_type=event_type,
-                payload=payload,
+                payload=copy.deepcopy(dict(payload)),
                 provenance=provenance,
             )
             self._events.append(event)
             self._by_id[stable_id] = event
-            return event
+            return _copy_event(event)
 
     def for_thread(self, thread_id: str) -> tuple[Event, ...]:
         with self._lock:
-            return tuple(event for event in self._events if event.thread_id == thread_id)
+            return tuple(
+                _copy_event(event)
+                for event in self._events
+                if event.thread_id == thread_id
+            )
 
     def all(self) -> tuple[Event, ...]:
         with self._lock:
-            return tuple(self._events)
+            return tuple(_copy_event(event) for event in self._events)
 
     def readable_trace(self, thread_id: str) -> list[dict[str, Any]]:
         rows = []
@@ -91,11 +114,45 @@ class EventStore:
                     "event_id": event.event_id,
                     "causation_id": event.causation_id,
                     "timestamp": event.timestamp.isoformat(),
-                    "payload": event.payload,
+                    "payload": thaw_value(copy.deepcopy(event.payload)),
                     "provenance": asdict(event.provenance),
                 }
             )
         return rows
+
+
+def _copy_event(event: Event) -> Event:
+    return Event(
+        event_id=event.event_id,
+        sequence_no=event.sequence_no,
+        request_id=event.request_id,
+        thread_id=event.thread_id,
+        causation_id=event.causation_id,
+        timestamp=event.timestamp,
+        event_type=event.event_type,
+        payload=copy.deepcopy(event.payload),
+        provenance=event.provenance,
+    )
+
+
+def _same_event_content(
+    existing: Event,
+    *,
+    event_type: str,
+    request_id: str,
+    thread_id: str,
+    causation_id: str | None,
+    payload: dict[str, Any],
+    provenance: EventProvenance,
+) -> bool:
+    return (
+        existing.event_type == event_type
+        and existing.request_id == request_id
+        and existing.thread_id == thread_id
+        and existing.causation_id == causation_id
+        and existing.payload == payload
+        and existing.provenance == provenance
+    )
 
 
 def catalog_fingerprint(catalog: list[dict[str, Any]]) -> str:

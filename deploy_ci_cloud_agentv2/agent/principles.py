@@ -25,6 +25,9 @@ class OperatingPrinciplesSnapshot:
     principles: tuple[OperatingPrinciple, ...]
     source_path: str
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "principles", tuple(self.principles))
+
 
 _HEADING = re.compile(
     r"^##\s+(?:\d+\.\s+)?Principle\s+(P\d+)\s+—\s+(.+?)\s*$"

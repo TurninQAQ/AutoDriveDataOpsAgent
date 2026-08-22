@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autodrive-dataops-agent-v2"
+version = "0.2.0"
+description = "Self-contained AutoDriveDataOpsAgent V2 read-only explicit Agent loop"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph==1.2.11",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = [
+    "deploy_ci_cloud_agentv2",
+    "deploy_ci_cloud_agentv2.agent",
+    "deploy_ci_cloud_agentv2.platform",
+    "deploy_ci_cloud_agentv2.providers",
+    "deploy_ci_cloud_agentv2.tools",
+]
+package-dir = {"deploy_ci_cloud_agentv2" = "."}
+
+[tool.setuptools.package-data]
+deploy_ci_cloud_agentv2 = ["doc/*.md"]

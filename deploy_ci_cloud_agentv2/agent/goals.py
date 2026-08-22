@@ -73,6 +73,7 @@ class GoalDescriptor:
     goals: tuple[Goal, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "goals", tuple(self.goals))
         if self.descriptor_version < 1:
             raise ValueError("descriptor_version must be positive")
         if any(not isinstance(goal, (ReadTaskState, InspectGPU, InspectQueue, ExplainKnowledge, DiagnoseTask)) for goal in self.goals):

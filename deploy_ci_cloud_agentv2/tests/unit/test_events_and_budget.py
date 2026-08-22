@@ -1,5 +1,7 @@
 from deploy_ci_cloud_agentv2.agent.budgets import BudgetState, RuntimeBudgets
-from deploy_ci_cloud_agentv2.agent.events import EventProvenance, EventStore
+import pytest
+
+from deploy_ci_cloud_agentv2.agent.events import EventIntegrityError, EventProvenance, EventStore
 
 
 def test_event_store_is_readable_idempotent_and_has_provenance():
@@ -17,12 +19,22 @@ def test_event_store_is_readable_idempotent_and_has_provenance():
         event_type="AgentRunStarted",
         request_id="r",
         thread_id="t",
-        payload={"changed": True},
+        payload={"ok": True},
         provenance=provenance,
         event_id="stable-event",
     )
     assert first == duplicate
     assert store.readable_trace("t")[0]["provenance"]["tool_catalog_hash"] == "catalog"
+
+    with pytest.raises(EventIntegrityError):
+        store.append(
+            event_type="AgentRunStarted",
+            request_id="r",
+            thread_id="t",
+            payload={"changed": True},
+            provenance=provenance,
+            event_id="stable-event",
+        )
 
 
 def test_budget_counters_are_explicit_and_bounded():

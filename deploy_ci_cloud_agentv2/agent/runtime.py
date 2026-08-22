@@ -116,16 +116,39 @@ async def invoke(
         operating_principles_hash=snapshot.content_hash,
         policy_version=system_context.policy_version,
     )
-    started = system_context.event_store.append(
-        event_type="AgentRunStarted",
-        request_id=state["current_request"].identity.request_id,
-        thread_id=thread_id,
-        payload={"user_input_length": len(user_input)},
-        provenance=provenance,
-    )
+    latest_state = LatestStateHolder()
+    latest_state.record(state)
+    try:
+        started = system_context.event_store.append(
+            event_type="AgentRunStarted",
+            request_id=state["current_request"].identity.request_id,
+            thread_id=thread_id,
+            payload={"user_input_length": len(user_input)},
+            provenance=provenance,
+        )
+    except Exception as exc:
+        # There is no safe Agent recovery when the audit boundary itself
+        # rejects the run-start event.  Return an explicit Runtime terminal
+        # without checkpointing a state that has no durable audit tail.
+        terminal = ControlledTerminalOutcome(
+            code=TerminalCode.UNRECOVERABLE_RUNTIME_ERROR,
+            safe_facts={"event_store_error_type": type(exc).__name__},
+            message_template="The runtime could not establish an immutable audit boundary.",
+        )
+        failed_state = dict(state)
+        failed_state["current_request"] = replace(
+            state["current_request"],
+            terminal_state=terminal,
+            termination_reason=terminal.code.value,
+        )
+        return _result_from_state(
+            thread_id,
+            failed_state,
+            status="CONTROLLED_TERMINAL",
+            terminal_outcome=terminal,
+        )
     state["last_event_id"] = started.event_id
     current = state["current_request"]
-    latest_state = LatestStateHolder()
     latest_state.record(state)
     dependencies = GraphDependencies(
         provider=system_context.provider,

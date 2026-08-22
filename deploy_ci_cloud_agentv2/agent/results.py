@@ -463,7 +463,16 @@ def _queue(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> QueueResult:
                 entries.append(entry)
     scope, scope_errors, _ = _observed_scope(raw, default=None, infer_platform=True)
     errors.extend(scope_errors)
-    meaningful = queue_field.is_valid or position_field.is_valid or state is not None or bool(count_values)
+    # UNKNOWN_EXTERNAL_STATE is not a queue answer by itself.  It only becomes
+    # useful when another independently validated queue fact is present.  An
+    # explicit queue collection or numeric position/count is such a fact.
+    meaningful = (
+        position_field.is_valid
+        or bool(count_values)
+        or (queue_field.is_valid and bool(entries))
+        or (queue_field.is_valid and state is None)
+        or (state is not None and state is not QueueState.UNKNOWN_EXTERNAL_STATE)
+    )
     if envelope.is_success and not meaningful:
         errors.append("queue result has no meaningful state value")
     task_name = task_field.value if task_field.is_valid else None

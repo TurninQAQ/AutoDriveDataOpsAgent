@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
+from typing import Mapping
 
 from .goals import (
     DiagnoseTask,
@@ -16,6 +17,7 @@ from .goals import (
     InspectQueue,
     ReadTaskState,
 )
+from .immutable import FrozenMapping
 
 
 class RequirementKind(str, Enum):
@@ -38,7 +40,19 @@ class CompletionContract:
     descriptor_version: int
     contract_version: int
     contract_fingerprint: str
-    requirements_by_goal: dict[str, tuple[CompletionRequirement, ...]]
+    requirements_by_goal: Mapping[str, tuple[CompletionRequirement, ...]]
+
+    def __post_init__(self) -> None:
+        # Normalize every construction path, including tests and future host
+        # adapters.  The provider-facing object therefore cannot mutate the
+        # acceptance requirements through a nested dictionary alias.
+        normalized = FrozenMapping(
+            {
+                str(goal_id): tuple(requirements)
+                for goal_id, requirements in self.requirements_by_goal.items()
+            }
+        )
+        object.__setattr__(self, "requirements_by_goal", normalized)
 
 
 class CompletionContractCompiler:

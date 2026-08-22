@@ -50,7 +50,9 @@ class InMemoryReadFacade:
         return copy.deepcopy(self.responses.get(tool_name, default))
 
     def get_task_detail(self, task_name: str) -> Any:
-        default = {"status": "NO_DATA", "task_name": task_name, "state": None}
+        # Absence is represented by omission.  ``state=None`` would be a
+        # present-invalid field under the strict response contract.
+        default = {"status": "NO_DATA", "task_name": task_name}
         return self._result("get_task_detail", {"task_name": task_name}, default)
 
     def get_gpu_pool(self) -> Any:
@@ -78,5 +80,6 @@ class InMemoryReadFacade:
         return self._result("get_queue_state", {"task_name": task_name}, default)
 
     def diagnose_task(self, task_name: str) -> Any:
-        default = {"status": "NO_DATA", "task_name": task_name, "diagnosis": None}
+        # A missing diagnosis is absent data, not a nullable diagnosis field.
+        default = {"status": "NO_DATA", "task_name": task_name}
         return self._result("diagnose_task", {"task_name": task_name}, default)

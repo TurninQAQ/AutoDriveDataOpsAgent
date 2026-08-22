@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .immutable import FrozenMapping
+
 
 class GoalStatus(str, Enum):
     PENDING = "PENDING"
@@ -24,6 +26,11 @@ class GoalOutcome:
     reason_code: str | None = None
     evidence_refs: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
+        if self.status is GoalStatus.SATISFIED and not self.evidence_refs:
+            raise ValueError("SATISFIED GoalOutcome requires supporting evidence_refs")
+
 
 class TerminalCode(str, Enum):
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
@@ -35,7 +42,10 @@ class TerminalCode(str, Enum):
 @dataclass(frozen=True)
 class ControlledTerminalOutcome:
     code: TerminalCode
-    safe_facts: dict[str, Any]
+    safe_facts: FrozenMapping[str, Any] | dict[str, Any]
     message_template: str
     retry_allowed: bool = False
     human_action_required: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "safe_facts", FrozenMapping(self.safe_facts))

@@ -182,6 +182,9 @@ class EvidenceProjection:
     omitted_records: int
     estimated_chars: int
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "records", tuple(self.records))
+
 
 class ContextBudgetExceeded(RuntimeError):
     """The critical structured projection cannot fit the explicit budget."""
@@ -239,11 +242,20 @@ class EvidenceTracker:
                 refreshed[goal.goal_id] = previous
                 continue
             requirements = contract.requirements_by_goal[goal.goal_id]
-            satisfied = all(
-                requirement.kind is RequirementKind.TARGET_BINDING
-                or self._has_requirement(current, requirement.kind, requirement.target)
-                for requirement in requirements
-            )
+            supporting_refs: list[str] = []
+            satisfied = True
+            for requirement in requirements:
+                if requirement.kind is RequirementKind.TARGET_BINDING:
+                    continue
+                matching = self._matching_records(
+                    current, requirement.kind, requirement.target
+                )
+                if not matching:
+                    satisfied = False
+                    continue
+                supporting_refs.append(
+                    max(matching, key=lambda record: record.freshness.observed_at).evidence_id
+                )
             refreshed[goal.goal_id] = GoalOutcome(
                 goal_id=goal.goal_id,
                 status=GoalStatus.SATISFIED if satisfied else GoalStatus.PENDING,
@@ -252,6 +264,7 @@ class EvidenceTracker:
                     if satisfied
                     else "REQUIRED_EVIDENCE_MISSING"
                 ),
+                evidence_refs=tuple(dict.fromkeys(supporting_refs)) if satisfied else (),
             )
         return refreshed
 
@@ -308,11 +321,21 @@ class EvidenceTracker:
     def _has_requirement(
         records: tuple[EvidenceRecord, ...], kind: RequirementKind, target: str
     ) -> bool:
+        return bool(EvidenceTracker._matching_records(records, kind, target))
+
+    @staticmethod
+    def _matching_records(
+        records: tuple[EvidenceRecord, ...], kind: RequirementKind, target: str
+    ) -> tuple[EvidenceRecord, ...]:
         try:
             evidence_kind = EvidenceKind(kind.value)
         except ValueError:
-            return False
-        return any(record.kind is evidence_kind and record.target == target for record in records)
+            return ()
+        return tuple(
+            record
+            for record in records
+            if record.kind is evidence_kind and record.target == target
+        )
 
 
 class EvidenceProjectionBuilder:
