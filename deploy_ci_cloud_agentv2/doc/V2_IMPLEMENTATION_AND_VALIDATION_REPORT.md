@@ -391,14 +391,14 @@ unchanged chunk hashes. Default V2 retrieval remains offline BM25 plus
 ```text
 RAG runtime/config/index tests: 11 passed
 RAG + gateway + production-adapter focused tests: 42 passed
-five-case local hash Golden Set: Top-5 1.00, MRR 0.80
+five-case smoke local hash Golden Set: Top-5 1.00, MRR 0.80
 
 real Qwen embedding model: qwen3.7-text-embedding
 document smoke: PASS, 1024 finite dimensions
 query smoke: PASS, 1024 finite dimensions
 canonical runtime injection/read: PASS (qwen_hybrid)
 corpus dense sidecar: 30 documents, 443/443 vectors, complete=true
-Qwen dense Golden Set: Top-5 1.00, MRR 0.90
+five-case smoke Qwen dense Golden Set: Top-5 1.00, MRR 0.90
 RERANKER_NOT_REQUIRED
 ```
 
