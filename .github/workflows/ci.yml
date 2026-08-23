@@ -31,8 +31,10 @@ jobs:
       - name: Wheel import smoke
         run: |
           python -m venv /tmp/autodrive-wheel-venv
-          /tmp/autodrive-wheel-venv/bin/python -m pip install --no-index --no-deps /tmp/autodrive-wheel/*.whl
+          /tmp/autodrive-wheel-venv/bin/python -m pip install /tmp/autodrive-wheel/*.whl
+          cd /tmp
           /tmp/autodrive-wheel-venv/bin/python -c 'import deploy_ci_cloud_agentv2; print(deploy_ci_cloud_agentv2.__version__)'
+          /tmp/autodrive-wheel-venv/bin/autodrive-agent health
       - name: Static architecture audit
         run: |
           ! rg -n -P 'from deploy_ci_cloud_agent(?!v2)|import deploy_ci_cloud_agent(?!v2)' deploy_ci_cloud_agentv2 --glob '*.py'
