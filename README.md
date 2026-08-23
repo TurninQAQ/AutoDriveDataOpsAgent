@@ -41,8 +41,8 @@ Local provider adapter sandbox           PASS
 Local platform JSON-RPC sandbox          PASS
 Real Provider smoke                      PENDING: credential not configured
 Real AutoDrive platform                  PENDING: endpoint not configured
-Hosted CI (Python 3.11/3.12)             PASS: hosted run #12
-Hosted Docker build/runtime smoke        PASS: hosted run #12
+Hosted CI (Python 3.11/3.12)             PASS: hosted run #21 (32656130224)
+Hosted Docker build/runtime smoke        PASS: hosted run #21 (32656130224)
 Local Docker build/run                   BLOCKED: Docker Hub registry timeout
 V2 in-process platform backend           PASS: localhost mock/simulated READ smoke
 Missing task contract                    PASS: deterministic NOT_FOUND/exists=false
