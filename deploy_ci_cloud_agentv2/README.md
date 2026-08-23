@@ -114,6 +114,9 @@ environment, `tests/conftest.py` installs a **test-only compatibility harness**
 so node/routing invariants can still be exercised; production Runtime code has
 no fallback semantic loop.
 
+The 43-item V2 requirement-to-evidence mapping is maintained in
+`doc/V2_REQUIREMENT_TRACEABILITY_MATRIX.md`.
+
 ## V1 boundary
 
 V2 has no runtime imports from `deploy_ci_cloud_agent`. V1 may be read as historical/reference material only; autonomy-specific V1 logic is not migrated into V2.

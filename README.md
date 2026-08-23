@@ -51,6 +51,7 @@ lock and leaves normal post-`MutationStarted` reconciliation semantics intact.
 
 See:
 
+- `deploy_ci_cloud_agentv2/doc/V2_REQUIREMENT_TRACEABILITY_MATRIX.md`
 - `deploy_ci_cloud_agentv2/doc/PRODUCTION_RUNTIME.md`
 - `deploy_ci_cloud_agentv2/doc/REAL_PROVIDER_INTEGRATION.md`
 - `deploy_ci_cloud_agentv2/doc/MCP_PLATFORM_ADAPTER.md`

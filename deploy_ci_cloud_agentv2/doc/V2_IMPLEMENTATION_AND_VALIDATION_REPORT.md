@@ -15,6 +15,9 @@ The runtime validation environment contains the pinned `langgraph==1.2.11`;
 the compatibility harness is used only by the separate dependency-deficient
 root environment and is never part of production code.
 
+The 43-item requirement-to-evidence mapping is maintained separately in
+`V2_REQUIREMENT_TRACEABILITY_MATRIX.md`.
+
 ## 2. Implemented control model
 
 ```text
@@ -181,7 +184,7 @@ The suite includes direct coverage for the architecture examples and historical 
 
 ## 6. Validation results
 
-At this closure report generation:
+At this closure report generation, independently rerun on 2026-08-23:
 
 ```text
 real runtime venv pytest -q deploy_ci_cloud_agentv2/tests
@@ -219,12 +222,17 @@ PASS; package 2.0.0, LangGraph 1.2.11 supplied by runtime environment
 real LangGraph marker/runtime checks:
 4 passed, 218 deselected
 
-production adapter integration:
-15 passed; local fake HTTP Provider and fake JSON-RPC gateway, including
-typed provider failure exhaustion and WRITE error-after-effect reconciliation
+focused production/integration safety set:
+46 passed (`test_production_adapters.py`, `test_write_lifecycle.py`,
+`test_cross_process_runtime_ownership.py`, and `test_production_host.py`)
+
+production adapter breakdown:
+12 provider fake-transport cases and 4 platform fake-JSON-RPC cases passed;
+the provider cases include typed failure exhaustion and the platform cases
+include WRITE error-after-effect reconciliation
 
 production host/configuration unit tests:
-7 passed
+5 passed
 
 CLI health/readiness:
 PASS
@@ -292,8 +300,8 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 |---|---|---|
 | Real Qwen/DashScope provider | PENDING | No non-empty `DASHSCOPE_API_KEY` was configured; no real request was sent |
 | Real AutoDrive platform | PENDING | No external endpoint was configured; default localhost port had no gateway |
-| Local provider adapter | PASS | 16 fake-transport tests, including malformed/timeout/429/5xx/network cases |
-| Local platform sandbox | PASS | 16 fake JSON-RPC tests, including approval, one mutation, verification, and uncertain outcome |
+| Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
+| Local platform sandbox | PASS | 4 collected fake JSON-RPC cases, including approval, one mutation, verification, and uncertain outcome |
 | Docker build/run | BLOCKED | `python:3.12-slim` pull timed out at Docker Hub |
 | Hosted CI run | NOT OBSERVED | Workflow is present and statically parseable; GitHub API returned no workflow runs |
 

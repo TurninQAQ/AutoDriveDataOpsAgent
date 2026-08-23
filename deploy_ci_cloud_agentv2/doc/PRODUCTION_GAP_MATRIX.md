@@ -5,6 +5,9 @@ implementation and production integration work. It is intentionally scoped to
 adapters, hosting, observability, and deployment; it does not change the
 frozen semantic authority model.
 
+The complete 43-item V2 requirement mapping is maintained in
+`V2_REQUIREMENT_TRACEABILITY_MATRIX.md`.
+
 | Area | Frozen/reference state | Production gap | Closure evidence |
 |---|---|---|---|
 | Agent authority | One visible Agent loop; Runtime validates decisions | None in the authority model | Real LangGraph graph tests |
