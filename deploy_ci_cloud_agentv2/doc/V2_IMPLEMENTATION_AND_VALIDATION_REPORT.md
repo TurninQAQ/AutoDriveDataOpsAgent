@@ -11,9 +11,11 @@ The implementation follows the frozen architecture contract:
 No Planner, Router, second semantic authority, or AUTO WRITE path is present. V1 is not imported by the V2 production runtime.
 
 This report distinguishes the frozen architecture from production integration.
-The runtime validation environment contains the pinned `langgraph==1.2.11`;
-the compatibility harness is used only by the separate dependency-deficient
-root environment and is never part of production code.
+Both project validation environments used the pinned real
+`langgraph==1.2.11` package for the current run. A separate temporary
+import-blocked runner exercised the compatibility harness and recorded
+`218 passed, 4 skipped`; that harness remains test-only and is never part of
+production code.
 
 The 43-item requirement-to-evidence mapping is maintained separately in
 `V2_REQUIREMENT_TRACEABILITY_MATRIX.md`.
