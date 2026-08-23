@@ -1,0 +1,32 @@
+[
+  {
+    "id": "gpu-oom",
+    "query": "GPU OOM 显存不足时如何检查 reservation 和调度状态？",
+    "expected_sources": ["platform/gpu_scheduling.md", "runbooks/gpu_wait.md"],
+    "top_k": 5
+  },
+  {
+    "id": "queue-congestion",
+    "query": "queue congestion 导致任务持续等待 GPU 时应如何排查？",
+    "expected_sources": ["runbooks/gpu_wait.md"],
+    "top_k": 5
+  },
+  {
+    "id": "recovery-checkpoint",
+    "query": "draining 软抢占后如何从 checkpoint resume 恢复任务？",
+    "expected_sources": ["platform/soft_preemption_recovery.md"],
+    "top_k": 5
+  },
+  {
+    "id": "airflow-failure",
+    "query": "Airflow scheduler 和 DagRun 失败时如何检查任务状态？",
+    "expected_sources": ["runbooks/airflow_health.md"],
+    "top_k": 5
+  },
+  {
+    "id": "container-runtime",
+    "query": "container runtime failure 后如何安全检查和清理容器？",
+    "expected_sources": ["platform/docker_lifecycle.md", "runbooks/container_cleanup.md"],
+    "top_k": 5
+  }
+]

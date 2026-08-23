@@ -142,7 +142,8 @@ python -m compileall -q deploy_ci_cloud_agentv2
 ```
 
 Correctness tests make no real provider/API calls. The production package requires
-the pinned `langgraph==1.2.11` and `httpx`. The marked real-runtime tests assert
+the pinned `langgraph==1.2.11`, `httpx`, and the declared optional-RAG adapter
+libraries. The marked real-runtime tests assert
 that LangGraph is loaded from site-packages and exercise real `interrupt()` /
 `Command(resume=...)`. When LangGraph is unavailable in an offline review
 environment, `tests/conftest.py` installs a **test-only compatibility harness**
@@ -162,3 +163,8 @@ configured, so those results are reported as pending. Hosted GitHub Actions
 run #12 validated the Python 3.11/3.12 matrix, wheel/import/static checks, and
 the non-root container health/readiness/persistent-volume smoke. Local Docker
 build/run remains dependent on access to the `python:3.12-slim` registry image.
+
+Optional dense retrieval configuration, sidecar compatibility, and validation
+evidence are documented in `doc/DENSE_EMBEDDING_RUNTIME.md`. The offline default
+remains BM25 + feature hashing; an external embedding secret is never required
+for normal platform startup.

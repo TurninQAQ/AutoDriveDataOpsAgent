@@ -12,6 +12,8 @@ dependencies = [
     "httpx>=0.28,<1",
     "pydantic>=2,<3",
     "PyYAML>=6,<7",
+    "requests>=2.31,<3",
+    "google-genai>=1,<4",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +58,7 @@ deploy_ci_cloud_agentv2 = ["doc/*.md"]
     "knowledge/**/*.md",
     "knowledge/**/*.yaml",
     "knowledge/**/*.yml",
+    "knowledge/**/*.json",
     "knowledge/**/*.txt",
     "scripts/*.sh",
     "dags/templates/*",

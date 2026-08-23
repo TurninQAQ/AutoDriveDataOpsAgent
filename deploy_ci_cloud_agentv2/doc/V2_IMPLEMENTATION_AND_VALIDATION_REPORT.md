@@ -356,7 +356,8 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 
 | Area | Result | Evidence |
 |---|---|---|
-| Real Qwen/DashScope provider | PENDING | No non-empty `DASHSCOPE_API_KEY` was configured; no real request was sent |
+| Real Qwen chat/Agent provider | BLOCKED_EXTERNAL | One production `qwen-plus` request reached DashScope and returned `AllocationQuota.FreeTierOnly`; no parser or safety boundary was loosened |
+| Real Qwen embedding provider | PASS | `qwen3.7-text-embedding` production adapter returned normalized finite 1024-dimensional document and query vectors; canonical runtime dense retrieval and a 443-vector sidecar were exercised |
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
 | Real AutoDrive platform | PENDING | The localhost mock/simulated gateway is available and validated; no non-local/authorized AutoDrive endpoint is configured |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
@@ -365,6 +366,43 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
 | Hosted CI run | PASS | Hosted run #12 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
 
-No paid model call, production platform request, or production WRITE was
-performed during this validation. Local fake provider/platform tests and
+No production platform request or production WRITE was performed during this
+validation. The later real Qwen embedding evidence below is separate from the
+quota-blocked Qwen chat/Agent provider. Local fake provider/platform tests and
 local sandbox safety tests are not external-system evidence.
+
+## 10. Optional dense embedding runtime closure (2026-08-24)
+
+The existing `QwenEmbeddingProvider`, `GeminiEmbeddingProvider`,
+`DenseEmbeddingIndex`, and `KnowledgeService` were present but the canonical
+`platform_backend.runtime.build_platform_facade()` never injected a provider.
+The smallest correction is a construction-only `build_embedding_provider()`
+factory. It accepts `local` (default; legacy `hash` retained), `qwen`, and
+`gemini`, validates explicit external configuration, and passes the result only
+to `KnowledgeService`. It cannot influence Agent decisions, approval, WRITE
+admission, verification, or completion.
+
+`DenseEmbeddingIndex` now applies a shared finite/dimension validation contract
+to every provider response, including deterministic test providers. Its existing
+metadata prevents reuse across provider/model/dimension changes and reuses only
+unchanged chunk hashes. Default V2 retrieval remains offline BM25 plus
+384-dimensional feature hashing.
+
+```text
+RAG runtime/config/index tests: 11 passed
+RAG + gateway + production-adapter focused tests: 42 passed
+five-case local hash Golden Set: Top-5 1.00, MRR 0.80
+
+real Qwen embedding model: qwen3.7-text-embedding
+document smoke: PASS, 1024 finite dimensions
+query smoke: PASS, 1024 finite dimensions
+canonical runtime injection/read: PASS (qwen_hybrid)
+corpus dense sidecar: 30 documents, 443/443 vectors, complete=true
+Qwen dense Golden Set: Top-5 1.00, MRR 0.90
+RERANKER_NOT_REQUIRED
+```
+
+No production platform mutation was performed. Gemini runtime wiring is covered
+by deterministic factory tests; no Gemini credential was available for an
+external smoke. See `DENSE_EMBEDDING_RUNTIME.md` for operating configuration
+and sidecar lifecycle.

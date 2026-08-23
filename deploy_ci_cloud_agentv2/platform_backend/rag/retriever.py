@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .models import KnowledgeChunk, RetrievedKnowledge
 from .text import cosine_sparse, hashed_vector, tokenize
-from .embeddings import EmbeddingProvider, cosine_dense
+from .embeddings import EmbeddingProvider, cosine_dense, validate_embedding_vector
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,13 @@ class HybridRetriever:
             return []
         query_tokens = tokenize(query, expand=True)
         query_vector = hashed_vector(query_tokens, self.config.vector_dimension)
-        dense_query = self.embedding_provider.embed_query(query) if self.embedding_provider is not None else []
+        dense_query = []
+        if self.embedding_provider is not None:
+            dense_query = validate_embedding_vector(
+                self.embedding_provider.embed_query(query),
+                self.embedding_provider.dimension,
+                context="dense embedding query",
+            )
         raw: list[tuple[int, float, float]] = []
         for index in range(len(self.chunks)):
             lexical = self._bm25(query_tokens, index)

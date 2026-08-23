@@ -6,7 +6,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from deploy_ci_cloud_agentv2.platform_backend.integrations.model_retry import retry_sync
 
@@ -23,6 +23,39 @@ class EmbeddingProvider(Protocol):
 
     def embed_query(self, query: str) -> list[float]:
         ...
+
+
+class EmbeddingConfigurationError(RuntimeError):
+    """Raised when an explicitly enabled embedding provider is unusable."""
+
+
+class EmbeddingResponseError(RuntimeError):
+    """Raised when an embedding provider returns an invalid vector contract."""
+
+
+def validate_embedding_vector(values: object, dimension: int, *, context: str) -> list[float]:
+    """Validate a provider vector before it reaches the persistent sidecar.
+
+    The dense sidecar is shared across process restarts, so accepting malformed
+    values here would make an upstream provider failure look like a valid
+    retrieval result.  This validation is deliberately provider-neutral: every
+    implementation, including deterministic test doubles, must meet the same
+    dimension and finite-value contract.
+    """
+
+    if not isinstance(values, list):
+        raise EmbeddingResponseError(f"{context}: embedding must be a list")
+    if len(values) != dimension:
+        raise EmbeddingResponseError(
+            f"{context}: embedding dimension mismatch: expected {dimension}, got {len(values)}"
+        )
+    try:
+        vector = [float(value) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise EmbeddingResponseError(f"{context}: embedding contains non-numeric values") from exc
+    if not all(math.isfinite(value) for value in vector):
+        raise EmbeddingResponseError(f"{context}: embedding contains non-finite values")
+    return vector
 
 
 def _normalize(values: list[float]) -> list[float]:
@@ -53,6 +86,7 @@ class GeminiEmbeddingProvider:
         model_name: str = "gemini-embedding-2",
         dimension: int = 768,
         batch_size: int = 32,
+        api_key: str | None = None,
         client=None,
     ):
         self.model_name = model_name
@@ -69,10 +103,14 @@ class GeminiEmbeddingProvider:
             raise RuntimeError(
                 "google-genai is not installed. Install requirements-agent.txt first."
             ) from exc
-        api_key = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
-        if not api_key:
+        resolved_api_key = (
+            (api_key or "").strip()
+            or os.environ.get("GEMINI_API_KEY", "").strip()
+            or os.environ.get("GOOGLE_API_KEY", "").strip()
+        )
+        if not resolved_api_key:
             raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) is required for Gemini embeddings")
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=resolved_api_key)
         self._types = types
 
     @staticmethod
@@ -114,10 +152,18 @@ class GeminiEmbeddingProvider:
             if len(embeddings) != len(batch):
                 raise RuntimeError(
                     f"Gemini embedding response count mismatch: expected {len(batch)}, got {len(embeddings)}"
-                )
+            )
             for item in embeddings:
-                values = list(getattr(item, "values", item))
-                vectors.append(_normalize([float(v) for v in values]))
+                values = getattr(item, "values", item)
+                vectors.append(
+                    _normalize(
+                        validate_embedding_vector(
+                            values,
+                            self.dimension,
+                            context="Gemini embedding response",
+                        )
+                    )
+                )
         return vectors
 
     def embed_documents(self, chunks: list[KnowledgeChunk]) -> dict[str, list[float]]:
@@ -215,11 +261,11 @@ class QwenEmbeddingProvider:
             if index < 0 or index >= len(texts) or ordered[index] is not None:
                 raise RuntimeError("Qwen embedding response has invalid text_index")
             values = item.get("embedding")
-            if not isinstance(values, list) or len(values) != self.dimension:
-                raise RuntimeError("Qwen embedding response has the wrong dimension")
-            vector = [float(value) for value in values]
-            if not all(math.isfinite(value) for value in vector):
-                raise RuntimeError("Qwen embedding response contains non-finite values")
+            vector = validate_embedding_vector(
+                values,
+                self.dimension,
+                context="Qwen embedding response",
+            )
             ordered[index] = _normalize(vector)
         if any(vector is None for vector in ordered):
             raise RuntimeError("Qwen embedding response has incomplete text_index values")
@@ -245,6 +291,91 @@ class QwenEmbeddingProvider:
     def embed_query(self, query: str) -> list[float]:
         vectors = self._embed_strings([query.strip()], "query")
         return vectors[0] if vectors else []
+
+
+def _required_env_value(env: Mapping[str, str], key: str, provider: str) -> str:
+    value = str(env.get(key, "")).strip()
+    if not value:
+        raise EmbeddingConfigurationError(
+            f"{key} is required when PLATFORM_RAG_EMBED_PROVIDER={provider}"
+        )
+    return value
+
+
+def _positive_env_int(env: Mapping[str, str], key: str, default: int) -> int:
+    raw = str(env.get(key, str(default))).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise EmbeddingConfigurationError(f"{key} must be an integer") from exc
+    if value <= 0:
+        raise EmbeddingConfigurationError(f"{key} must be positive")
+    return value
+
+
+def build_embedding_provider(env: Mapping[str, str] | None = None) -> EmbeddingProvider | None:
+    """Build the optional dense provider selected for the platform RAG runtime.
+
+    ``local`` is intentionally the default and returns ``None``: the existing
+    HybridRetriever then uses deterministic feature hashing without contacting
+    an external service.  ``hash`` remains accepted as the documented legacy
+    spelling.  External modes are explicit and fail closed if their required
+    configuration is absent; they never silently change embedding spaces.
+    """
+
+    selected_env = os.environ if env is None else env
+    provider = str(selected_env.get("PLATFORM_RAG_EMBED_PROVIDER", "local")).strip().lower()
+    if provider in {"", "local", "hash", "none"}:
+        return None
+    if provider == "qwen":
+        model = str(selected_env.get("PLATFORM_RAG_EMBED_MODEL", "qwen3.7-text-embedding")).strip()
+        if not model:
+            raise EmbeddingConfigurationError("PLATFORM_RAG_EMBED_MODEL must not be blank")
+        dimension = _positive_env_int(selected_env, "PLATFORM_RAG_EMBED_DIM", 1024)
+        batch_size = _positive_env_int(selected_env, "PLATFORM_RAG_EMBED_BATCH_SIZE", 20)
+        if dimension != 1024:
+            raise EmbeddingConfigurationError(
+                "PLATFORM_RAG_EMBED_DIM must be 1024 for Qwen text embeddings"
+            )
+        if batch_size > 20:
+            raise EmbeddingConfigurationError(
+                "PLATFORM_RAG_EMBED_BATCH_SIZE must be at most 20 for Qwen text embeddings"
+            )
+        api_key = _required_env_value(selected_env, "DASHSCOPE_API_KEY", provider)
+        base_url = _required_env_value(selected_env, "DASHSCOPE_API_BASE_URL", provider)
+        return QwenEmbeddingProvider(
+            model_name=model,
+            dimension=dimension,
+            batch_size=batch_size,
+            base_url=base_url,
+            api_key=api_key,
+        )
+    if provider == "gemini":
+        model = str(selected_env.get("PLATFORM_RAG_EMBED_MODEL", "gemini-embedding-2")).strip()
+        if not model:
+            raise EmbeddingConfigurationError("PLATFORM_RAG_EMBED_MODEL must not be blank")
+        dimension = _positive_env_int(selected_env, "PLATFORM_RAG_EMBED_DIM", 768)
+        batch_size = _positive_env_int(selected_env, "PLATFORM_RAG_EMBED_BATCH_SIZE", 32)
+        if not 128 <= dimension <= 3072:
+            raise EmbeddingConfigurationError(
+                "PLATFORM_RAG_EMBED_DIM must be between 128 and 3072 for Gemini embeddings"
+            )
+        api_key = str(selected_env.get("GEMINI_API_KEY", "")).strip() or str(
+            selected_env.get("GOOGLE_API_KEY", "")
+        ).strip()
+        if not api_key:
+            raise EmbeddingConfigurationError(
+                "GEMINI_API_KEY (or GOOGLE_API_KEY) is required when PLATFORM_RAG_EMBED_PROVIDER=gemini"
+            )
+        return GeminiEmbeddingProvider(
+            model_name=model,
+            dimension=dimension,
+            batch_size=batch_size,
+            api_key=api_key,
+        )
+    raise EmbeddingConfigurationError(
+        "PLATFORM_RAG_EMBED_PROVIDER must be one of: local, qwen, gemini"
+    )
 
 
 class DenseEmbeddingIndex:
@@ -381,9 +512,18 @@ class DenseEmbeddingIndex:
                     expected = {chunk.chunk_id for chunk in batch}
                     if set(batch_vectors) != expected:
                         raise RuntimeError(
-                            "Gemini embedding response ids mismatch while building dense sidecar"
+                            "embedding response ids mismatch while building dense sidecar"
                         )
-                    vectors.update({str(key): list(value) for key, value in batch_vectors.items()})
+                    vectors.update(
+                        {
+                            str(key): validate_embedding_vector(
+                                value,
+                                self.provider.dimension,
+                                context=f"dense embedding document {key}",
+                            )
+                            for key, value in batch_vectors.items()
+                        }
+                    )
                     self._checkpoint(
                         source_fingerprint=source_fingerprint,
                         chunks=chunks,

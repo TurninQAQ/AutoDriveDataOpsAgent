@@ -47,6 +47,8 @@ def test_v2_distribution_metadata_matches_complete_runtime_packages():
         "httpx>=0.28,<1",
         "pydantic>=2,<3",
         "PyYAML>=6,<7",
+        "requests>=2.31,<3",
+        "google-genai>=1,<4",
     ]
     packages = set(config["tool"]["setuptools"]["packages"])
     for suffix in ("safety", "memory", "verification", "evaluation"):

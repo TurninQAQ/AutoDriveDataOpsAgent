@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .core.settings import PlatformSettings
 from .mcp.facade import PlatformMCPFacade, build_default_facade
+from .rag.embeddings import build_embedding_provider
 from .rag.service import KnowledgeService
 
 
@@ -77,5 +78,13 @@ def build_platform_facade() -> PlatformMCPFacade:
             str(settings.state_dir / "v2_knowledge" / "index.json"),
         )
     )
-    knowledge = KnowledgeService(source_dir=source_dir, index_file=index_file)
+    # The provider factory is construction-only: it selects the optional dense
+    # retrieval implementation from deployment configuration.  It cannot make
+    # semantic decisions or affect Runtime WRITE/approval authority.
+    embedding_provider = build_embedding_provider(platform_env)
+    knowledge = KnowledgeService(
+        source_dir=source_dir,
+        index_file=index_file,
+        embedding_provider=embedding_provider,
+    )
     return build_default_facade(settings=settings, knowledge_service=knowledge)
