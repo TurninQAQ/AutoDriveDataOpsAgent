@@ -181,6 +181,7 @@ The suite includes direct coverage for the architecture examples and historical 
 - Canonical Runtime state rejects unsupported mutable leaves, NaN/Infinity, binary buffers, and non-string mapping keys.
 - Tool catalog tampering, including `verification_reads`, changes effective hash and fails closed.
 - Remote JSON-RPC WRITE errors after dispatch are `OUTCOME_UNKNOWN`, not `FAILED_BEFORE_EFFECT`; replay remains blocked pending reconciliation.
+- The V2 package now contains a localhost-only HTTP JSON-RPC stdio bridge at `127.0.0.1:8765/mcp`. It delegates to the configured canonical MCP launcher, performs only transport-shape normalization, and never authorizes WRITE or captures a replacement precondition.
 - Provider HTTP/network exhaustion is typed as bounded `ProviderTransportFailure`; malformed bodies are typed `ProviderResponseInvalid`.
 - Root packaging is canonical; the nested conflicting `pyproject.toml` was removed.
 
@@ -301,7 +302,8 @@ V2_LOCAL_REGRESSION_222_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
-HOSTED_CI_RUN_11_PASS
+PLATFORM_HTTP_GATEWAY_LOCAL_READ_PASS
+HOSTED_CI_RUN_12_PASS
 HOSTED_CONTAINER_RUNTIME_SMOKE_PASS
 DOCKER_LOCAL_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
 REAL_PROVIDER_SMOKE_PENDING
@@ -314,7 +316,8 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Area | Result | Evidence |
 |---|---|---|
 | Real Qwen/DashScope provider | PENDING | No non-empty `DASHSCOPE_API_KEY` was configured; no real request was sent |
-| Real AutoDrive platform | PENDING | No external endpoint was configured; default localhost port had no gateway |
+| Platform HTTP bridge | PASS | V2-owned stdio-to-HTTP bridge at `127.0.0.1:8765/mcp`; `/health`, gateway tests, and V2 adapter READ calls for GPU/knowledge/queue passed |
+| Real AutoDrive platform | PENDING | No external endpoint or generated task target is configured; task-specific READ validation and external sandbox validation remain pending |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
 | Local platform sandbox | PASS | 4 collected fake JSON-RPC cases, including approval, one mutation, verification, and uncertain outcome |
 | Docker hosted build/runtime | PASS | Hosted run #12 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |

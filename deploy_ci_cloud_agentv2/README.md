@@ -52,6 +52,19 @@ autodrive-agent reject --thread-id task-A --approval-request-id ... --transactio
 autodrive-agent reconcile --thread-id task-A
 ```
 
+When the platform is available through its canonical stdio MCP launcher, start
+the V2 transport bridge with:
+
+```bash
+export AUTODRIVE_STDIO_MCP_COMMAND=mcp-server
+python -m deploy_ci_cloud_agentv2.platform.http_gateway
+```
+
+It binds to `127.0.0.1:8765` and serves the V2-compatible `POST /mcp`
+JSON-RPC `tools/call` endpoint plus non-mutating `GET /health`. The bridge is
+transport-only; approval, mutation claims, verification, and completion remain
+in V2 Runtime.
+
 The CLI delegates only to `invoke()`, `resume()`, and `reconcile()`; it has no
 direct WRITE-tool bypass. `health` is liveness only. `ready` checks local
 configuration, sealed catalog/hash, and SQLite writability without contacting

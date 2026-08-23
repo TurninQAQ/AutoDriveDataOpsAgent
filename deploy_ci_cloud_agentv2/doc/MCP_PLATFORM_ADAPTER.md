@@ -22,12 +22,29 @@ The local integration suite uses a fake JSON-RPC server to prove READ, approval
 pause, rejected WRITE with zero mutation, approved WRITE exactly once, and
 post-write verification.
 
+The V2 package also provides a localhost-only HTTP bridge at
+`127.0.0.1:8765/mcp`. Its implementation is
+`deploy_ci_cloud_agentv2/platform/http_gateway.py`; it starts the configured
+canonical stdio MCP command (`AUTODRIVE_STDIO_MCP_COMMAND`, default
+`mcp-server`) and forwards only the ten V2 tool names. It does not copy
+platform business logic or introduce semantic routing or a second
+approval/completion authority. `GET /health` is a non-mutating liveness
+endpoint.
+
+The bridge normalizes only transport-shape differences: an unscoped V2 queue
+read (`task_name: null`) becomes the existing stdio tool's empty-string form,
+and GPU observation explicitly disables the legacy stale-reservation cleanup
+flag. It never captures a precondition, authorizes a WRITE, or fabricates a
+WRITE argument.
+
 ## External smoke status
 
-The current environment has no configured `AUTODRIVE_PLATFORM_ENDPOINT` beyond
-the default local placeholder and no AutoDrive gateway listening there. No
-external platform request or production WRITE was attempted. The external
-platform result is **PENDING**. The local sandbox suite independently proves
+The local V2 bridge was validated on `127.0.0.1:8765/mcp` through the
+production V2 adapter and the existing runtime stdio MCP server for the
+available global READ surfaces. No configured external AutoDrive endpoint or
+task target is present, so task-specific READs return bounded backend errors
+and no external platform request or production WRITE was attempted. The
+external platform result is **PENDING**. The local sandbox suite independently proves
 the implemented five READ tools, approval-before-WRITE, exactly-one sandbox
 mutation, post-write verification, connection-drop handling, and
 `OUTCOME_UNKNOWN` for uncertain remote WRITE outcomes.
