@@ -1,54 +1,41 @@
-# AutoDriveDataOpsAgent V2 — Phase A/B
+# AutoDriveDataOpsAgent V2
 
-This directory is a self-contained V2 package for the first explicit READ-only
-Agent loop. It has no runtime dependency on `deploy_ci_cloud_agent`.
+AutoDriveDataOpsAgent V2 is a deterministic Runtime around a single semantic
+Agent. READ tools are autonomous within Runtime guards. WRITE operations are
+human-approved, transaction-bound, revalidated, claimed once, verified, and
+recoverable through SQLite-backed audit state.
 
-The host enters through:
-
-```python
-from deploy_ci_cloud_agentv2 import build_system_context, invoke
-
-result = await invoke(
-    "task_A 现在什么状态？",
-    thread_id="thread-1",
-    system_context=build_system_context(),
-)
-```
-
-The visible LangGraph is:
-
-```text
-START -> agent -> read_executor -> agent
-agent -> response_completion_gate -> agent / END
-runtime terminal -> END
-```
-
-The default provider and `InMemoryReadFacade` are offline-safe fixtures. A host
-can inject its own V2-local `AgentProvider` and `ReadFacade` without importing
-V1 modules. Phase B contains no WRITE execution, HITL interrupt, AUTO path, or
-autonomy policy.
-
-READ transport success is kept separate from qualified evidence. Entity-bound
-tools compare requested and observed identity; missing or conflicting identity,
-placeholder state, empty knowledge, and empty diagnosis fail closed. The
-completion gate also requires a `FinalCandidate` to reference every declared
-goal. Invalid READ proposals become bounded guard observations and return to
-the Agent. Runtime READ retries are side-effect-free and bounded per tool call.
-
-The Runtime boundary is explicit: raw external payloads are normalized into
-typed results for the five READ tools, then scope/identity provenance is
-validated before evidence qualification. Canonical evidence remains complete;
-the Agent receives only a bounded metadata projection that preserves current
-contract-relevant evidence. `None` is the only global queue scope value;
-whitespace identifiers and malformed result envelopes are rejected. Known
-response fields use strict `ABSENT` / `PRESENT_VALID` / `PRESENT_INVALID`
-semantics, so wrong types cannot be reinterpreted as missing data. Audit events
-are appended before their corresponding state projection is committed; an
-append failure returns the last durable state without fabricating completion.
-
-Run the local tests from the repository root:
+The repository root is the canonical packaging source:
 
 ```bash
-PYTHONPATH=. \
-  .venv/bin/pytest -q deploy_ci_cloud_agentv2/tests
+python -m pip install '.[test]'
+autodrive-agent health
+autodrive-agent ready
 ```
+
+The implementation and tests live under `deploy_ci_cloud_agentv2`. The root
+package installs that exact tree; there is no second conflicting package
+definition.
+
+## Validation status
+
+The architecture and local correctness suites use scripted providers and fake
+platform transports. They do not call a paid model or production platform.
+Real LangGraph 1.2.11 tests run only when that package is installed; in a
+shim-only environment those tests are skipped and reported as skipped.
+
+The structured HTTP provider and the custom AutoDrive JSON-RPC platform
+gateway are implemented, but real external provider/platform smoke tests and
+production deployment remain explicit operational steps. First WRITE testing
+must use a sandbox.
+
+Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`
+or provide a strict JSON config; the default is
+`/home/ubuntu/project/autodrive_dataops_runtimev2`.
+
+See:
+
+- `deploy_ci_cloud_agentv2/doc/PRODUCTION_RUNTIME.md`
+- `deploy_ci_cloud_agentv2/doc/REAL_PROVIDER_INTEGRATION.md`
+- `deploy_ci_cloud_agentv2/doc/MCP_PLATFORM_ADAPTER.md`
+- `deploy_ci_cloud_agentv2/doc/DEPLOYMENT.md`

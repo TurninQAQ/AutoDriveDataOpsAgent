@@ -28,7 +28,7 @@ from ..agent.goals import (
 from ..agent.immutable import FrozenMapping
 from ..config import ProviderConfig
 from .errors import ProviderResponseInvalid, ProviderTransportFailure
-from .model import AgentProvider
+from .model import AgentProvider, ProviderUnavailable
 from .telemetry import ProviderTelemetryEvent, TelemetrySink
 
 
@@ -107,7 +107,9 @@ class HTTPStructuredProvider(AgentProvider):
                     return proposal
                 except ProviderResponseInvalid:
                     raise
-                except ProviderTransportFailure:
+                except ProviderTransportFailure as exc:
+                    if not exc.retryable:
+                        raise
                     if retries >= self.config.max_retries:
                         raise
                     retries += 1

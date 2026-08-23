@@ -49,6 +49,7 @@ from ..safety.approval import (
 )
 from ..safety.locks import (
     ExecutionClaimAlreadyExists, ExecutionClaimStore, MutationAttemptAlreadyConsumed,
+    active_mutations,
 )
 from ..safety.write_guard import WriteAdmissionOutcome, WriteGuard
 from ..safety.write_transaction import MutationOutcome, WriteTransactionStatus
@@ -951,7 +952,12 @@ def build_graph(
         attempt_id: str | None = None
         consumer = getattr(dependencies.claim_store, "consume_attempt_with_event", None)
         if callable(consumer):
+            active_token: tuple[str, str] | None = None
             try:
+                # Register before the atomic durable MutationStarted boundary
+                # so another in-process resume cannot mistake this live owner
+                # for a crashed worker during the tiny commit window.
+                active_mutations.begin(transaction.transaction_id, "pending")
                 attempt_id, started_event = consumer(
                     dependencies.event_store,
                     transaction.execution_claim,
@@ -965,21 +971,35 @@ def build_graph(
             except MutationAttemptAlreadyConsumed:
                 # Another worker already crossed the unique mutation-start
                 # boundary. This stale worker must not add a competing event.
+                active_mutations.end(transaction.transaction_id, "pending")
                 raise
+            except BaseException:
+                active_mutations.end(transaction.transaction_id, "pending")
+                raise
+            active_mutations.end(transaction.transaction_id, "pending")
+            active_mutations.begin(transaction.transaction_id, attempt_id)
+            active_token = (transaction.transaction_id, attempt_id)
             started_tx = transaction.transition(
                 WriteTransactionStatus.EXECUTING,
                 execution_attempt_id=attempt_id,
             )
             started_current = replace(current, write_transaction=started_tx)
             last_event_id = started_event.event_id
-            _persist_projection_after_atomic_event(
-                dependencies, state, started_current, last_event_id
-            )
+            try:
+                _persist_projection_after_atomic_event(
+                    dependencies, state, started_current, last_event_id
+                )
+            except BaseException:
+                active_mutations.end(*active_token)
+                raise
             transaction = started_tx
             current = started_current
-            mutation = await dependencies.write_runtime.execute_started_once(
-                transaction, transaction.execution_claim, attempt_id
-            )
+            try:
+                mutation = await dependencies.write_runtime.execute_started_once(
+                    transaction, transaction.execution_claim, attempt_id
+                )
+            finally:
+                active_mutations.end(*active_token)
         else:
             async def on_started(new_attempt_id: str):
                 nonlocal last_event_id, started_tx
@@ -1002,9 +1022,13 @@ def build_graph(
                     event_id=f"evt_mutation_started_{new_attempt_id}",
                 )
                 last_event_id = event.event_id
-            attempt_id, mutation = await dependencies.write_runtime.execute_once(
-                transaction, transaction.execution_claim, on_started=on_started
-            )
+            active_mutations.begin(transaction.transaction_id, "pending")
+            try:
+                attempt_id, mutation = await dependencies.write_runtime.execute_once(
+                    transaction, transaction.execution_claim, on_started=on_started
+                )
+            finally:
+                active_mutations.end(transaction.transaction_id, "pending")
         if mutation.outcome is MutationOutcome.CONFIRMED_SUCCESS:
             status = WriteTransactionStatus.EXECUTED
         elif mutation.outcome is MutationOutcome.OUTCOME_UNKNOWN:

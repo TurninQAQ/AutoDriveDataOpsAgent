@@ -18,7 +18,7 @@ import httpx
 
 from ..config import PlatformConfig
 from ..tools.runtime import ReadFailure
-from ..tools.write_runtime import MutationFailedBeforeEffect, MutationOutcomeUnknown
+from ..tools.write_runtime import MutationOutcomeUnknown
 from .errors import MCPPlatformError
 
 
@@ -101,9 +101,12 @@ class MCPPlatformFacade:
                 continue
             if status >= 400:
                 if is_write:
-                    if status in _READ_RETRYABLE_STATUS:
-                        raise MutationOutcomeUnknown(f"platform write response uncertain: HTTP {status}")
-                    raise MutationFailedBeforeEffect(f"platform rejected write: HTTP {status}")
+                    # The HTTP gateway does not provide a non-dispatch proof.
+                    # Even a 4xx may be emitted after the handler has started
+                    # or after a downstream side effect, so it is uncertain.
+                    raise MutationOutcomeUnknown(
+                        f"platform write response uncertain: HTTP {status}"
+                    )
                 raise ReadFailure(f"PLATFORM_HTTP_{status}", f"platform returned HTTP {status}", retryable=status in _READ_RETRYABLE_STATUS)
             try:
                 payload = response.json()
@@ -118,7 +121,14 @@ class MCPPlatformFacade:
             if payload.get("error") is not None:
                 message = _safe_error_message(payload["error"])
                 if is_write:
-                    raise MutationFailedBeforeEffect(message)
+                    # A JSON-RPC error proves only that the response was an
+                    # error.  It does not prove that the remote WRITE
+                    # handler did not run: a handler may mutate first and
+                    # fail while constructing its response.  Only a local
+                    # pre-dispatch rejection may be classified as
+                    # FAILED_BEFORE_EFFECT; this adapter has no such proof
+                    # for a remote tool error.
+                    raise MutationOutcomeUnknown(message)
                 raise ReadFailure("PLATFORM_TOOL_ERROR", message, retryable=False)
             if "result" not in payload:
                 if is_write:

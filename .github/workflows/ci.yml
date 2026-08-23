@@ -16,13 +16,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install pinned runtime and test dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -e './deploy_ci_cloud_agentv2[test]'
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[test]'
+      - name: Assert real LangGraph package
+        run: |
+          python -c 'import importlib.metadata, langgraph; assert importlib.metadata.version("langgraph") == "1.2.11"; assert not getattr(langgraph, "__v2_test_compat__", False); print(langgraph.__path__)'
       - name: Run V2 tests on real LangGraph
         run: PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q deploy_ci_cloud_agentv2/tests
+      - name: Run marked real LangGraph tests
+        run: PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -m real_langgraph -q deploy_ci_cloud_agentv2/tests
       - name: Compile
         run: python -m compileall -q deploy_ci_cloud_agentv2
       - name: Build wheel
-        run: python -m pip wheel ./deploy_ci_cloud_agentv2 --no-deps --no-build-isolation --wheel-dir /tmp/autodrive-wheel
+        run: python -m pip wheel . --no-deps --no-build-isolation --wheel-dir /tmp/autodrive-wheel
       - name: Wheel import smoke
         run: |
           python -m venv /tmp/autodrive-wheel-venv

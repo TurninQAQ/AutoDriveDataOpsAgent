@@ -18,6 +18,40 @@ class MutationAttemptAlreadyConsumed(RuntimeError):
     pass
 
 
+class ActiveMutationRegistry:
+    """Process-local liveness registry for the single-host SQLite runtime.
+
+    Durable ``MutationStarted`` proves that an attempt crossed the mutation
+    boundary, but absence of a result does not prove that its worker died.
+    This registry distinguishes a live in-process owner from a restarted
+    process, without pretending to provide distributed coordination.  A new
+    process has an empty registry and therefore conservatively reconciles the
+    durable uncertain attempt.
+    """
+
+    def __init__(self) -> None:
+        self._active: set[tuple[str, str]] = set()
+        self._lock = threading.Lock()
+
+    def begin(self, transaction_id: str, attempt_id: str) -> None:
+        with self._lock:
+            key = (transaction_id, attempt_id)
+            if key in self._active:
+                raise RuntimeError("mutation attempt is already active in this process")
+            self._active.add(key)
+
+    def end(self, transaction_id: str, attempt_id: str) -> None:
+        with self._lock:
+            self._active.discard((transaction_id, attempt_id))
+
+    def is_active(self, transaction_id: str, attempt_id: str) -> bool:
+        with self._lock:
+            return (transaction_id, attempt_id) in self._active
+
+
+active_mutations = ActiveMutationRegistry()
+
+
 @dataclass(frozen=True)
 class ExecutionClaim:
     claim_id: str

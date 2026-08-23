@@ -4,7 +4,8 @@ from pathlib import Path
 import tomllib
 
 
-ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+ROOT = REPOSITORY_ROOT / "deploy_ci_cloud_agentv2"
 
 
 def _production_python():
@@ -38,10 +39,11 @@ def test_v2_production_has_no_v1_runtime_import_or_second_semantic_authority():
 
 
 def test_v2_distribution_metadata_matches_complete_runtime_packages():
-    with (ROOT / "pyproject.toml").open("rb") as fh:
+    with (REPOSITORY_ROOT / "pyproject.toml").open("rb") as fh:
         config = tomllib.load(fh)
     assert config["project"]["version"] == "2.0.0"
     assert config["project"]["dependencies"] == ["langgraph==1.2.11", "httpx>=0.28,<1"]
     packages = set(config["tool"]["setuptools"]["packages"])
     for suffix in ("safety", "memory", "verification", "evaluation"):
         assert f"deploy_ci_cloud_agentv2.{suffix}" in packages
+    assert not (ROOT / "pyproject.toml").exists()

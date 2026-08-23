@@ -31,7 +31,8 @@ if result.status == "INTERRUPTED":
 
 The concrete production assembly is in `host.py`: a strict environment/JSON
 `RuntimeConfig`, `QwenProvider` over an OpenAI-compatible endpoint, and the
-JSON-RPC/MCP `MCPPlatformFacade`. Runtime state defaults to
+custom AutoDrive JSON-RPC `MCPPlatformFacade` (not a standards-compliant MCP
+transport claim). Runtime state defaults to
 `/home/ubuntu/project/autodrive_dataops_runtimev2`, outside the source tree.
 
 The minimal operator boundary is the `autodrive-agent` CLI:

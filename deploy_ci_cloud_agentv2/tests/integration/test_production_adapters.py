@@ -5,12 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 import httpx
+import pytest
 
-from deploy_ci_cloud_agentv2 import build_system_context, invoke, resume
+from deploy_ci_cloud_agentv2 import build_system_context, invoke, reconcile, resume
 from deploy_ci_cloud_agentv2.agent.budgets import RuntimeBudgets
 from deploy_ci_cloud_agentv2.config import PlatformConfig, ProviderConfig
 from deploy_ci_cloud_agentv2.platform import InMemoryReadFacade, MCPPlatformFacade
 from deploy_ci_cloud_agentv2.providers.http_structured import HTTPStructuredProvider
+from deploy_ci_cloud_agentv2.providers import ScriptedProvider
+from deploy_ci_cloud_agentv2.providers.errors import ProviderResponseInvalid, ProviderTransportFailure
+from deploy_ci_cloud_agentv2.agent.decisions import SingleToolCall, ToolCall
+from deploy_ci_cloud_agentv2.agent.goals import GoalDescriptor, ResumeTask
+from deploy_ci_cloud_agentv2.safety.approval import ApprovalDecision, ResumeInput
+from deploy_ci_cloud_agentv2.tools.write_runtime import MutationOutcomeUnknown
 
 
 def _provider_config(**overrides):
@@ -31,6 +38,29 @@ def _response(content: object, status_code: int = 200) -> httpx.Response:
         status_code,
         json={"choices": [{"message": {"content": json.dumps(content)}}]},
         request=httpx.Request("POST", "https://provider.test/v1/chat/completions"),
+    )
+
+
+def _minimal_provider_context():
+    from deploy_ci_cloud_agentv2.agent.context import (
+        AgentContext, OperatingGuidanceContext, RuntimeStructuredContext,
+        SemanticObservationContext,
+    )
+    from deploy_ci_cloud_agentv2.agent.budgets import BudgetState
+    from deploy_ci_cloud_agentv2.agent.evidence import EvidenceProjection
+    from deploy_ci_cloud_agentv2.agent.identity import RequestIdentity
+    from deploy_ci_cloud_agentv2.agent.state import ThreadHistory
+
+    rid = RequestIdentity("thread", "request", "turn")
+    return AgentContext(
+        user_input="x", messages=(),
+        runtime_structured=RuntimeStructuredContext(
+            rid, None, None, (), EvidenceProjection((), 0, 0, 0),
+            BudgetState(RuntimeBudgets()), None, (), True,
+        ),
+        operating_guidance=OperatingGuidanceContext("v", "h", ()),
+        semantic_observations=SemanticObservationContext(()),
+        thread_history=(), new_turn=True,
     )
 
 
@@ -66,6 +96,10 @@ def test_structured_provider_drives_real_graph_with_local_http_transport(monkeyp
     assert result.status == "COMPLETED"
     assert len(calls) == 2
     assert "UNTRUSTED_EXTERNAL_DATA" in calls[0]["messages"][0]["content"]
+    runtime = json.dumps(calls[0])
+    assert "available_tools" in runtime
+    assert "get_task_detail" in runtime
+    assert "allowed_goal_types" in runtime
     assert "test-only-key" not in json.dumps(calls)
 
 
@@ -133,6 +167,69 @@ def test_provider_http_429_is_bounded_retry(monkeypatch):
     result = asyncio.run(provider.generate(context))
     assert result.response == "x"
     assert calls == 2
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503])
+def test_provider_retryable_http_failure_is_bounded_and_typed(monkeypatch, status_code):
+    monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status_code, content=b"temporary", request=request)
+
+    provider = HTTPStructuredProvider(
+        _provider_config(max_retries=2), transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(ProviderTransportFailure):
+        asyncio.run(provider.generate(_minimal_provider_context()))
+    assert calls == 3
+
+
+@pytest.mark.parametrize("failure", [
+    httpx.ConnectError("connection refused"),
+    httpx.ReadTimeout("read timeout"),
+])
+def test_provider_network_failure_exhaustion_never_leaks_transport_exception(monkeypatch, failure):
+    monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise type(failure)(str(failure), request=request)
+
+    provider = HTTPStructuredProvider(
+        _provider_config(max_retries=1), transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(ProviderTransportFailure):
+        asyncio.run(provider.generate(_minimal_provider_context()))
+    assert calls == 2
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(200, content=b"", request=httpx.Request("POST", "https://provider.test")),
+    httpx.Response(200, content=b"{partial", request=httpx.Request("POST", "https://provider.test")),
+])
+def test_provider_malformed_body_is_typed_response_rejection(monkeypatch, response):
+    monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return response
+
+    provider = HTTPStructuredProvider(
+        _provider_config(max_retries=0), transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(ProviderResponseInvalid):
+        asyncio.run(provider.generate(_minimal_provider_context()))
+
+
+def test_provider_missing_secret_is_typed_unavailable(monkeypatch):
+    monkeypatch.delenv("AUTODRIVE_TEST_PROVIDER_KEY", raising=False)
+    provider = HTTPStructuredProvider(_provider_config(max_retries=0))
+    with pytest.raises(ProviderTransportFailure):
+        asyncio.run(provider.generate(_minimal_provider_context()))
 
 
 def test_mcp_facade_maps_jsonrpc_and_preserves_runtime_contract_boundary():
@@ -216,3 +313,95 @@ def test_mcp_sandbox_write_requires_approval_and_executes_once(monkeypatch):
     assert second.status == "COMPLETED"
     assert mutation_count == 1
     assert provider_calls == 2
+
+
+def test_mcp_remote_jsonrpc_error_after_effect_is_unknown_and_never_replayed():
+    """A remote tool error is not proof that the mutation did not happen."""
+    descriptor = GoalDescriptor(1, (ResumeTask("g1", "task_A"),))
+    provider = ScriptedProvider(
+        [SingleToolCall(ToolCall("write-1", "resume_task", {"task_name": "task_A"}), descriptor)],
+        repeat_last=True,
+    )
+    task_state = "STOPPED"
+    mutation_count = 0
+
+    def platform_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal task_state, mutation_count
+        payload = json.loads(request.content)
+        name = payload["params"]["name"]
+        if name == "get_task_detail":
+            result = {"task_name": "task_A", "state": task_state, "exists": True, "entity_version": "1"}
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result}, request=request)
+        if name == "resume_task":
+            mutation_count += 1
+            task_state = "RUNNING"
+            return httpx.Response(
+                200,
+                json={"jsonrpc": "2.0", "id": payload["id"], "error": {"code": "RESPONSE_BUILD_FAILED"}},
+                request=request,
+            )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {}}, request=request)
+
+    facade = MCPPlatformFacade(
+        PlatformConfig(endpoint="https://platform.test/mcp", max_retries=0),
+        transport=httpx.MockTransport(platform_handler),
+    )
+    context = build_system_context(provider, read_facade=facade)
+    first = asyncio.run(invoke("resume task_A", thread_id="mcp-unknown-after-effect", system_context=context))
+    pending = first.pending_interrupt
+    second = asyncio.run(
+        resume(
+            thread_id="mcp-unknown-after-effect",
+            resume_input=ResumeInput(
+                ApprovalDecision.APPROVE,
+                pending.approval_request_id,
+                pending.transaction_id,
+                pending.fingerprint,
+            ),
+            system_context=context,
+        )
+    )
+    assert second.status == "CONTROLLED_TERMINAL"
+    assert second.state["current_request"].write_transaction.mutation_result.outcome.value == "OUTCOME_UNKNOWN"
+    assert second.state["current_request"].write_transaction.status.value == "RECONCILIATION_REQUIRED"
+    assert mutation_count == 1
+    assert any(event.event_type == "WriteReplayBlocked" for event in context.event_store.all())
+
+    reconciled = asyncio.run(reconcile(thread_id="mcp-unknown-after-effect", system_context=context))
+    assert reconciled.effect_confirmed is True
+    assert reconciled.replay_allowed is False
+    assert mutation_count == 1
+
+    # Reusing the original approval/transaction cannot cross the mutation
+    # boundary again after reconciliation.
+    with pytest.raises(ValueError):
+        asyncio.run(
+            resume(
+                thread_id="mcp-unknown-after-effect",
+                resume_input=ResumeInput(
+                    ApprovalDecision.APPROVE,
+                    pending.approval_request_id,
+                    pending.transaction_id,
+                    pending.fingerprint,
+                ),
+                system_context=context,
+            )
+        )
+    assert mutation_count == 1
+
+
+def test_mcp_connection_drop_after_write_dispatch_is_unknown():
+    mutation_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal mutation_count
+        mutation_count += 1
+        raise httpx.ReadError("connection reset after dispatch", request=request)
+
+    facade = MCPPlatformFacade(
+        PlatformConfig(endpoint="https://platform.test/mcp", max_retries=2, retry_backoff_seconds=0),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(MutationOutcomeUnknown):
+        facade.resume_task("task_A")
+    assert mutation_count == 1

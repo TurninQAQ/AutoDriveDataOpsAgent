@@ -8,7 +8,21 @@ from pathlib import Path
 import pytest
 
 
-pytestmark = pytest.mark.real_langgraph
+try:
+    import langgraph as _langgraph
+except ModuleNotFoundError:  # pragma: no cover - conftest normally provides shim
+    _langgraph = None
+
+_REAL_LANGGRAPH = _langgraph is not None and not getattr(
+    _langgraph, "__v2_test_compat__", False
+)
+pytestmark = [
+    pytest.mark.real_langgraph,
+    pytest.mark.skipif(
+        not _REAL_LANGGRAPH,
+        reason="real LangGraph is unavailable; compatibility shim is active",
+    ),
+]
 
 
 def test_real_langgraph_1_2_11_is_loaded_from_site_packages() -> None:

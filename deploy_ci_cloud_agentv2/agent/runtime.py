@@ -10,6 +10,7 @@ from typing import Any
 
 from .budgets import RuntimeBudgets
 from .context import ContextBuilder
+from .capabilities import build_capability_projection
 from .contracts import CompletionContractCompiler
 from .events import EventProvenance, EventStore
 from .evidence import EvidenceKind, EvidenceTracker
@@ -26,6 +27,7 @@ from ..safety.approval import (
 )
 from ..safety.locks import (
     ExecutionClaimAlreadyExists, ExecutionClaimStore, MutationAttemptAlreadyConsumed,
+    active_mutations,
 )
 from ..safety.policy import WriteAdmissionPolicy
 from ..safety.write_guard import WriteGuard
@@ -272,13 +274,16 @@ def _dependencies(
         )
         action_verifier = ActionVerifier(system_context.read_facade, system_context.tool_registry)
         operational_goal_verifier = OperationalGoalVerifier(system_context.read_facade, system_context.tool_registry)
+    selected_context_builder = system_context.context_builder or ContextBuilder(
+        capability_projection=build_capability_projection(system_context.tool_registry)
+    )
     return GraphDependencies(
         provider=system_context.provider,
         read_runtime=read_runtime,
         compiler=CompletionContractCompiler(),
         evidence_tracker=EvidenceTracker(),
         completion_gate=ResponseCompletionGate(),
-        context_builder=system_context.context_builder or ContextBuilder(),
+        context_builder=selected_context_builder,
         event_store=system_context.event_store,
         model_version=getattr(system_context.provider, "model_version", "unknown"),
         prompt_version=getattr(system_context.provider, "prompt_version", "unknown"),
@@ -453,6 +458,16 @@ def _promote_inflight_mutation_to_reconciliation(
         and transaction.status is WriteTransactionStatus.EXECUTING
         and transaction.execution_attempt_id is not None
         and transaction.mutation_result is None
+    ):
+        return state
+
+    # A second resume in this process may observe the durable MutationStarted
+    # while the winning worker is still inside the external handler.  That is
+    # live in-flight work, not evidence of a crashed process.  A fresh process
+    # has no registry entry and therefore follows the conservative restart
+    # reconciliation path below.
+    if active_mutations.is_active(
+        transaction.transaction_id, transaction.execution_attempt_id
     ):
         return state
 
@@ -695,6 +710,18 @@ async def _continue_checkpointed_run(
     system_context: SystemContext,
 ) -> AgentRunResult:
     current = state["current_request"]
+    transaction = current.write_transaction
+    if (
+        transaction is not None
+        and transaction.execution_attempt_id is not None
+        and active_mutations.is_active(
+            transaction.transaction_id, transaction.execution_attempt_id
+        )
+    ):
+        # A live owner is still executing the already-started mutation.  Do
+        # not route a concurrent worker into recovery or emit a false crash
+        # terminal; the durable owner remains authoritative.
+        raise ValueError("mutation is currently in flight in another worker")
     provenance = _event_provenance(system_context, current.operating_principles_snapshot)
     latest_state = LatestStateHolder()
     latest_state.record(state)
@@ -929,6 +956,13 @@ async def resume(
         resume_input = ResumeInput(**resume_input)
     if transaction is None:
         raise ValueError("thread is not suspended for approval")
+    if (
+        transaction.execution_attempt_id is not None
+        and active_mutations.is_active(
+            transaction.transaction_id, transaction.execution_attempt_id
+        )
+    ):
+        raise ValueError("mutation is currently in flight in another worker")
     if transaction.status is WriteTransactionStatus.RECONCILIATION_REQUIRED:
         terminal = current.terminal_state or ControlledTerminalOutcome(
             code=TerminalCode.REQUIRES_RECONCILIATION,

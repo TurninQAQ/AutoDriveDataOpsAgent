@@ -70,6 +70,8 @@ class PersistenceConfig:
     def __post_init__(self) -> None:
         if type(self.single_instance) is not bool:
             raise ConfigurationError("persistence.single_instance must be a boolean")
+        if not self.runtime_root.is_absolute():
+            raise ConfigurationError("persistence.runtime_root must be absolute")
         if not self.sqlite_path.is_absolute():
             raise ConfigurationError("persistence.sqlite_path must be absolute")
 
@@ -131,7 +133,7 @@ class RuntimeConfig:
         budget_values = _section(file_values, "budgets")
         _strict_keys(provider_values, {field.name for field in fields(ProviderConfig)}, "provider")
         _strict_keys(platform_values, {field.name for field in fields(PlatformConfig)}, "platform")
-        _strict_keys(persistence_values, {field.name for field in fields(PersistenceConfig)} - {"runtime_root", "sqlite_path"}, "persistence")
+        _strict_keys(persistence_values, {field.name for field in fields(PersistenceConfig)}, "persistence")
         _strict_keys(logging_values, {field.name for field in fields(LoggingConfig)}, "logging")
         _strict_keys(budget_values, {field.name for field in fields(RuntimeBudgets)}, "budgets")
 
@@ -155,17 +157,21 @@ class RuntimeConfig:
             max_retries=_int_env(env, "AUTODRIVE_PLATFORM_MAX_RETRIES", platform_values, "max_retries", 2),
             retry_backoff_seconds=_float_env(env, "AUTODRIVE_PLATFORM_RETRY_BACKOFF", platform_values, "retry_backoff_seconds", 0.1),
         )
-        sqlite_path = Path(
-            _env_or(
-                env,
-                "AUTODRIVE_SQLITE_PATH",
-                persistence_values,
-                "sqlite_path",
-                str(root / "state" / "autodrive.sqlite3"),
-            )
-        ).expanduser().resolve()
+        sqlite_raw = _env_or(
+            env,
+            "AUTODRIVE_SQLITE_PATH",
+            persistence_values,
+            "sqlite_path",
+            str(root / "state" / "autodrive.sqlite3"),
+        )
+        runtime_root_raw = _env_or(
+            env, "AUTODRIVE_RUNTIME_ROOT", persistence_values, "runtime_root", str(root)
+        )
+        _non_empty_path(sqlite_raw, "persistence.sqlite_path")
+        _non_empty_path(runtime_root_raw, "persistence.runtime_root")
+        sqlite_path = Path(sqlite_raw).expanduser().resolve()
         persistence = PersistenceConfig(
-            runtime_root=Path(_env_or(env, "AUTODRIVE_RUNTIME_ROOT", persistence_values, "runtime_root", str(root))).resolve(),
+            runtime_root=Path(runtime_root_raw).expanduser().resolve(),
             sqlite_path=sqlite_path,
             single_instance=_bool_env(env, "AUTODRIVE_SINGLE_INSTANCE", persistence_values, "single_instance", True),
         )
@@ -290,6 +296,11 @@ def _bool_env(env: Mapping[str, str], env_name: str, values: Mapping[str, Any], 
 def _non_empty(value: object, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(f"{name} must be non-empty")
+
+
+def _non_empty_path(value: object, name: str) -> None:
+    if not isinstance(value, (str, Path)) or not str(value).strip():
+        raise ConfigurationError(f"{name} must be a non-empty path")
 
 
 def _positive(value: object, name: str) -> None:

@@ -163,8 +163,20 @@ except ModuleNotFoundError:  # pragma: no cover - the local review path
     pkg.types = types_mod
     pkg.checkpoint = checkpoint
     checkpoint.memory = checkpoint_memory
-    sys.modules.setdefault("langgraph", pkg)
-    sys.modules.setdefault("langgraph.graph", graph)
-    sys.modules.setdefault("langgraph.types", types_mod)
-    sys.modules.setdefault("langgraph.checkpoint", checkpoint)
-    sys.modules.setdefault("langgraph.checkpoint.memory", checkpoint_memory)
+    # A partially imported namespace package can remain in sys.modules when
+    # an environment has an incomplete/broken LangGraph installation.  Do
+    # not let that foreign object survive as a half-shim: the fallback must be
+    # internally coherent and explicitly marked test-only.
+    for module_name in (
+        "langgraph.checkpoint.memory",
+        "langgraph.checkpoint",
+        "langgraph.types",
+        "langgraph.graph",
+        "langgraph",
+    ):
+        sys.modules.pop(module_name, None)
+    sys.modules["langgraph"] = pkg
+    sys.modules["langgraph.graph"] = graph
+    sys.modules["langgraph.types"] = types_mod
+    sys.modules["langgraph.checkpoint"] = checkpoint
+    sys.modules["langgraph.checkpoint.memory"] = checkpoint_memory

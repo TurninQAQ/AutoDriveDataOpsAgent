@@ -14,8 +14,9 @@ Runtime state is outside the source tree:
 
 The `autodrive-agent` CLI delegates to `invoke`, `resume`, and `reconcile`.
 `health` is liveness only. `ready` validates configuration, the sealed tool
-catalog/hash, configured endpoints, and SQLite writability without a platform
-WRITE.
+catalog/hash, configured endpoints, presence of the referenced provider
+secret, and SQLite writability without a platform WRITE. It reports only
+secret presence and never returns or logs the secret itself.
 
 The default persistence model is one active process and one local SQLite WAL
 database. Active-active replicas, NFS state, and multiple writers are not

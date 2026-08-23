@@ -5,9 +5,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AUTODRIVE_RUNTIME_ROOT=/var/lib/autodrive-dataops
 
 WORKDIR /opt/autodrive
+COPY pyproject.toml README.md ./
 COPY deploy_ci_cloud_agentv2 ./deploy_ci_cloud_agentv2
 
-RUN python -m pip install --no-cache-dir ./deploy_ci_cloud_agentv2 \
+RUN python -m pip install --no-cache-dir . \
     && mkdir -p /var/lib/autodrive-dataops/config /var/lib/autodrive-dataops/data \
        /var/lib/autodrive-dataops/state /var/lib/autodrive-dataops/logs \
        /var/lib/autodrive-dataops/run /var/lib/autodrive-dataops/secrets \

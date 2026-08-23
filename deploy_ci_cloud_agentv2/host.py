@@ -8,6 +8,7 @@ directly and never makes a semantic decision.
 from __future__ import annotations
 
 import sqlite3
+import os
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,9 @@ def readiness(config: RuntimeConfig | None = None) -> dict[str, Any]:
         "tool_catalog_sealed": context.tool_registry.is_sealed,
         "tool_catalog_hash_stable": catalog_hash == context.tool_catalog_hash,
         "provider_configured": bool(selected.provider.endpoint and selected.provider.model and selected.provider.api_key_env),
+        "provider_secret_present": bool(
+            os.environ.get(selected.provider.api_key_env, "").strip()
+        ),
         "platform_configured": bool(selected.platform.endpoint),
         "sqlite_writable": writable,
         "runtime_version": context.runtime_version,

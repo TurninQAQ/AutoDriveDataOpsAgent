@@ -1,4 +1,7 @@
 import asyncio
+import threading
+
+import pytest
 
 from deploy_ci_cloud_agentv2 import build_system_context, invoke, resume
 from deploy_ci_cloud_agentv2.agent.decisions import FinalCandidate, SingleToolCall, ToolCall
@@ -419,6 +422,55 @@ def test_concurrent_resume_has_one_durable_approval_identity_and_one_claim(tmp_p
     assert len({e.payload["approval_id"] for e in grants}) == 1
     assert len(claims) == 1
     assert len(starts) == 1
+    assert facade.mutation_count == 1
+
+
+def test_live_inflight_worker_is_not_mistaken_for_crashed_mutation(tmp_path):
+    db = tmp_path / "live-inflight.sqlite3"
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingFacade(InMemoryPlatformFacade):
+        def resume_task(self, task_name: str):
+            started.set()
+            if not release.wait(timeout=10):
+                raise RuntimeError("test mutation was not released")
+            return super().resume_task(task_name)
+
+    descriptor = GoalDescriptor(1, (ResumeTask("g1", "task_A"),))
+    facade = BlockingFacade(tasks={"task_A": {"state": "STOPPED", "revision": 1}})
+    initial = build_system_context(
+        ScriptedProvider([SingleToolCall(ToolCall("w", "resume_task", {"task_name": "task_A"}), descriptor)]),
+        read_facade=facade,
+        durable_path=db,
+    )
+    paused = asyncio.run(invoke("resume", thread_id="live-inflight", system_context=initial))
+    approval = _approval_input(paused.pending_interrupt)
+    worker_a = build_system_context(
+        ScriptedProvider([FinalCandidate("done", referenced_goal_ids=("g1",))], repeat_last=True),
+        read_facade=facade,
+        durable_path=db,
+    )
+    worker_b = build_system_context(
+        ScriptedProvider([FinalCandidate("should-not-run", referenced_goal_ids=("g1",))], repeat_last=True),
+        read_facade=facade,
+        durable_path=db,
+    )
+
+    async def exercise():
+        winner = asyncio.create_task(
+            resume(thread_id="live-inflight", resume_input=approval, system_context=worker_a)
+        )
+        assert await asyncio.to_thread(started.wait, 5)
+        with pytest.raises(ValueError, match="in flight"):
+            await resume(
+                thread_id="live-inflight", resume_input=approval, system_context=worker_b
+            )
+        release.set()
+        return await winner
+
+    result = asyncio.run(exercise())
+    assert result.status == "COMPLETED"
     assert facade.mutation_count == 1
 
 

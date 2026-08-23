@@ -64,6 +64,7 @@ MutationStarted
 
 - `agent/graph.py`: one visible canonical LangGraph; READ, WRITE, approval, verification, gate, and Runtime terminal routes.
 - `agent/runtime.py`: `SystemContext`, `invoke()`, `resume()`, durable recovery, `reconcile()`, checkpoint/event-tail validation.
+- `agent/capabilities.py`: deterministic provider-facing capability projection generated from the sealed ToolCatalog.
 - `agent/decision_ingress.py`: total deterministic validation of untrusted provider decisions before Compiler/Gate/executor.
 - `agent/context.py`: bounded Agent-facing projection, with approval/claim capability internals excluded.
 - `agent/gate.py`: deterministic final completion authority.
@@ -93,6 +94,7 @@ MutationStarted
 - Ordinary durable graph events commit event + checkpoint projection atomically.
 - Recovery handles event-ahead checkpoint windows for durable capability transitions and fails closed on unsupported divergence.
 - A durable `MutationStarted` without a durable result is promoted to reconciliation and is never replayed.
+- A live in-process mutation owner is tracked separately from restart recovery; a concurrent resume cannot be mistaken for a crashed mutation.
 
 ### Evaluation
 
@@ -172,23 +174,32 @@ The suite includes direct coverage for the architecture examples and historical 
 - Duplicate event id is idempotent only for semantically identical content.
 - Canonical Runtime state rejects unsupported mutable leaves, NaN/Infinity, binary buffers, and non-string mapping keys.
 - Tool catalog tampering, including `verification_reads`, changes effective hash and fails closed.
+- Remote JSON-RPC WRITE errors after dispatch are `OUTCOME_UNKNOWN`, not `FAILED_BEFORE_EFFECT`; replay remains blocked pending reconciliation.
+- Provider HTTP/network exhaustion is typed as bounded `ProviderTransportFailure`; malformed bodies are typed `ProviderResponseInvalid`.
+- Root packaging is canonical; the nested conflicting `pyproject.toml` was removed.
 
 ## 6. Validation results
 
-At report generation:
+At this closure report generation:
 
 ```text
 real runtime venv pytest -q deploy_ci_cloud_agentv2/tests
-203 passed
+217 passed
 
-root offline/shim pytest -q deploy_ci_cloud_agentv2/tests
-203 passed
+forced shim marker isolation (missing-LangGraph import):
+2 skipped, 215 deselected
+
+forced shim full suite:
+215 passed, 2 skipped
+
+ordinary environment pytest -q deploy_ci_cloud_agentv2/tests
+217 passed
 
 real runtime venv python -m compileall -q deploy_ci_cloud_agentv2
 PASS
 
 arbitrary temporary-path copy:
-203 passed
+217 passed
 compileall PASS
 
 wheel build (root build environment, no build isolation):
@@ -199,14 +210,14 @@ isolated wheel install/import:
 PASS; package 2.0.0, LangGraph 1.2.11 supplied by runtime environment
 
 real LangGraph marker/runtime checks:
-2 passed
+2 passed, 215 deselected
 
 production adapter integration:
-5 passed; local fake HTTP Provider and fake MCP sandbox, including approved
-WRITE exactly once and no mutation before approval
+15 passed; local fake HTTP Provider and fake JSON-RPC gateway, including
+typed provider failure exhaustion and WRITE error-after-effect reconciliation
 
 production host/configuration unit tests:
-3 passed
+6 passed
 
 CLI health/readiness:
 PASS
@@ -240,9 +251,10 @@ Correctness tests make zero real external LLM/API calls.
 
 ## 7. Environment limitations
 
-The repository root `.venv` does not contain LangGraph and therefore uses the
-explicit test-only shim. The production runtime venv does contain the real
-package and the full 203-test run was executed there. The Docker daemon could
+The real runtime venv and current root test environment contain the pinned
+LangGraph package. A forced import-blocker run verified that marked real tests
+are skipped (`2 skipped`) when the compatibility shim is active; they are not
+reported as real-runtime passes in that mode. The Docker daemon could
 not pull `python:3.12-slim` because registry access timed out; Docker image
 build is therefore not claimed as PASS in this environment. No live paid model
 endpoint or production MCP endpoint was called; provider/platform smoke uses
@@ -255,10 +267,13 @@ A normal installed deployment must install the declared dependency from `pyproje
 ```text
 V2_ARCHITECTURE_IMPLEMENTATION_COMPLETE
 V2_DOD_43_OF_43_IMPLEMENTED
-V2_LOCAL_REGRESSION_203_PASS
+V2_LOCAL_REGRESSION_217_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
 CI_CONFIGURATION_ADDED
 DOCKER_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
+REAL_PROVIDER_SMOKE_PENDING
+REAL_PLATFORM_CONNECTION_PENDING
+SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 ```

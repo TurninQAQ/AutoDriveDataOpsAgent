@@ -13,6 +13,7 @@ from .identity import RequestIdentity
 from .outcomes import ControlledTerminalOutcome, GoalOutcome
 from .principles import OperatingPrinciplesSnapshot
 from .state import CurrentRequestContext, ThreadHistory
+from .immutable import FrozenMapping
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class RuntimeStructuredContext:
     gate_feedback: tuple[str, ...]
     new_turn: bool
     write_transaction: object | None = None
+    capabilities: FrozenMapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,7 @@ class ContextBuilder:
         max_message_chars: int = 4_096,
         max_history_requests: int = 8,
         evidence_projection: EvidenceProjectionBuilder | None = None,
+        capability_projection: FrozenMapping[str, object] | None = None,
     ):
         self.max_guidance_chars = max_guidance_chars
         self.max_observations = max_observations
@@ -100,6 +103,7 @@ class ContextBuilder:
         self.max_message_chars = max_message_chars
         self.max_history_requests = max_history_requests
         self.evidence_projection = evidence_projection or EvidenceProjectionBuilder()
+        self.capability_projection = capability_projection
 
     def build(self, current: CurrentRequestContext, history: ThreadHistory) -> AgentContext:
         max_context_chars = int(current.budgets.limits.max_context_tokens) * 4
@@ -124,6 +128,7 @@ class ContextBuilder:
             "terminal_state": current.terminal_state,
             "gate_feedback": bounded_gate_feedback,
             "write_transaction": current.write_transaction.agent_projection() if current.write_transaction is not None else None,
+            "capabilities": self.capability_projection,
         }
         structured_cost = len(repr(critical_structured))
         if structured_cost >= max_context_chars:
@@ -175,6 +180,7 @@ class ContextBuilder:
             gate_feedback=bounded_gate_feedback,
             new_turn=current.new_turn,
             write_transaction=current.write_transaction.agent_projection() if current.write_transaction is not None else None,
+            capabilities=self.capability_projection,
         )
         guidance_context = OperatingGuidanceContext(
             version=current.operating_principles_snapshot.version,
