@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
@@ -37,6 +37,8 @@ class EvidenceKind(str, Enum):
     QUEUE_STATE = "QUEUE_STATE"
     KNOWLEDGE = "KNOWLEDGE"
     DIAGNOSTIC_CONTEXT = "DIAGNOSTIC_CONTEXT"
+    ACTION_VERIFIED = "ACTION_VERIFIED"
+    OPERATIONAL_GOAL_VERIFIED = "OPERATIONAL_GOAL_VERIFIED"
 
 
 class TransportStatus(str, Enum):
@@ -54,6 +56,8 @@ class ObservationDisposition(str, Enum):
     TRANSPORT_FAILURE = "TRANSPORT_FAILURE"
     READ_GUARD_REJECTED = "READ_GUARD_REJECTED"
     AGENT_DECISION_REJECTED = "AGENT_DECISION_REJECTED"
+    WRITE_GUARD_REJECTED = "WRITE_GUARD_REJECTED"
+    WRITE_RESOLUTION = "WRITE_RESOLUTION"
 
 
 class EvidenceValidity(str, Enum):
@@ -229,6 +233,72 @@ class EvidenceTracker:
                 records.append(record)
                 created.append(record)
         return EvidenceState(owner=owner, records=tuple(records)), tuple(created)
+
+    def invalidate_entities(
+        self, state: EvidenceState, entities: tuple[str, ...] | list[str]
+    ) -> tuple[EvidenceState, tuple[str, ...]]:
+        targets = set(entities)
+        invalidated: list[str] = []
+        records: list[EvidenceRecord] = []
+        mutable_kinds = {
+            EvidenceKind.LIVE_TASK, EvidenceKind.QUEUE_STATE, EvidenceKind.DIAGNOSTIC_CONTEXT,
+            EvidenceKind.ACTION_VERIFIED, EvidenceKind.OPERATIONAL_GOAL_VERIFIED,
+        }
+        for record in state.records:
+            if (
+                record.target in targets
+                and record.kind in mutable_kinds
+                and record.freshness.validity is EvidenceValidity.CURRENT
+            ):
+                invalidated.append(record.evidence_id)
+                records.append(replace(
+                    record,
+                    freshness=replace(record.freshness, validity=EvidenceValidity.INVALIDATED),
+                ))
+            else:
+                records.append(record)
+        return EvidenceState(owner=state.owner, records=tuple(records)), tuple(invalidated)
+
+    def record_verification(
+        self,
+        state: EvidenceState,
+        *,
+        kind: EvidenceKind,
+        target: str,
+        source: str,
+        observation_id: str,
+        owner: RequestIdentity,
+        entity_version: str | None = None,
+    ) -> tuple[EvidenceState, EvidenceRecord]:
+        if kind not in {EvidenceKind.ACTION_VERIFIED, EvidenceKind.OPERATIONAL_GOAL_VERIFIED}:
+            raise ValueError("record_verification requires a verification EvidenceKind")
+        if state.owner != owner:
+            raise ValueError("verification evidence owner mismatch")
+        now = datetime.now(timezone.utc)
+        provenance = ObservationProvenance(
+            source_tool=source,
+            arguments_fingerprint="",
+            requested_scope=ObservationScope(ScopeKind.TASK, target),
+            observed_scope=ObservationScope(ScopeKind.TASK, target),
+            requested_identity=target,
+            observed_identity=target,
+            identity_status=IdentityStatus.MATCHED,
+            scope_status=ScopeStatus.MATCHED,
+        )
+        record = EvidenceRecord(
+            evidence_id=f"ev_{observation_id}",
+            kind=kind,
+            target=target,
+            observation_id=observation_id,
+            owner=owner,
+            provenance=provenance,
+            freshness=EvidenceFreshness(
+                observed_at=now,
+                expires_at=self.freshness_policy.expiration(now),
+            ),
+            entity_version=entity_version,
+        )
+        return EvidenceState(owner=owner, records=state.records + (record,)), record
 
     def refresh_goal_outcomes(
         self,

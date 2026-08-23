@@ -40,6 +40,9 @@ class CurrentRequestContext:
     gate_passed: bool | None
     new_turn: bool
     continue_after_read_guard: bool
+    write_transaction: Any | None = None
+    pending_interrupt: Any | None = None
+    resume_input: Any | None = None
 
     def __post_init__(self) -> None:
         if self.evidence.owner != self.identity:
@@ -159,6 +162,9 @@ def new_state(
         gate_passed=None,
         new_turn=True,
         continue_after_read_guard=False,
+        write_transaction=None,
+        pending_interrupt=None,
+        resume_input=None,
     )
     return AgentState(
         thread_id=thread_id,

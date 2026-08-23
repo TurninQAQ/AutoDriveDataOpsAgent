@@ -11,7 +11,7 @@ from .model import ProviderUnavailable
 
 class ScriptedProvider:
     model_version = "fake-scripted-v2"
-    prompt_version = "phase-b-test-prompt-v1"
+    prompt_version = "v2-scripted-test-prompt"
 
     def __init__(self, decisions: Iterable[AgentDecision], *, repeat_last: bool = False):
         self.decisions = list(decisions)

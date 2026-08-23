@@ -52,8 +52,23 @@ class AcceptedToolCall:
 
 
 @dataclass(frozen=True)
+class AcceptedWriteCall:
+    """Runtime-owned normalized WRITE proposal; not an execution capability."""
+    call_id: str
+    tool_name: str
+    arguments: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if isinstance(self.arguments, Mapping):
+            try:
+                object.__setattr__(self, "arguments", canonical_snapshot(self.arguments))
+            except CanonicalizationError:
+                pass
+
+
+@dataclass(frozen=True)
 class SingleToolCall:
-    call: ToolCall
+    call: ToolCall | AcceptedToolCall | AcceptedWriteCall
     proposed_goal_descriptor: GoalDescriptor | None = None
     kind: str = "SINGLE_TOOL_CALL"
 

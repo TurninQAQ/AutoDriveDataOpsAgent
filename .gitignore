@@ -1,7 +1,14 @@
 .venv/
 __pycache__/
 *.py[cod]
-*.egg-info/
-build/
-dist/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+deploy_ci_cloud_agentv2/build/
+*.sqlite3
+*.db
+.env
+secrets/
+/dist/
+/build/

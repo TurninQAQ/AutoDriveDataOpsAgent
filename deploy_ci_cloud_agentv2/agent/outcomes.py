@@ -25,6 +25,7 @@ class GoalOutcome:
     status: GoalStatus = GoalStatus.PENDING
     reason_code: str | None = None
     evidence_refs: tuple[str, ...] = ()
+    write_transaction_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
@@ -37,6 +38,7 @@ class TerminalCode(str, Enum):
     PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
     UNRECOVERABLE_RUNTIME_ERROR = "UNRECOVERABLE_RUNTIME_ERROR"
     CHECKPOINT_CORRUPTION = "CHECKPOINT_CORRUPTION"
+    REQUIRES_RECONCILIATION = "REQUIRES_RECONCILIATION"
 
 
 @dataclass(frozen=True)

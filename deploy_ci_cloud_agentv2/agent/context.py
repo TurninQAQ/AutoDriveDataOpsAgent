@@ -37,6 +37,7 @@ class RuntimeStructuredContext:
     terminal_state: ControlledTerminalOutcome | None
     gate_feedback: tuple[str, ...]
     new_turn: bool
+    write_transaction: object | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class ContextBuilder:
             "budgets": current.budgets,
             "terminal_state": current.terminal_state,
             "gate_feedback": bounded_gate_feedback,
+            "write_transaction": current.write_transaction.agent_projection() if current.write_transaction is not None else None,
         }
         structured_cost = len(repr(critical_structured))
         if structured_cost >= max_context_chars:
@@ -172,6 +174,7 @@ class ContextBuilder:
             terminal_state=current.terminal_state,
             gate_feedback=bounded_gate_feedback,
             new_turn=current.new_turn,
+            write_transaction=current.write_transaction.agent_projection() if current.write_transaction is not None else None,
         )
         guidance_context = OperatingGuidanceContext(
             version=current.operating_principles_snapshot.version,

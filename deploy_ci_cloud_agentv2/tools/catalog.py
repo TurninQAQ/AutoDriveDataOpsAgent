@@ -1,4 +1,4 @@
-"""Phase B READ tool catalog and injected facade handlers."""
+"""Deterministic V2.0 READ/WRITE tool catalog and injected facade handlers."""
 
 from __future__ import annotations
 
@@ -87,5 +87,50 @@ def build_read_registry(facade: ReadFacade) -> ToolRegistry:
         ),
         facade.diagnose_task,
     )
+    registry.seal()
+    return registry
+
+
+def build_full_registry(facade) -> ToolRegistry:
+    """Build the complete V2 READ+WRITE catalog; every WRITE still requires approval."""
+    registry = ToolRegistry()
+    # Re-register the five READ tools locally to keep one sealed catalog hash.
+    read = build_read_registry(facade)
+    for spec in read.catalog():
+        registry.register(spec, read.handler(spec.name))
+    write_specs = (
+        ToolSpec(
+            name="resume_task", kind=ToolKind.WRITE, risk=RiskLevel.MEDIUM,
+            schema={"type":"object","properties":{"task_name":{"type":"string"}},"required":["task_name"]},
+            requires_precondition=True, verification="ACTION_AND_GOAL", verification_reads=("get_task_detail",),
+            idempotency=Idempotency.RECONCILE_BEFORE_RETRY,
+        ),
+        ToolSpec(
+            name="submit_task", kind=ToolKind.WRITE, risk=RiskLevel.HIGH,
+            schema={"type":"object","properties":{"task_name":{"type":"string"},"config":{"type":"object"}},"required":["task_name"]},
+            requires_precondition=True, verification="ACTION_AND_GOAL", verification_reads=("get_task_detail",),
+            idempotency=Idempotency.RECONCILE_BEFORE_RETRY,
+        ),
+        ToolSpec(
+            name="stop_task", kind=ToolKind.WRITE, risk=RiskLevel.HIGH,
+            schema={"type":"object","properties":{"task_name":{"type":"string"}},"required":["task_name"]},
+            requires_precondition=True, verification="ACTION_AND_GOAL", verification_reads=("get_task_detail",),
+            idempotency=Idempotency.RECONCILE_BEFORE_RETRY,
+        ),
+        ToolSpec(
+            name="delete_task", kind=ToolKind.WRITE, risk=RiskLevel.HIGH,
+            schema={"type":"object","properties":{"task_name":{"type":"string"}},"required":["task_name"]},
+            requires_precondition=True, verification="ACTION", verification_reads=("get_task_detail",),
+            idempotency=Idempotency.NO_RETRY,
+        ),
+        ToolSpec(
+            name="set_task_priority", kind=ToolKind.WRITE, risk=RiskLevel.HIGH,
+            schema={"type":"object","properties":{"task_name":{"type":"string"},"priority":{"type":"integer"}},"required":["task_name","priority"]},
+            requires_precondition=True, verification="ACTION_AND_GOAL", verification_reads=("get_task_detail",),
+            idempotency=Idempotency.RECONCILE_BEFORE_RETRY,
+        ),
+    )
+    for spec in write_specs:
+        registry.register(spec, getattr(facade, spec.name))
     registry.seal()
     return registry

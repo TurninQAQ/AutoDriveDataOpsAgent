@@ -1,4 +1,4 @@
-"""Provider boundary.  Real network providers are deliberately not required in Phase B."""
+"""Provider boundary. Real network providers are optional and never used by correctness tests."""
 
 from __future__ import annotations
 

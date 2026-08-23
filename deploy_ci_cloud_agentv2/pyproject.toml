@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autodrive-dataops-agent-v2"
-version = "0.2.0"
-description = "Self-contained AutoDriveDataOpsAgent V2 read-only explicit Agent loop"
+version = "2.0.0"
+description = "AutoDriveDataOpsAgent V2.0: autonomous READs with deterministic human-approved WRITEs"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph==1.2.11",
+    "httpx>=0.28,<1",
 ]
 
 [project.optional-dependencies]
@@ -16,6 +17,10 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["real_langgraph: tests requiring the installed LangGraph 1.2.11 runtime"]
+
+[project.scripts]
+autodrive-agent = "deploy_ci_cloud_agentv2.cli:main"
 
 [tool.setuptools]
 packages = [
@@ -24,6 +29,10 @@ packages = [
     "deploy_ci_cloud_agentv2.platform",
     "deploy_ci_cloud_agentv2.providers",
     "deploy_ci_cloud_agentv2.tools",
+    "deploy_ci_cloud_agentv2.safety",
+    "deploy_ci_cloud_agentv2.memory",
+    "deploy_ci_cloud_agentv2.verification",
+    "deploy_ci_cloud_agentv2.evaluation",
 ]
 package-dir = {"deploy_ci_cloud_agentv2" = "."}
 

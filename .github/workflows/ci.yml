@@ -1,0 +1,43 @@
+name: autodrive-v2-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned runtime and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e './deploy_ci_cloud_agentv2[test]'
+      - name: Run V2 tests on real LangGraph
+        run: PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q deploy_ci_cloud_agentv2/tests
+      - name: Compile
+        run: python -m compileall -q deploy_ci_cloud_agentv2
+      - name: Build wheel
+        run: python -m pip wheel ./deploy_ci_cloud_agentv2 --no-deps --no-build-isolation --wheel-dir /tmp/autodrive-wheel
+      - name: Wheel import smoke
+        run: |
+          python -m venv /tmp/autodrive-wheel-venv
+          /tmp/autodrive-wheel-venv/bin/python -m pip install --no-index --no-deps /tmp/autodrive-wheel/*.whl
+          /tmp/autodrive-wheel-venv/bin/python -c 'import deploy_ci_cloud_agentv2; print(deploy_ci_cloud_agentv2.__version__)'
+      - name: Static architecture audit
+        run: |
+          ! rg -n -P 'from deploy_ci_cloud_agent(?!v2)|import deploy_ci_cloud_agent(?!v2)' deploy_ci_cloud_agentv2 --glob '*.py'
+          ! rg -n 'class (Planner|Router|Supervisor)|AUTO_WRITE|autonomous mutation budget' deploy_ci_cloud_agentv2 --glob '*.py'
+          ! rg -n -P 'sk-[A-Za-z0-9]{20,}' deploy_ci_cloud_agentv2 --glob '*.py'
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build production container
+        run: docker build --tag autodrive-dataops-agent-v2:ci .

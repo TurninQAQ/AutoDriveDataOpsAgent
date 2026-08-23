@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -59,6 +60,11 @@ class ToolRegistry:
     def catalog_hash(self) -> str:
         if not self._sealed or self._sealed_hash is None:
             raise RuntimeError("ToolRegistry must be sealed before catalog hashing")
+        # Recompute defensively so even an internal/object.__setattr__ mutation of
+        # a frozen ToolSpec cannot leave Runtime trusting a stale sealed hash.
+        effective_hash = self._compute_catalog_hash()
+        if effective_hash != self._sealed_hash:
+            raise ToolCatalogIntegrityError("sealed ToolRegistry contents changed after seal")
         return self._sealed_hash
 
     def _compute_catalog_hash(self) -> str:
@@ -72,6 +78,7 @@ class ToolRegistry:
                     "parallel_safe": spec.parallel_safe,
                     "requires_precondition": spec.requires_precondition,
                     "verification": spec.verification,
+                    "verification_reads": spec.verification_reads,
                     "idempotency": spec.idempotency.value,
                 }
                 for spec in self.catalog()
@@ -100,7 +107,14 @@ class ToolRegistry:
         if not self._sealed:
             raise RuntimeError("ToolRegistry must be sealed before execution")
         handler = self.handler(call.tool_name)
-        result = handler(**call.arguments)
+        # Sync platform/MCP adapters are isolated from the async graph loop so
+        # parallel READ batches remain genuinely concurrent.  The safety
+        # precondition/verifier paths may still call their sync facade methods
+        # directly; this branch is only the Tool Runtime execution boundary.
+        if inspect.iscoroutinefunction(handler):
+            result = handler(**call.arguments)
+        else:
+            result = await asyncio.to_thread(handler, **call.arguments)
         if inspect.isawaitable(result):
             return await result
         return result
@@ -129,3 +143,5 @@ def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any])
             raise ValueError(f"{name} must be a boolean")
         if expected == "array" and not isinstance(value, (list, tuple)):
             raise ValueError(f"{name} must be an array")
+        if expected == "object" and not isinstance(value, Mapping):
+            raise ValueError(f"{name} must be an object")

@@ -1,4 +1,4 @@
-"""Minimal immutable trace store for Phase B."""
+"""Immutable Runtime audit events for AutoDriveDataOpsAgent V2.0."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class EventProvenance:
     tool_catalog_hash: str
     operating_principles_version: str
     operating_principles_hash: str
-    policy_version: str = "read-only-v2"
+    policy_version: str = "human-approved-write-v2"
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class EventIntegrityError(RuntimeError):
 
 
 class EventStore:
-    """In-memory idempotent append store; suitable for the Phase B test host."""
+    """In-memory idempotent append store for tests and non-durable hosts."""
 
     def __init__(self) -> None:
         self._events: list[Event] = []

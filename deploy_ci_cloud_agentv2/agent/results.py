@@ -1,4 +1,4 @@
-"""Strict deterministic response contracts for the five Phase B READ tools.
+"""Strict deterministic response contracts for the V2 READ tools.
 
 External mappings cross this boundary exactly once.  The parsers below use the
 shared field-contract primitives so a known malformed field can never be
@@ -686,6 +686,20 @@ def normalize_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) -> di
     elif tool_name == "get_gpu_pool":
         if args:
             raise ValueError("get_gpu_pool does not accept arguments")
+    elif tool_name in {"resume_task", "stop_task", "delete_task"}:
+        args["task_name"] = _required_argument(args, "task_name")
+    elif tool_name == "set_task_priority":
+        args["task_name"] = _required_argument(args, "task_name")
+        priority = args.get("priority")
+        if type(priority) is not int or not 0 <= priority <= 100:
+            raise ValueError("priority must be an integer between 0 and 100")
+        args["priority"] = priority
+    elif tool_name == "submit_task":
+        args["task_name"] = _required_argument(args, "task_name")
+        config = args.get("config", {})
+        if not isinstance(config, Mapping):
+            raise ValueError("config must be a mapping")
+        args["config"] = FrozenMapping(config)
     return args
 
 

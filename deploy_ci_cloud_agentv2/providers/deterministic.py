@@ -26,7 +26,7 @@ class DeterministicReadAgent:
     """Offline semantic provider, useful when no real LLM is configured."""
 
     model_version = "deterministic-read-agent-v2"
-    prompt_version = "phase-b-deterministic-v1"
+    prompt_version = "v2-deterministic-read-prompt"
 
     async def generate(self, context: AgentContext):
         prompt = context.user_input.strip()

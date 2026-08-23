@@ -89,3 +89,16 @@ def test_read_timeout_has_bounded_side_effect_free_retry():
     assert result.transport_status.value == "SUCCESS"
     assert result.retry_count == 1
     assert [call[0] for call in facade.calls] == ["get_gpu_pool", "get_gpu_pool"]
+
+
+def test_sealed_catalog_hash_covers_verification_reads_and_fails_closed_on_tamper():
+    from deploy_ci_cloud_agentv2.platform.facade import InMemoryPlatformFacade
+    from deploy_ci_cloud_agentv2.tools.catalog import build_full_registry
+    from deploy_ci_cloud_agentv2.tools.registry import ToolCatalogIntegrityError
+
+    registry = build_full_registry(InMemoryPlatformFacade())
+    spec = registry.spec("resume_task")
+    assert spec.verification_reads == ("get_task_detail",)
+    object.__setattr__(spec, "verification_reads", ("get_queue_state",))
+    with pytest.raises(ToolCatalogIntegrityError, match="changed after seal"):
+        registry.catalog_hash()
