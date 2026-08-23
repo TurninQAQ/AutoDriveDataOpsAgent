@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
     "langgraph==1.2.11",
     "httpx>=0.28,<1",
+    "pydantic>=2,<3",
+    "PyYAML>=6,<7",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +29,18 @@ packages = [
     "deploy_ci_cloud_agentv2",
     "deploy_ci_cloud_agentv2.agent",
     "deploy_ci_cloud_agentv2.platform",
+    "deploy_ci_cloud_agentv2.platform_backend",
+    "deploy_ci_cloud_agentv2.platform_backend.core",
+    "deploy_ci_cloud_agentv2.platform_backend.core.gateways",
+    "deploy_ci_cloud_agentv2.platform_backend.core.services",
+    "deploy_ci_cloud_agentv2.platform_backend.config",
+    "deploy_ci_cloud_agentv2.platform_backend.integrations",
+    "deploy_ci_cloud_agentv2.platform_backend.mcp",
+    "deploy_ci_cloud_agentv2.platform_backend.observability",
+    "deploy_ci_cloud_agentv2.platform_backend.rag",
+    "deploy_ci_cloud_agentv2.platform_backend.scripts",
+    "deploy_ci_cloud_agentv2.platform_backend.dags",
+    "deploy_ci_cloud_agentv2.platform_backend.dags.templates",
     "deploy_ci_cloud_agentv2.providers",
     "deploy_ci_cloud_agentv2.tools",
     "deploy_ci_cloud_agentv2.safety",
@@ -38,3 +52,12 @@ package-dir = {"" = "."}
 
 [tool.setuptools.package-data]
 deploy_ci_cloud_agentv2 = ["doc/*.md"]
+"deploy_ci_cloud_agentv2.platform_backend" = [
+    "knowledge/**/*.md",
+    "knowledge/**/*.yaml",
+    "knowledge/**/*.yml",
+    "knowledge/**/*.txt",
+    "scripts/*.sh",
+    "dags/templates/*",
+    "config/*.yaml",
+]

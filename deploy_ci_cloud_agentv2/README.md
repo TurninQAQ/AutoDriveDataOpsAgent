@@ -60,6 +60,20 @@ export AUTODRIVE_STDIO_MCP_COMMAND=mcp-server
 python -m deploy_ci_cloud_agentv2.platform.http_gateway
 ```
 
+For a single-tree deployment using the platform execution code packaged inside
+V2, use the in-process backend instead:
+
+```bash
+export AUTODRIVE_GATEWAY_BACKEND=in_process
+export AUTODRIVE_RUNTIME_ROOT=/home/ubuntu/project/autodrive_dataops_runtimev2
+python -m deploy_ci_cloud_agentv2.platform.http_gateway
+```
+
+The migrated `platform_backend` contains deterministic platform core/services,
+RAG/knowledge, observability, mutation mechanics, stage scripts, and DAG
+templates. The previous project's semantic Agent/planning/evaluation layers
+are intentionally not imported into V2.
+
 It binds to `127.0.0.1:8765` and serves the V2-compatible `POST /mcp`
 JSON-RPC `tools/call` endpoint plus non-mutating `GET /health`. The bridge is
 transport-only; approval, mutation claims, verification, and completion remain

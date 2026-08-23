@@ -13,9 +13,13 @@ autodrive-agent health
 autodrive-agent ready
 ```
 
-The implementation and tests live under `deploy_ci_cloud_agentv2`. The root
-package installs that exact tree; there is no second conflicting package
-definition.
+The implementation, tests, and the migrated transport-independent platform
+execution layer live under `deploy_ci_cloud_agentv2`. The root package installs
+that exact tree; there is no second conflicting V2 package definition. The
+former `deploy_ci_cloud_agent` tree has been removed from the working tree
+after migrating the required platform execution assets into V2; a separately
+deployed runtime service remains an external process boundary only when stdio
+mode is selected.
 
 ## Validation status
 
@@ -40,6 +44,9 @@ Real AutoDrive platform                  PENDING: endpoint not configured
 Hosted CI (Python 3.11/3.12)             PASS: hosted run #12
 Hosted Docker build/runtime smoke        PASS: hosted run #12
 Local Docker build/run                   BLOCKED: Docker Hub registry timeout
+V2 in-process platform backend           PASS: localhost mock/simulated READ smoke
+Missing task contract                    PASS: deterministic NOT_FOUND/exists=false
+Sandbox task creation/WRITE               PENDING: no approved target yet
 ```
 
 Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`

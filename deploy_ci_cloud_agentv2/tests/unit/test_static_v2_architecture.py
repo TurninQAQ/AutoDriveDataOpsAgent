@@ -42,7 +42,12 @@ def test_v2_distribution_metadata_matches_complete_runtime_packages():
     with (REPOSITORY_ROOT / "pyproject.toml").open("rb") as fh:
         config = tomllib.load(fh)
     assert config["project"]["version"] == "2.0.0"
-    assert config["project"]["dependencies"] == ["langgraph==1.2.11", "httpx>=0.28,<1"]
+    assert config["project"]["dependencies"] == [
+        "langgraph==1.2.11",
+        "httpx>=0.28,<1",
+        "pydantic>=2,<3",
+        "PyYAML>=6,<7",
+    ]
     packages = set(config["tool"]["setuptools"]["packages"])
     for suffix in ("safety", "memory", "verification", "evaluation"):
         assert f"deploy_ci_cloud_agentv2.{suffix}" in packages

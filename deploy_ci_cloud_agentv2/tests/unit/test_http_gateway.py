@@ -5,11 +5,15 @@ import sys
 import threading
 import urllib.request
 
+import pytest
+
 from deploy_ci_cloud_agentv2.platform.http_gateway import (
     GatewayDispatcher,
     StdioMCPClient,
     create_server,
 )
+from deploy_ci_cloud_agentv2.platform_backend.client import InProcessPlatformClient, PlatformBackendError
+from deploy_ci_cloud_agentv2.platform_backend.core.errors import TaskConfigError
 
 
 class FakeClient:
@@ -113,6 +117,50 @@ def test_stdio_client_uses_real_line_delimited_mcp_session():
     )
     client = StdioMCPClient([sys.executable, "-c", script], timeout_seconds=3)
     assert client.call("get_gpu_pool", {}) == {"ok": True, "name": "get_gpu_pool"}
+
+
+def test_stdio_missing_task_error_is_narrowly_normalized_to_not_found():
+    script = (
+        "import json,sys\n"
+        "for line in sys.stdin:\n"
+        " m=json.loads(line)\n"
+        " if m.get('method') == 'initialize':\n"
+        "  print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':{}}),flush=True)\n"
+        " elif m.get('method') == 'tools/call':\n"
+        "  print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':{'structuredContent':{'isError':True,'content':[{'type':'text','text':'Error executing tool get_task_detail: Task config not found: /tmp/x'}]}}}),flush=True)\n"
+    )
+    client = StdioMCPClient([sys.executable, "-c", script], timeout_seconds=3)
+    assert client.call("get_task_detail", {"task_name": "missing_task"}) == {
+        "status": "NOT_FOUND",
+        "task_name": "missing_task",
+        "exists": False,
+    }
+
+
+class _MissingTaskFacade:
+    def get_task_detail(self, task_name):
+        raise TaskConfigError("Task config not found: /tmp/tasks/%s/datasets_config.yaml" % task_name)
+
+
+class _BrokenTaskFacade:
+    def get_task_detail(self, task_name):
+        raise TaskConfigError("Task config root must be a mapping")
+
+
+def test_in_process_backend_maps_only_canonical_missing_task_error():
+    client = InProcessPlatformClient(_MissingTaskFacade())
+    assert client.call("get_task_detail", {"task_name": "missing_task"}) == {
+        "status": "NOT_FOUND",
+        "task_name": "missing_task",
+        "exists": False,
+    }
+
+
+def test_in_process_backend_does_not_promote_generic_task_error_to_not_found():
+    client = InProcessPlatformClient(_BrokenTaskFacade())
+    with pytest.raises(PlatformBackendError) as error:
+        client.call("get_task_detail", {"task_name": "broken_task"})
+    assert error.value.code == "PLATFORM_TOOL_ERROR"
 
 
 def test_http_health_and_json_rpc_endpoint():

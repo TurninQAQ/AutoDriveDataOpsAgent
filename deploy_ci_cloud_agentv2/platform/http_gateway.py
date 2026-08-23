@@ -27,11 +27,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
 
+from ..platform_backend.client import InProcessPlatformClient, PlatformBackendError
+from ..platform_backend.runtime import build_platform_facade
+
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_STDIO_COMMAND = "mcp-server"
 DEFAULT_TIMEOUT_SECONDS = 45.0
+DEFAULT_BACKEND = "stdio"
 MAX_REQUEST_BYTES = 1024 * 1024
 
 V2_TOOL_NAMES = frozenset(
@@ -162,7 +166,8 @@ class StdioMCPClient:
             response = self._read_response(process, call_id)
             if "error" in response:
                 raise GatewayError("PLATFORM_TOOL_ERROR", "platform tool call failed")
-            return _unwrap_mcp_result(response.get("result"))
+            result = _unwrap_mcp_result(response.get("result"))
+            return _normalize_mcp_tool_result(tool_name, arguments, result)
         except GatewayError:
             raise
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
@@ -235,6 +240,44 @@ def _unwrap_mcp_result(result: Any) -> Any:
     return result
 
 
+def _mcp_error_message(result: Mapping[str, Any]) -> str:
+    content = result.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, Mapping) and isinstance(item.get("text"), str):
+                return item["text"]
+    return "platform tool call failed"
+
+
+def _normalize_mcp_tool_result(
+    tool_name: str, arguments: Mapping[str, Any], result: Any
+) -> Any:
+    """Normalize only the canonical missing-task transport error.
+
+    The legacy stdio MCP implementation reports tool exceptions as a normal
+    MCP result with ``isError=true``.  The stable ``Task config not found:``
+    discriminator is the only condition promoted to the V2 NOT_FOUND result.
+    All other tool errors remain bounded platform errors.
+    """
+
+    if not isinstance(result, Mapping) or result.get("isError") is not True:
+        return result
+    message = _mcp_error_message(result)
+    if tool_name in {"get_task_detail", "diagnose_task"} and message.startswith(
+        f"Error executing tool {tool_name}: Task config not found:"
+    ):
+        task_name = arguments.get("task_name")
+        if isinstance(task_name, str) and task_name.strip():
+            payload: dict[str, Any] = {
+                "status": "NOT_FOUND",
+                "task_name": task_name,
+            }
+            if tool_name == "get_task_detail":
+                payload["exists"] = False
+            return payload
+    raise GatewayError("PLATFORM_TOOL_ERROR", "platform tool call failed")
+
+
 def _transport_arguments(tool_name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
     """Adapt only transport-shape differences in the canonical MCP schema.
 
@@ -278,6 +321,8 @@ class GatewayDispatcher:
             return _success(request_id, self.client.call(name, _transport_arguments(name, arguments)))
         except GatewayError as exc:
             return _error(request_id, exc.code, exc.message)
+        except PlatformBackendError as exc:
+            return _error(request_id, exc.code, exc.safe_message)
         except Exception:
             # Do not expose provider/platform stack traces, paths, or secrets.
             return _error(request_id, "PLATFORM_TOOL_ERROR", "platform tool call failed")
@@ -339,11 +384,20 @@ def serve(
     *,
     command: str | Sequence[str] | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    backend: str = DEFAULT_BACKEND,
 ) -> None:
     if host != DEFAULT_HOST and os.environ.get("AUTODRIVE_ALLOW_NONLOCAL_GATEWAY") != "1":
         raise RuntimeError("gateway is localhost-only by default")
-    server = create_server(host, port, StdioMCPClient(command, timeout_seconds=timeout_seconds))
-    print(f"AutoDrive V2 stdio-to-HTTP gateway listening on http://{host}:{port}/mcp", file=sys.stderr)
+    if backend == "stdio":
+        client = StdioMCPClient(command, timeout_seconds=timeout_seconds)
+        description = "stdio-to-HTTP"
+    elif backend == "in_process":
+        client = InProcessPlatformClient(build_platform_facade())
+        description = "in-process platform"
+    else:
+        raise RuntimeError("AUTODRIVE_GATEWAY_BACKEND must be 'stdio' or 'in_process'")
+    server = create_server(host, port, client)
+    print(f"AutoDrive V2 {description} gateway listening on http://{host}:{port}/mcp", file=sys.stderr)
     try:
         server.serve_forever()
     finally:
@@ -359,7 +413,8 @@ def main() -> None:
         raise SystemExit("gateway port and timeout must be numeric") from exc
     if not 1 <= port <= 65535:
         raise SystemExit("AUTODRIVE_GATEWAY_PORT must be between 1 and 65535")
-    serve(host, port, timeout_seconds=timeout)
+    backend = os.environ.get("AUTODRIVE_GATEWAY_BACKEND", DEFAULT_BACKEND).strip().lower()
+    serve(host, port, timeout_seconds=timeout, backend=backend)
 
 
 if __name__ == "__main__":
