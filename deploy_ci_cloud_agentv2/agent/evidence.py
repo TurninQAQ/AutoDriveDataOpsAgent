@@ -28,6 +28,7 @@ from .results import (
     ResultStatus,
     TaskDetailResult,
 )
+from .targeting import target_matches_for_goal
 
 
 class EvidenceKind(str, Enum):
@@ -327,7 +328,7 @@ class EvidenceTracker:
                 if requirement.kind is RequirementKind.TARGET_BINDING:
                     continue
                 matching = self._matching_records(
-                    current, requirement.kind, requirement.target
+                    current, requirement.kind, requirement.target, goal=goal
                 )
                 if not matching:
                     satisfied = False
@@ -404,7 +405,11 @@ class EvidenceTracker:
 
     @staticmethod
     def _matching_records(
-        records: tuple[EvidenceRecord, ...], kind: RequirementKind, target: str
+        records: tuple[EvidenceRecord, ...],
+        kind: RequirementKind,
+        target: str,
+        *,
+        goal: object | None = None,
     ) -> tuple[EvidenceRecord, ...]:
         try:
             evidence_kind = EvidenceKind(kind.value)
@@ -413,7 +418,8 @@ class EvidenceTracker:
         return tuple(
             record
             for record in records
-            if record.kind is evidence_kind and record.target == target
+            if record.kind is evidence_kind
+            and target_matches_for_goal(target, record.target, kind.value, goal)
         )
 
 

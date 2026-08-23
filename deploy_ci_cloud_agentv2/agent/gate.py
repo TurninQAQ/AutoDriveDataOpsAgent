@@ -9,6 +9,7 @@ from .decisions import FinalCandidate
 from .evidence import EvidenceState
 from .goals import GoalDescriptor
 from .outcomes import GoalOutcome, GoalStatus
+from .targeting import target_matches_for_goal
 
 
 @dataclass(frozen=True)
@@ -97,8 +98,11 @@ class ResponseCompletionGate:
                     record
                     for record in current
                     if record.kind == requirement.kind.value
-                    and _target_matches(
-                        requirement.target, record.target, requirement.kind.value
+                    and target_matches_for_goal(
+                        requirement.target,
+                        record.target,
+                        requirement.kind.value,
+                        goal,
                     )
                 ]
                 if matching:

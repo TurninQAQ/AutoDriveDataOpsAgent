@@ -296,8 +296,8 @@ A normal installed deployment must install the declared dependency from `pyproje
 Current bootstrap revalidation on 2026-08-24:
 
 ```text
-V2 suite with real LangGraph environment: 235 passed
-real_langgraph marker: 4 passed, 231 deselected
+V2 suite with real LangGraph environment: 237 passed
+real_langgraph marker: 4 passed, 233 deselected
 compileall: PASS
 wheel 2.0.0: PASS
 gateway health: PASS
@@ -330,7 +330,7 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
 | Real AutoDrive platform | PENDING | The localhost mock/simulated gateway is available and validated; no non-local/authorized AutoDrive endpoint is configured |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
-| Local platform sandbox | PASS with bounded completion note | One disposable mock/no-trigger task was created after explicit V2 approval, verified by `get_task_detail` and `diagnose_task`, and removed through a second V2 approval. The create interaction ended in bounded `BUDGET_EXHAUSTED` because the generated timestamped task identity is not yet folded into the provider-declared prefix target for CompletionGate matching; no extra mutation occurred and no task remained |
+| Local platform sandbox | PASS | One disposable mock/no-trigger task was created after explicit V2 approval, verified by `get_task_detail` and `diagnose_task`, and removed through a second V2 approval. CompletionGate now accepts only the platform's deterministic `prefix_YYYYMMDD_HHMMSS` derived identity; no extra mutation occurred and no task remained |
 | Docker hosted build/runtime | PASS | Hosted run #12 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
 | Hosted CI run | PASS | Hosted run #12 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |

@@ -4,9 +4,9 @@ from deploy_ci_cloud_agentv2.agent.budgets import BudgetState, RuntimeBudgets
 from deploy_ci_cloud_agentv2.agent.context import ContextBuilder
 from deploy_ci_cloud_agentv2.agent.contracts import CompletionContractCompiler
 from deploy_ci_cloud_agentv2.agent.decisions import FinalCandidate, ToolCall
-from deploy_ci_cloud_agentv2.agent.evidence import EvidenceState, EvidenceTracker
+from deploy_ci_cloud_agentv2.agent.evidence import EvidenceKind, EvidenceState, EvidenceTracker
 from deploy_ci_cloud_agentv2.agent.gate import ResponseCompletionGate
-from deploy_ci_cloud_agentv2.agent.goals import ExplainKnowledge, GoalDescriptor, ReadTaskState
+from deploy_ci_cloud_agentv2.agent.goals import ExplainKnowledge, GoalDescriptor, ReadTaskState, SubmitTask
 from deploy_ci_cloud_agentv2.agent.outcomes import GoalOutcome, GoalStatus
 from deploy_ci_cloud_agentv2.agent.principles import load_operating_principles
 from deploy_ci_cloud_agentv2.agent.results import DiagnosticResult, TaskDetailResult
@@ -126,6 +126,67 @@ def test_final_candidate_must_cover_all_goals():
     assert not gate.evaluate(FinalCandidate("one", referenced_goal_ids=("g1",)), descriptor, contract, state, {}).passed
     assert not gate.evaluate(FinalCandidate("unknown", referenced_goal_ids=("g1", "nope")), descriptor, contract, state, {}).passed
     assert not gate.evaluate(FinalCandidate("pending", referenced_goal_ids=("g1", "g2")), descriptor, contract, EvidenceState(owner), {}).passed
+
+
+def test_submit_task_generated_identity_matches_only_its_deterministic_prefix():
+    owner = identity()
+    descriptor = GoalDescriptor(1, (SubmitTask("g1", "autodrive_v2_bootstrap", {}),))
+    contract = CompletionContractCompiler().compile(descriptor)
+    actual = "autodrive_v2_bootstrap_20260824_010203"
+    tracker = EvidenceTracker()
+    evidence, _ = tracker.record_verification(
+        EvidenceState(owner),
+        kind=EvidenceKind.ACTION_VERIFIED,
+        target=actual,
+        source="action_verifier",
+        observation_id="generated-action",
+        owner=owner,
+    )
+    evidence, _ = tracker.record_verification(
+        evidence,
+        kind=EvidenceKind.OPERATIONAL_GOAL_VERIFIED,
+        target=actual,
+        source="operational_goal_verifier",
+        observation_id="generated-goal",
+        owner=owner,
+    )
+    refreshed = tracker.refresh_goal_outcomes(
+        descriptor,
+        contract,
+        evidence,
+        {"g1": GoalOutcome("g1")},
+    )
+    evaluation = ResponseCompletionGate().evaluate(
+        FinalCandidate("created", referenced_goal_ids=("g1",)),
+        descriptor,
+        contract,
+        evidence,
+        refreshed,
+    )
+    assert evaluation.passed
+    assert evaluation.goal_outcomes["g1"].status is GoalStatus.SATISFIED
+
+
+def test_submit_task_does_not_accept_arbitrary_observed_identity():
+    owner = identity()
+    descriptor = GoalDescriptor(1, (SubmitTask("g1", "autodrive_v2_bootstrap", {}),))
+    contract = CompletionContractCompiler().compile(descriptor)
+    evidence, _ = EvidenceTracker().record_verification(
+        EvidenceState(owner),
+        kind=EvidenceKind.ACTION_VERIFIED,
+        target="unrelated_task_20260824_010203",
+        source="action_verifier",
+        observation_id="unrelated-action",
+        owner=owner,
+    )
+    evaluation = ResponseCompletionGate().evaluate(
+        FinalCandidate("created", referenced_goal_ids=("g1",)),
+        descriptor,
+        contract,
+        evidence,
+        {"g1": GoalOutcome("g1")},
+    )
+    assert not evaluation.passed
 
 
 def test_operating_principles_parser_has_clean_p01_to_p18():
