@@ -432,3 +432,13 @@ losing its Top-5 hit. The evidence-based decision is
 `RERANKER_NOT_REQUIRED`; the offline local mode remains the default and Qwen
 is optional. This is external embedding evidence, not Qwen chat-provider or
 non-mock AutoDrive evidence. Production WRITE remained zero.
+
+## 12. Exact chunk evaluator maintenance correction (2026-08-24)
+
+The evaluator's explicit `source#section::chunkN` comparison was corrected to
+normalize both expected and retrieved identities before comparing them. Exact
+chunk labels now require the same source, section, and chunk index. Unqualified
+section labels retain their prior chunk-0 behavior. Focused synthetic tests
+cover matching and wrong index/source/section rejection. The canonical dataset
+hash and all 30-case local/Qwen metrics remained unchanged, so this correction
+does not alter the frozen retrieval evidence.

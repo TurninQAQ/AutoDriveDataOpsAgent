@@ -108,3 +108,9 @@ explicit optional mode.
 
 This validates embedding retrieval only, not the separately configured Qwen
 chat/Agent provider or any external platform WRITE. No reranker was added.
+
+The evaluator now normalizes context identities as `(source/section,
+chunk_index)`: an explicit `source#section::chunkN` label matches only the
+same chunk index, while an unqualified `source#section` label retains its
+existing chunk-0 semantics. The canonical 30-case metrics above were rerun
+and remained unchanged.

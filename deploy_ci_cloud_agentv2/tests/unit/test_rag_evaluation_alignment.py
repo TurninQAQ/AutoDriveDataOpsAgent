@@ -10,6 +10,7 @@ from deploy_ci_cloud_agentv2.platform_backend.rag.evaluation import (
     V1_1_RAG_CASE_COUNT,
     V1_1_RAG_RETRIEVAL_SHA256,
     _case_metrics,
+    _context_matches,
     evaluate_v1_1_retrieval,
     load_v1_1_rag_cases,
 )
@@ -59,6 +60,42 @@ def test_canonical_metric_example_uses_padded_precision_and_ndcg():
     assert metrics["precision"] == 0.2
     assert metrics["context_precision"] == 1.0
     assert metrics["ndcg"] == 1.0
+
+
+def _retrieved_item(*, source: str = "platform/gpu.md", section: str = "Reservation", chunk: int = 0):
+    return SimpleNamespace(
+        source_path=source,
+        section=section,
+        metadata={"chunk_index": chunk},
+    )
+
+
+def test_exact_chunk_context_matches_same_chunk_index():
+    assert _context_matches(
+        "platform/gpu.md#Reservation::chunk3",
+        _retrieved_item(chunk=3),
+    )
+
+
+@pytest.mark.parametrize(
+    "expected,item",
+    [
+        ("platform/gpu.md#Reservation::chunk3", _retrieved_item(chunk=2)),
+        ("platform/other.md#Reservation::chunk3", _retrieved_item(chunk=3)),
+        ("platform/gpu.md#Other::chunk3", _retrieved_item(chunk=3)),
+    ],
+)
+def test_exact_chunk_context_rejects_wrong_index_source_or_section(expected, item):
+    assert not _context_matches(expected, item)
+
+
+def test_source_and_section_context_matching_semantics_remain_unchanged():
+    assert _context_matches("platform/gpu.md#Reservation", _retrieved_item(chunk=0))
+    assert not _context_matches("platform/gpu.md#Reservation", _retrieved_item(chunk=3))
+    assert _context_matches(
+        "platform/gpu.md",
+        _retrieved_item(section="", chunk=0),
+    )
 
 
 def test_local_30_case_baseline_matches_historical_v1_1_alignment(tmp_path):

@@ -127,21 +127,29 @@ def load_v1_1_rag_cases(path: Path, *, source_dir: Path | None = None) -> list[d
     return rows
 
 
-def _retrieved_context_id(item: Any) -> str:
+def _retrieved_context_identity(item: Any) -> tuple[str, int]:
     base = f"{item.source_path}#{item.section}" if item.section else item.source_path
     chunk_index = int(item.metadata.get("chunk_index", 0) or 0)
+    return base, chunk_index
+
+
+def _retrieved_context_id(item: Any) -> str:
+    base, chunk_index = _retrieved_context_identity(item)
     return base if chunk_index == 0 else f"{base}::chunk{chunk_index}"
 
 
 def _context_matches(expected: str, item: Any) -> bool:
-    if "::chunk" not in expected:
-        return expected == _retrieved_context_id(item)
-    base, chunk_text = expected.rsplit("::chunk", 1)
-    try:
-        expected_chunk = int(chunk_text)
-    except ValueError:
-        return False
-    return base == _retrieved_context_id(item) and item.metadata.get("chunk_index") == expected_chunk
+    if "::chunk" in expected:
+        expected_base, chunk_text = expected.rsplit("::chunk", 1)
+        try:
+            expected_chunk = int(chunk_text)
+        except ValueError:
+            return False
+    else:
+        expected_base = expected
+        expected_chunk = 0
+    actual_base, actual_chunk = _retrieved_context_identity(item)
+    return expected_base == actual_base and expected_chunk == actual_chunk
 
 
 def _case_metrics(ranked: list[Any], expected: list[str], top_k: int) -> dict[str, Any]:
