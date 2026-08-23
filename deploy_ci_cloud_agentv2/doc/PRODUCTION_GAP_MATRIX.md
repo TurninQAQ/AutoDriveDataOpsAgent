@@ -13,7 +13,7 @@ The complete 43-item V2 requirement mapping is maintained in
 | Agent authority | One visible Agent loop; Runtime validates decisions | None in the authority model | Real LangGraph graph tests |
 | LangGraph | Real `StateGraph`/`interrupt()` source; offline tests had a compatibility harness | Real `langgraph==1.2.11` checkpointer serialization and interrupt/resume needed validation | Pinned runtime environment; marked real-runtime tests pass |
 | Provider | Deterministic and scripted offline providers | Structured HTTP/Qwen adapter, timeout, retry, rate-limit handling, auth isolation, telemetry | Local fake HTTP provider tests and malformed/429 coverage pass |
-| Platform | In-memory READ/WRITE facades | V2-owned platform execution layer plus custom JSON-RPC-over-HTTP transport | V2 in-process platform backend is packaged under `platform_backend`; localhost READ smoke, task-state normalization, missing-task normalization, and approval-bound precondition forwarding pass; one mock no-trigger disposable task was created and removed through V2 approval; production WRITE remains 0 |
+| Platform | In-memory READ/WRITE facades | V2-owned platform execution layer plus custom JSON-RPC-over-HTTP transport | V2 in-process platform backend is packaged under `platform_backend`; localhost 5/5 READ, task-state/priority normalization, missing-task normalization, approval-bound precondition forwarding, rejected WRITE, approved reversible WRITE, approval replay, TOCTOU, uncertain response/reconciliation, and approved cleanup pass in mock/simulated sandbox; production WRITE remains 0 |
 | Platform HTTP bridge | stdio canonical MCP implementation | Localhost-only V2 `tools/call` HTTP transport | `/health`, stdio/in-process gateway tests, V2 adapter READ smoke, and narrow NOT_FOUND mapping pass |
 | Result boundary | Typed result normalization, provenance, evidence qualification | Adapter must preserve raw result boundary and transport semantics | MCP mutation/identity/error tests |
 | Persistence | SQLite event/checkpoint/claim/approval durability exists | Runtime-root layout and host bootstrap | SQLite path/readiness tests |
@@ -26,10 +26,16 @@ The complete 43-item V2 requirement mapping is maintained in
 The V2 package includes a localhost-only HTTP bridge at `127.0.0.1:8765/mcp`.
 It can either start the configured canonical stdio MCP command or use the
 V2-owned in-process platform backend (`AUTODRIVE_GATEWAY_BACKEND=in_process`).
-The current in-process validation includes one mock no-trigger disposable task
-created and removed through the normal V2 approval path; it does not make the
-stdio MCP server public and it performed no production mutation. The migrated backend excludes the old
-project's semantic Agent/planning/evaluation packages.
+The current in-process validation uses a mock/no-trigger disposable task through
+the normal V2 approval path. It proves five transport reads, rejected WRITE
+with zero attempts, one approved priority change, no approval replay, stale
+transaction rejection, and a mock-only post-dispatch response-drop fault that
+enters `OUTCOME_UNKNOWN` and is reconciled with READ-only verification. The
+task is restored and removed through fresh approved transactions; no production
+mutation is performed. The response-drop hook is disabled by default and is
+honored only when `PLATFORM_STAGE_RUNTIME=mock`. The bridge does not make the
+stdio MCP server public, and the migrated backend excludes the old project's
+semantic Agent/planning/evaluation packages.
 
 ## Non-goals retained
 

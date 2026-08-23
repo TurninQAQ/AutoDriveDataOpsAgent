@@ -108,6 +108,48 @@ def test_dispatch_rejects_malformed_protocol_without_calling_client():
     assert client.calls == []
 
 
+def test_mock_fault_can_drop_only_write_response_after_dispatch():
+    client = FakeClient()
+    dispatcher = GatewayDispatcher(client, drop_write_response_after_dispatch=True)
+    write_response = dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "write-1",
+            "method": "tools/call",
+            "params": {"name": "set_task_priority", "arguments": {"task_name": "task_A", "priority": 5}},
+        }
+    )
+    read_response = dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "read-1",
+            "method": "tools/call",
+            "params": {"name": "get_task_detail", "arguments": {"task_name": "task_A"}},
+        }
+    )
+    assert write_response["error"]["code"] == "SANDBOX_RESPONSE_DROPPED"
+    assert "result" in read_response
+    assert client.calls == [
+        ("set_task_priority", {"task_name": "task_A", "priority": 5}),
+        ("get_task_detail", {"task_name": "task_A"}),
+    ]
+
+
+def test_environment_fault_is_restricted_to_mock_stage(monkeypatch):
+    monkeypatch.setenv("AUTODRIVE_TEST_DROP_WRITE_RESPONSE_AFTER_DISPATCH", "1")
+    monkeypatch.setenv("PLATFORM_STAGE_RUNTIME", "production")
+    client = FakeClient()
+    response = GatewayDispatcher(client).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "write-1",
+            "method": "tools/call",
+            "params": {"name": "set_task_priority", "arguments": {"task_name": "task_A", "priority": 5}},
+        }
+    )
+    assert "result" in response
+
+
 def test_stdio_client_uses_real_line_delimited_mcp_session():
     script = (
         "import json,sys\n"

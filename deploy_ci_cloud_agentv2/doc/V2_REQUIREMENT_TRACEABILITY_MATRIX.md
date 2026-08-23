@@ -59,7 +59,7 @@ The following are implementation/local evidence, not external closure:
 |---|---|---|
 | Real Provider request | `UNVERIFIED_EXTERNAL` | No non-empty provider secret is configured; no request was sent |
 | Real AutoDrive endpoint | `UNVERIFIED_EXTERNAL` | No non-local/authorized AutoDrive endpoint is configured; the localhost V2 gateway is separately validated |
-| Sandbox platform | PASS | V2-owned in-process mock/simulated gateway, `NOT_FOUND` normalization, approval-bound precondition, one approved disposable create, post-create READ/diagnosis, approved cleanup, and deterministic generated-identity CompletionGate matching |
+| Sandbox platform | PASS | V2-owned in-process mock/simulated gateway: `NOT_FOUND`, 5/5 HTTP-gateway READ, approved disposable create/read/diagnosis, rejected priority WRITE (0 attempts), approved priority WRITE (1 attempt), consumed-approval replay (0), stale transaction (0), mock-only post-dispatch response loss → `OUTCOME_UNKNOWN` → READ-only reconciliation → old-approval replay (0), restore, and approved cleanup. Platform nested priority is normalized strictly before verification. |
 | Docker hosted build/runtime | `PASS` | Hosted run #12 built and ran the non-root image, health/readiness, SQLite, and same-volume smoke |
 | Docker local build/run | `BLOCKED_EXTERNAL` | Local Docker Hub `python:3.12-slim` pull timed out |
 | Hosted CI execution | `PASS` | Hosted run #12 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |

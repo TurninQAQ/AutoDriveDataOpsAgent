@@ -35,7 +35,7 @@ class OperationalGoalVerifier:
             elif tool == "set_task_priority":
                 ok = (
                     result.qualifies_for_evidence()
-                    and result.metadata.get("priority") == transaction.proposal.arguments.get("priority")
+                    and result.priority == transaction.proposal.arguments.get("priority")
                 )
             elif tool == "submit_task":
                 ok = result.qualifies_for_evidence()

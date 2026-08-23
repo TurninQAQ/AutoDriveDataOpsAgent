@@ -296,20 +296,50 @@ A normal installed deployment must install the declared dependency from `pyproje
 Current bootstrap revalidation on 2026-08-24:
 
 ```text
-V2 suite with real LangGraph environment: 237 passed
-real_langgraph marker: 4 passed, 233 deselected
+V2 suite with real LangGraph environment: 242 passed
+real_langgraph marker: 4 passed, 238 deselected
+forced shim suite: 238 passed, 4 skipped
 compileall: PASS
 wheel 2.0.0: PASS
+wheel-target in-process gateway import/health/READ: PASS
 gateway health: PASS
 missing get_task_detail: NOT_FOUND, exists=false
 ```
+
+Local in-process WRITE safety E2E on the mock/simulated sandbox also passed
+through the actual `MCPPlatformFacade → HTTP gateway → platform_backend` path:
+
+```text
+5/5 READ: PASS
+submit_task before approval: 0 attempts; approved create: 1 attempt
+rejected set_task_priority: 0 attempts
+approved set_task_priority: 1 attempt; independently observed priority changed
+consumed approval replay: 0 additional attempts
+TOCTOU stale transaction: 0 attempts
+post-dispatch mock-only response loss: OUTCOME_UNKNOWN / REQUIRES_RECONCILIATION
+reconciliation: READ-only; observed effect confirmed
+old approval after unknown outcome: 0 additional attempts
+priority restoration: 1 fresh approved attempt
+delete_task cleanup: 1 fresh approved attempt; final get_task_detail=NOT_FOUND
+production WRITE: 0
+```
+
+The E2E exposed a concrete adapter/result-contract mismatch: the platform's
+legacy task detail uses a nested priority detail object, while verification
+needs a concrete integer. `agent/results.py` now strictly normalizes either a
+direct integer or the documented nested `priority.priority` integer, rejecting
+malformed present values instead of treating them as absent. Both verification
+layers consume the typed value. The response-loss hook used for this proof is
+disabled by default and requires both `PLATFORM_STAGE_RUNTIME=mock` and
+`AUTODRIVE_TEST_DROP_WRITE_RESPONSE_AFTER_DISPATCH=1`; it drops only the
+response after the requested sandbox WRITE handler returns.
 
 ## 8. Final status
 
 ```text
 V2_ARCHITECTURE_IMPLEMENTATION_COMPLETE
 V2_DOD_43_OF_43_IMPLEMENTED
-V2_LOCAL_REGRESSION_235_PASS
+V2_LOCAL_REGRESSION_242_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
@@ -330,7 +360,7 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
 | Real AutoDrive platform | PENDING | The localhost mock/simulated gateway is available and validated; no non-local/authorized AutoDrive endpoint is configured |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
-| Local platform sandbox | PASS | One disposable mock/no-trigger task was created after explicit V2 approval, verified by `get_task_detail` and `diagnose_task`, and removed through a second V2 approval. CompletionGate now accepts only the platform's deterministic `prefix_YYYYMMDD_HHMMSS` derived identity; no extra mutation occurred and no task remained |
+| Local platform sandbox | PASS | Actual `MCPPlatformFacade → HTTP gateway → in-process backend` E2E: 5/5 READ, protected create, reject=0, approved priority=1, approval replay=0, TOCTOU=0, mock post-dispatch response loss=`OUTCOME_UNKNOWN`, READ-only effect-confirming reconciliation, old approval replay=0, restore, and approved cleanup. No task remained. |
 | Docker hosted build/runtime | PASS | Hosted run #12 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
 | Hosted CI run | PASS | Hosted run #12 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |

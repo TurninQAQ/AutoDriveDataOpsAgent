@@ -52,6 +52,15 @@ V2_TOOL_NAMES = frozenset(
         "set_task_priority",
     }
 )
+WRITE_TOOL_NAMES = frozenset(
+    {
+        "resume_task",
+        "submit_task",
+        "stop_task",
+        "delete_task",
+        "set_task_priority",
+    }
+)
 
 
 class GatewayError(Exception):
@@ -61,6 +70,22 @@ class GatewayError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _sandbox_drop_write_response_after_dispatch_enabled() -> bool:
+    """Return whether the explicit mock-only uncertain-outcome hook is enabled.
+
+    This hook exists solely to exercise the Runtime's uncertain WRITE outcome
+    handling against the real localhost gateway path.  It is deliberately
+    unavailable outside the mock platform stage and disabled by default.
+    The mutation is dispatched normally; only its authoritative response is
+    replaced with a safe JSON-RPC error after the handler has returned.
+    """
+
+    return (
+        os.environ.get("PLATFORM_STAGE_RUNTIME", "").strip().lower() == "mock"
+        and os.environ.get("AUTODRIVE_TEST_DROP_WRITE_RESPONSE_AFTER_DISPATCH") == "1"
+    )
 
 
 def _error(request_id: Any, code: str, message: str) -> dict[str, Any]:
@@ -299,8 +324,13 @@ def _transport_arguments(tool_name: str, arguments: Mapping[str, Any]) -> dict[s
 
 
 class GatewayDispatcher:
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, drop_write_response_after_dispatch: bool | None = None) -> None:
         self.client = client
+        self._drop_write_response_after_dispatch = (
+            _sandbox_drop_write_response_after_dispatch_enabled()
+            if drop_write_response_after_dispatch is None
+            else drop_write_response_after_dispatch
+        )
 
     def dispatch(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, Mapping):
@@ -318,7 +348,13 @@ class GatewayDispatcher:
             if name not in V2_TOOL_NAMES:
                 raise GatewayError("TOOL_NOT_FOUND", f"tool is not exposed: {name}")
             arguments = _mapping(params.get("arguments", {}), "params.arguments")
-            return _success(request_id, self.client.call(name, _transport_arguments(name, arguments)))
+            result = self.client.call(name, _transport_arguments(name, arguments))
+            if self._drop_write_response_after_dispatch and name in WRITE_TOOL_NAMES:
+                raise GatewayError(
+                    "SANDBOX_RESPONSE_DROPPED",
+                    "sandbox response unavailable after write dispatch",
+                )
+            return _success(request_id, result)
         except GatewayError as exc:
             return _error(request_id, exc.code, exc.message)
         except PlatformBackendError as exc:

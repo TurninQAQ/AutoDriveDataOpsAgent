@@ -81,6 +81,7 @@ class TaskDetailResult(NormalizedReadResult):
     task_name: str | None = None
     exists: bool | None = None
     state: TaskState | None = None
+    priority: int | None = None
     metadata: Mapping[str, Any] = field(default_factory=FrozenMapping)
 
     def qualifies_for_evidence(self) -> bool:
@@ -319,6 +320,7 @@ def _task_detail(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> TaskDetail
     exists_field = read_optional_bool(raw, "exists")
     version_field = read_optional_string(raw, "entity_version")
     errors.extend(collect_invalid(task_field, state_field, exists_field, version_field))
+    priority = _task_priority(raw, errors)
     scope, scope_errors, _ = _observed_scope(raw, default=None, infer_platform=False)
     errors.extend(scope_errors)
     task_name = task_field.value if task_field.is_valid else None
@@ -341,8 +343,35 @@ def _task_detail(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> TaskDetail
         task_name=task_name,
         exists=exists,
         state=state,
-        metadata=FrozenMapping({key: value for key, value in raw.items() if key not in _COMMON_KNOWN_FIELDS | {"task_name", "state", "exists"}}),
+        priority=priority,
+        metadata=FrozenMapping({key: value for key, value in raw.items() if key not in _COMMON_KNOWN_FIELDS | {"task_name", "state", "exists", "priority"}}),
     )
+
+
+def _task_priority(raw: Mapping[str, Any], errors: list[str]) -> int | None:
+    """Normalize the documented platform priority shape without coercion.
+
+    The in-process AutoDrive backend exposes task priority as either a direct
+    integer or a legacy detail object containing the concrete ``priority``
+    integer plus descriptive fields.  Both are deterministic platform result
+    shapes.  Any present but malformed value remains a validation error rather
+    than becoming indistinguishable from an absent priority.
+    """
+
+    if "priority" not in raw:
+        return None
+    value = raw["priority"]
+    if isinstance(value, Mapping):
+        nested = read_optional_int(value, "priority", minimum=0, maximum=100)
+        if nested.is_absent:
+            errors.append("priority.priority is required")
+        elif nested.is_invalid:
+            errors.append(f"priority.{nested.error}")
+        return nested.value if nested.is_valid else None
+    direct = read_optional_int(raw, "priority", minimum=0, maximum=100)
+    if direct.is_invalid:
+        errors.append(direct.error or "priority is invalid")
+    return direct.value if direct.is_valid else None
 
 
 def _gpu_pool(envelope: ResultEnvelope, raw: Mapping[str, Any]) -> GpuPoolResult:
