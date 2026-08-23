@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+from functools import wraps
 import inspect
 from pathlib import Path
 import uuid
@@ -29,6 +30,7 @@ from ..safety.locks import (
     ExecutionClaimAlreadyExists, ExecutionClaimStore, MutationAttemptAlreadyConsumed,
     active_mutations,
 )
+from ..safety.runtime_lock import runtime_ownership
 from ..safety.policy import WriteAdmissionPolicy
 from ..safety.write_guard import WriteGuard
 from ..safety.write_transaction import ReconciliationState, WriteTransactionStatus
@@ -68,6 +70,18 @@ class SystemContext:
     write_policy: WriteAdmissionPolicy
     write_enabled: bool
     context_builder: ContextBuilder | None = None
+    runtime_lock_path: str | None = None
+    single_instance: bool = True
+
+    def operation_ownership(self):
+        if self.single_instance is not True:
+            raise ValueError(
+                "single_instance=false is unsupported; the current Runtime requires one active instance"
+            )
+        return runtime_ownership(
+            self.runtime_lock_path,
+            enabled=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -138,6 +152,8 @@ def build_system_context(
     trust_domain: str = "default-trust-domain",
     context_builder: ContextBuilder | None = None,
     durable_path: str | Path | None = None,
+    runtime_root: str | Path | None = None,
+    single_instance: bool = True,
 ) -> SystemContext:
     """Build one explicit Runtime-controlled context.
 
@@ -145,6 +161,10 @@ def build_system_context(
     READ+WRITE catalog. A READ-only facade remains a valid read-only host; any WRITE proposal
     fails closed because no WRITE ToolSpec exists.
     """
+    if single_instance is not True:
+        raise ValueError(
+            "single_instance=false is unsupported; the current Runtime requires one active instance"
+        )
     facade = read_facade or InMemoryReadFacade()
     write_enabled = _supports_write(facade)
     registry = build_full_registry(facade) if write_enabled else build_read_registry(facade)
@@ -160,6 +180,12 @@ def build_system_context(
             claim_store = SQLiteExecutionClaimStore(durable_path)
         if approval_store is None:
             approval_store = SQLiteApprovalRecordStore(durable_path)
+    lock_path: Path | None = None
+    if runtime_root is not None:
+        lock_path = Path(runtime_root).expanduser().resolve() / "run" / "runtime.lock"
+    elif durable_path is not None:
+        durable = Path(durable_path).expanduser().resolve()
+        lock_path = durable.with_name(durable.name + ".runtime.lock")
     return SystemContext(
         runtime_version="autodrive-dataops-agent-v2.0",
         environment=environment,
@@ -180,6 +206,8 @@ def build_system_context(
         write_policy=policy,
         write_enabled=write_enabled,
         context_builder=context_builder,
+        runtime_lock_path=str(lock_path) if lock_path is not None else None,
+        single_instance=single_instance,
     )
 
 
@@ -802,6 +830,19 @@ def _resume_matches_durable_approval(
     )
 
 
+def _runtime_owned(operation):
+    """Hold Runtime ownership across the complete async operation."""
+    @wraps(operation)
+    async def wrapped(*args, **kwargs):
+        system_context = kwargs.get("system_context")
+        if system_context is None:
+            raise TypeError("system_context is required")
+        with system_context.operation_ownership():
+            return await operation(*args, **kwargs)
+    return wrapped
+
+
+@_runtime_owned
 async def invoke(
     user_input: str,
     *,
@@ -934,6 +975,7 @@ async def invoke(
     )
 
 
+@_runtime_owned
 async def resume(
     *,
     thread_id: str,
@@ -1074,6 +1116,7 @@ async def resume(
 
 
 
+@_runtime_owned
 async def reconcile(*, thread_id: str, system_context: SystemContext) -> ReconciliationResult:
     """Deterministically reconcile one unknown WRITE outcome.
 

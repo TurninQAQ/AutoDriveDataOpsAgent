@@ -95,6 +95,7 @@ MutationStarted
 - Recovery handles event-ahead checkpoint windows for durable capability transitions and fails closed on unsupported divergence.
 - A durable `MutationStarted` without a durable result is promoted to reconciliation and is never replayed.
 - A live in-process mutation owner is tracked separately from restart recovery; a concurrent resume cannot be mistaken for a crashed mutation.
+- A durable Runtime instance is now OS-owned for the complete operation by a Linux advisory lock at `<runtime_root>/run/runtime.lock`; a competing process is rejected before checkpoint recovery, so it cannot manufacture reconciliation while the owner is live.
 
 ### Evaluation
 
@@ -184,22 +185,28 @@ At this closure report generation:
 
 ```text
 real runtime venv pytest -q deploy_ci_cloud_agentv2/tests
-217 passed
+221 passed
 
 forced shim marker isolation (missing-LangGraph import):
-2 skipped, 215 deselected
+4 skipped, 217 deselected
 
 forced shim full suite:
-215 passed, 2 skipped
+217 passed, 4 skipped
 
 ordinary environment pytest -q deploy_ci_cloud_agentv2/tests
-217 passed
+221 passed
+
+real cross-process Runtime ownership tests:
+2 real OS-process tests passed (live owner rejection and hard-crash recovery)
+
+Runtime lock lifecycle tests:
+2 passed (clean release/different roots and unsupported single_instance=false)
 
 real runtime venv python -m compileall -q deploy_ci_cloud_agentv2
 PASS
 
 arbitrary temporary-path copy:
-217 passed
+221 passed
 compileall PASS
 
 wheel build (root build environment, no build isolation):
@@ -210,14 +217,14 @@ isolated wheel install/import:
 PASS; package 2.0.0, LangGraph 1.2.11 supplied by runtime environment
 
 real LangGraph marker/runtime checks:
-2 passed, 215 deselected
+4 passed, 217 deselected
 
 production adapter integration:
 15 passed; local fake HTTP Provider and fake JSON-RPC gateway, including
 typed provider failure exhaustion and WRITE error-after-effect reconciliation
 
 production host/configuration unit tests:
-6 passed
+7 passed
 
 CLI health/readiness:
 PASS
@@ -245,6 +252,7 @@ Tool -> provider imports           0
 AUTO_WRITE symbols                 0
 absolute project paths             0
 real network client imports        0
+cross-process Runtime ownership    enforced; no distributed HA claim
 ```
 
 Correctness tests make zero real external LLM/API calls.
@@ -253,7 +261,7 @@ Correctness tests make zero real external LLM/API calls.
 
 The real runtime venv and current root test environment contain the pinned
 LangGraph package. A forced import-blocker run verified that marked real tests
-are skipped (`2 skipped`) when the compatibility shim is active; they are not
+are skipped (`4 skipped`) when the compatibility shim is active; they are not
 reported as real-runtime passes in that mode. The Docker daemon could
 not pull `python:3.12-slim` because registry access timed out; Docker image
 build is therefore not claimed as PASS in this environment. No live paid model
@@ -267,7 +275,7 @@ A normal installed deployment must install the declared dependency from `pyproje
 ```text
 V2_ARCHITECTURE_IMPLEMENTATION_COMPLETE
 V2_DOD_43_OF_43_IMPLEMENTED
-V2_LOCAL_REGRESSION_217_PASS
+V2_LOCAL_REGRESSION_221_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS

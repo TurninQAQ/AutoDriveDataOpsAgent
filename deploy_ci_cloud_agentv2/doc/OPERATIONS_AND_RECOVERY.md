@@ -11,4 +11,9 @@ requires a new transaction and new approval according to its ToolSpec
 idempotency policy.
 
 The current deployment contract is one active runtime instance on local
-storage. Do not run active-active replicas or network-filesystem SQLite.
+storage, and Runtime enforces it with a Linux advisory lock at
+`<runtime_root>/run/runtime.lock`. A second process receives
+`RUNTIME_INSTANCE_ALREADY_ACTIVE` and must not be interpreted as a crashed
+mutation. The kernel releases the lock after clean exit or process death.
+Do not run active-active replicas or network-filesystem SQLite; set
+`single_instance=false` is unsupported and rejected.

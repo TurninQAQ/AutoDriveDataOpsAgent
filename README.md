@@ -32,6 +32,11 @@ must use a sandbox.
 Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`
 or provide a strict JSON config; the default is
 `/home/ubuntu/project/autodrive_dataops_runtimev2`.
+Durable `invoke`, `resume`, and `reconcile` operations hold a Linux advisory
+lock at `<runtime_root>/run/runtime.lock` for their complete lifetime. The
+single-instance rule is enforced in code: a competing process gets
+`RUNTIME_INSTANCE_ALREADY_ACTIVE`, while process death releases the kernel
+lock and leaves normal post-`MutationStarted` reconciliation semantics intact.
 
 See:
 

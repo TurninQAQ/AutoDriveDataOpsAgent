@@ -8,9 +8,16 @@ python -m pip install dist/autodrive_dataops_agent_v2-2.0.0-py3-none-any.whl
 ```
 
 Use the `Dockerfile` for a non-root image. Runtime state and logs are mounted
-outside the source tree. The current SQLite safety model is single-instance;
-do not run multiple active workers against the same database or put it on a
-network filesystem. A future HA deployment requires a separate architecture
+outside the source tree. The current SQLite safety model is single-instance
+and this is code-enforced: durable `invoke`, `resume`, and `reconcile`
+operations take a non-blocking Linux advisory lock at
+`<runtime_root>/run/runtime.lock` for the complete operation. A second process
+receives `RUNTIME_INSTANCE_ALREADY_ACTIVE`; it does not mutate state or
+manufacture a reconciliation result. Kernel lock release makes the runtime
+recoverable after clean exit or process death. Do not run active-active workers
+against the same database or put it on a network filesystem.
+`single_instance=false` is rejected because a distributed ownership protocol
+is not implemented. A future HA deployment requires a separate architecture
 phase.
 
 The image healthcheck is liveness-oriented. Readiness additionally requires a

@@ -19,5 +19,13 @@ secret, and SQLite writability without a platform WRITE. It reports only
 secret presence and never returns or logs the secret itself.
 
 The default persistence model is one active process and one local SQLite WAL
-database. Active-active replicas, NFS state, and multiple writers are not
-supported by this phase.
+database. This is enforced in code: durable Runtime operations acquire a
+non-blocking Linux advisory lock at `<runtime_root>/run/runtime.lock` for their
+entire lifetime, including precondition checks, mutation, verification, and
+durable result recording. The lock is kernel-owned, so a clean exit or process
+death releases ownership; the lock file's presence is not treated as
+ownership. A competing process receives `RUNTIME_INSTANCE_ALREADY_ACTIVE` and
+does not reinterpret the live operation as a crash or start reconciliation.
+`single_instance=false` is rejected because no multi-process/HA ownership
+protocol exists in this phase. Active-active replicas, NFS state, and multiple
+writers remain unsupported.

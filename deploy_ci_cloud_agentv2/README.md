@@ -34,6 +34,11 @@ The concrete production assembly is in `host.py`: a strict environment/JSON
 custom AutoDrive JSON-RPC `MCPPlatformFacade` (not a standards-compliant MCP
 transport claim). Runtime state defaults to
 `/home/ubuntu/project/autodrive_dataops_runtimev2`, outside the source tree.
+When a durable path is configured, Runtime operations are protected by a
+kernel advisory lock at `<runtime_root>/run/runtime.lock` for the full
+`invoke`/`resume`/`reconcile` lifetime. The deployment is deliberately
+single-instance; a competing process receives
+`RUNTIME_INSTANCE_ALREADY_ACTIVE`, and `single_instance=false` is rejected.
 
 The minimal operator boundary is the `autodrive-agent` CLI:
 

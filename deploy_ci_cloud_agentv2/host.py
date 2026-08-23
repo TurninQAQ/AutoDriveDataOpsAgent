@@ -33,6 +33,8 @@ def build_production_context(config: RuntimeConfig | None = None) -> SystemConte
         operator_id=selected.operator_id,
         trust_domain=selected.trust_domain,
         budgets=selected.budgets,
+        runtime_root=selected.persistence.runtime_root,
+        single_instance=selected.persistence.single_instance,
     )
 
 

@@ -23,10 +23,11 @@ class ActiveMutationRegistry:
 
     Durable ``MutationStarted`` proves that an attempt crossed the mutation
     boundary, but absence of a result does not prove that its worker died.
-    This registry distinguishes a live in-process owner from a restarted
-    process, without pretending to provide distributed coordination.  A new
-    process has an empty registry and therefore conservatively reconciles the
-    durable uncertain attempt.
+    This registry remains an additional same-process defensive signal. The
+    cross-process authority is the Runtime instance ``flock`` held around the
+    complete operation; a new process can only inspect a result-less attempt
+    after the previous process has released or lost that OS lock, and then
+    conservatively reconciles the durable uncertain attempt.
     """
 
     def __init__(self) -> None:

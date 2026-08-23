@@ -70,6 +70,11 @@ class PersistenceConfig:
     def __post_init__(self) -> None:
         if type(self.single_instance) is not bool:
             raise ConfigurationError("persistence.single_instance must be a boolean")
+        if self.single_instance is not True:
+            raise ConfigurationError(
+                "persistence.single_instance=false is unsupported; "
+                "the current Runtime requires one active instance"
+            )
         if not self.runtime_root.is_absolute():
             raise ConfigurationError("persistence.runtime_root must be absolute")
         if not self.sqlite_path.is_absolute():

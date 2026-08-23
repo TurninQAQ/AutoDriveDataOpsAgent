@@ -67,6 +67,12 @@ def test_json_persistence_paths_are_documented_and_strict(tmp_path):
     with pytest.raises(ConfigurationError):
         RuntimeConfig.from_env(config_path=config_file)
 
+    config_file.write_text(
+        '{"persistence": {"single_instance": false}}', encoding="utf-8"
+    )
+    with pytest.raises(ConfigurationError, match="single_instance=false"):
+        RuntimeConfig.from_env(config_path=config_file)
+
 
 def test_health_and_readiness_are_local_deterministic_checks(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-only-secret")
