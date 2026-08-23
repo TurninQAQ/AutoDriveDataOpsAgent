@@ -9,6 +9,7 @@ from typing import Any
 
 from ..agent.decisions import ToolCall
 from ..agent.events import catalog_fingerprint
+from ..agent.immutable import canonical_snapshot, thaw_value
 from ..agent.results import normalize_tool_arguments
 from .metadata import ToolKind, ToolSpec
 
@@ -103,21 +104,69 @@ class ToolRegistry:
             arguments=normalize_tool_arguments(spec.name, call.arguments),
         )
 
-    async def call(self, call: ToolCall) -> Any:
+    async def call(self, call: ToolCall, *, runtime_precondition: Any = None) -> Any:
         if not self._sealed:
             raise RuntimeError("ToolRegistry must be sealed before execution")
         handler = self.handler(call.tool_name)
+        arguments = dict(call.arguments)
+        if runtime_precondition is not None:
+            # Runtime adds this only at the final execution boundary.  The
+            # provider proposal never owns or supplies the precondition.
+            try:
+                signature = inspect.signature(handler)
+                accepts_precondition = (
+                    "precondition" in signature.parameters
+                    or any(
+                        parameter.kind is inspect.Parameter.VAR_KEYWORD
+                        for parameter in signature.parameters.values()
+                    )
+                )
+            except (TypeError, ValueError):
+                accepts_precondition = False
+            if accepts_precondition:
+                arguments["precondition"] = _precondition_transport_payload(runtime_precondition)
         # Sync platform/MCP adapters are isolated from the async graph loop so
         # parallel READ batches remain genuinely concurrent.  The safety
         # precondition/verifier paths may still call their sync facade methods
         # directly; this branch is only the Tool Runtime execution boundary.
         if inspect.iscoroutinefunction(handler):
-            result = handler(**call.arguments)
+            result = handler(**arguments)
         else:
-            result = await asyncio.to_thread(handler, **call.arguments)
+            result = await asyncio.to_thread(handler, **arguments)
         if inspect.isawaitable(result):
             return await result
         return result
+
+
+def _precondition_transport_payload(value: Any) -> dict[str, Any]:
+    """Project the internal frozen precondition into detached JSON-like data."""
+
+    if isinstance(value, Mapping):
+        source = dict(value)
+    else:
+        source = {
+            "target": getattr(value, "target", None),
+            "tool_name": getattr(value, "tool_name", None),
+            "observed_at": getattr(value, "observed_at", None),
+            "fingerprint": getattr(value, "fingerprint", None),
+            "entity_version": getattr(value, "entity_version", None),
+            "state": getattr(value, "state", None),
+        }
+    observed_at = source.get("observed_at")
+    if hasattr(observed_at, "isoformat"):
+        observed_at = observed_at.isoformat()
+    projected = {
+        "target": source.get("target"),
+        "tool_name": source.get("tool_name"),
+        "observed_at": observed_at,
+        "fingerprint": source.get("fingerprint"),
+        "entity_version": source.get("entity_version"),
+        "state": thaw_value(canonical_snapshot(source.get("state", {}))),
+    }
+    detached = thaw_value(canonical_snapshot(projected))
+    if not isinstance(detached, dict):  # pragma: no cover - canonicalizer invariant
+        raise ValueError("precondition transport projection must be an object")
+    return detached
 
 
 def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:

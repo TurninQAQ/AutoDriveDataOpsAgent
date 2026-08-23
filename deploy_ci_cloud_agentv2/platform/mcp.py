@@ -60,25 +60,57 @@ class MCPPlatformFacade:
     def diagnose_task(self, task_name: str) -> Any:
         return self._read_call("diagnose_task", {"task_name": task_name})
 
-    def resume_task(self, task_name: str) -> Any:
-        return self._write_call("resume_task", {"task_name": task_name})
+    def resume_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any:
+        return self._write_call("resume_task", {"task_name": task_name}, precondition=precondition)
 
-    def submit_task(self, task_name: str, config: Mapping[str, Any]) -> Any:
-        return self._write_call("submit_task", {"task_name": task_name, "config": dict(config)})
+    def submit_task(
+        self,
+        task_name: str,
+        config: Mapping[str, Any],
+        *,
+        precondition: Mapping[str, Any] | None = None,
+    ) -> Any:
+        from ..agent.immutable import thaw_value
 
-    def stop_task(self, task_name: str) -> Any:
-        return self._write_call("stop_task", {"task_name": task_name})
+        return self._write_call(
+            "submit_task",
+            {"task_name": task_name, "config": thaw_value(config)},
+            precondition=precondition,
+        )
 
-    def delete_task(self, task_name: str) -> Any:
-        return self._write_call("delete_task", {"task_name": task_name})
+    def stop_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any:
+        return self._write_call("stop_task", {"task_name": task_name}, precondition=precondition)
 
-    def set_task_priority(self, task_name: str, priority: int) -> Any:
-        return self._write_call("set_task_priority", {"task_name": task_name, "priority": priority})
+    def delete_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any:
+        return self._write_call("delete_task", {"task_name": task_name}, precondition=precondition)
+
+    def set_task_priority(
+        self,
+        task_name: str,
+        priority: int,
+        *,
+        precondition: Mapping[str, Any] | None = None,
+    ) -> Any:
+        return self._write_call(
+            "set_task_priority",
+            {"task_name": task_name, "priority": priority},
+            precondition=precondition,
+        )
 
     def _read_call(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         return self._call(tool_name, arguments, is_write=False)
 
-    def _write_call(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+    def _write_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        precondition: Mapping[str, Any] | None = None,
+    ) -> Any:
+        if precondition is not None:
+            from ..agent.immutable import thaw_value
+
+            arguments = {**arguments, "precondition": thaw_value(precondition)}
         return self._call(tool_name, arguments, is_write=True)
 
     def _call(self, tool_name: str, arguments: dict[str, Any], *, is_write: bool) -> Any:

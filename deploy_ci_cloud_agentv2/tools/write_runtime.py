@@ -67,7 +67,10 @@ class WriteToolRuntime:
         if transaction.execution_attempt_id != attempt_id:
             raise ValueError("transaction does not carry the authoritative mutation attempt")
         try:
-            result = await self.registry.call(transaction.proposal)
+            result = await self.registry.call(
+                transaction.proposal,
+                runtime_precondition=transaction.precondition,
+            )
             snapshot = canonical_snapshot(result)
             ok = bool(snapshot.get("ok")) if hasattr(snapshot, "get") else False
             outcome = MutationOutcome.CONFIRMED_SUCCESS if ok else MutationOutcome.CONFIRMED_FAILURE

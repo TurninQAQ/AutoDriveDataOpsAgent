@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from deploy_ci_cloud_agentv2.safety.precondition import PreconditionReader
+from deploy_ci_cloud_agentv2.safety.write_transaction import FrozenToolCall
+
 from .core.errors import TaskConfigError
 
 
@@ -69,9 +72,28 @@ class InProcessPlatformClient:
                 # The direct HTTP tool surface must not synthesize or omit it.
                 if "precondition" not in args:
                     raise PlatformBackendError("WRITE_PRECONDITION_REQUIRED")
+                precondition = args.pop("precondition")
+                task_name = str(args.get("task_name") or "")
+                if not task_name or not isinstance(precondition, Mapping):
+                    raise PlatformBackendError("INVALID_PARAMS")
+                self._assert_v2_precondition(tool_name, args, task_name, precondition)
+                # The V2 Runtime fingerprint is the authority crossing this
+                # boundary. The platform service then captures its own local
+                # precondition immediately before the business mutation, giving
+                # the backend a second deterministic TOCTOU check without any
+                # semantic decision layer.
+                backend_precondition = self.facade.get_write_precondition(task_name)
                 method = getattr(self.facade, tool_name, None)
                 if method is None:
                     raise PlatformBackendError("TOOL_NOT_FOUND")
+                if tool_name == "submit_task":
+                    args["task_prefix"] = args.pop("task_name")
+                    args["precondition"] = backend_precondition
+                elif tool_name in {"resume_task", "stop_task"}:
+                    args["datasets"] = None
+                    args["precondition"] = backend_precondition
+                else:
+                    args["precondition"] = backend_precondition
                 return method(**args)
         except PlatformBackendError:
             raise
@@ -81,3 +103,28 @@ class InProcessPlatformClient:
             raise PlatformBackendError("PLATFORM_TOOL_ERROR") from exc
         raise PlatformBackendError("TOOL_NOT_FOUND")
 
+    def _assert_v2_precondition(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        task_name: str,
+        expected: Mapping[str, Any],
+    ) -> None:
+        """Recompute the exact V2 fingerprint immediately before dispatch."""
+
+        if expected.get("target") != task_name or expected.get("tool_name") != tool_name:
+            raise PlatformBackendError("PRECONDITION_FAILED")
+        fingerprint = expected.get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            raise PlatformBackendError("INVALID_PARAMS")
+        try:
+            call = FrozenToolCall(
+                call_id="gateway-precondition",
+                tool_name=tool_name,
+                arguments=dict(arguments),
+            )
+            current = PreconditionReader(self.facade).capture(call)
+        except Exception as exc:
+            raise PlatformBackendError("PRECONDITION_FAILED") from exc
+        if current.fingerprint != fingerprint:
+            raise PlatformBackendError("PRECONDITION_FAILED")

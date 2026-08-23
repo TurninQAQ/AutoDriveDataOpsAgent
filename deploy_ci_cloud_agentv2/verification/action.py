@@ -1,6 +1,8 @@
 """Deterministic direct-action verification; no semantic tool choice."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ..agent.immutable import canonical_snapshot
 from ..agent.results import ResultStatus, TaskState, normalize_read_result
 from ..safety.write_transaction import WriteTransaction
@@ -16,7 +18,7 @@ class ActionVerifier:
 
     def verify(self, transaction: WriteTransaction) -> VerificationResult:
         self._assert_contract(transaction)
-        target = transaction.affected_entities[0]
+        target = _verification_target(transaction)
         raw = canonical_snapshot(self.read_facade.get_task_detail(target))
         result = normalize_read_result("get_task_detail", {"task_name": target}, raw)
         tool = transaction.proposal.tool_name
@@ -61,3 +63,23 @@ class ActionVerifier:
         spec = self.registry.spec(transaction.proposal.tool_name)
         if spec.verification_reads != ("get_task_detail",):
             raise ValueError("ActionVerifier requires the predeclared get_task_detail verification read")
+
+
+def _verification_target(transaction: WriteTransaction) -> str:
+    """Resolve a deterministic platform-generated target for submit_task.
+
+    The V2 proposal carries a validated task prefix for submission, while the
+    platform creates the concrete task identity.  The mutation result is the
+    only accepted source for that generated identity; all other WRITE tools
+    continue to verify their frozen affected entity.
+    """
+
+    target = transaction.affected_entities[0]
+    if transaction.proposal.tool_name != "submit_task" or transaction.mutation_result is None:
+        return target
+    result = transaction.mutation_result.data.get("result")
+    if isinstance(result, Mapping):
+        generated = result.get("task_name")
+        if isinstance(generated, str) and generated.strip():
+            return generated.strip()
+    return target

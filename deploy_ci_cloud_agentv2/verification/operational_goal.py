@@ -1,6 +1,8 @@
 """Deterministic operational-goal verification over a predeclared post-state read."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ..agent.immutable import canonical_snapshot
 from ..agent.results import TaskState, normalize_read_result
 from ..safety.write_transaction import WriteTransaction
@@ -14,7 +16,7 @@ class OperationalGoalVerifier:
 
     def verify(self, transaction: WriteTransaction) -> VerificationResult:
         self._assert_contract(transaction)
-        target = transaction.affected_entities[0]
+        target = _verification_target(transaction)
         raw = canonical_snapshot(self.read_facade.get_task_detail(target))
         result = normalize_read_result("get_task_detail", {"task_name": target}, raw)
         tool = transaction.proposal.tool_name
@@ -51,3 +53,17 @@ class OperationalGoalVerifier:
         spec = self.registry.spec(transaction.proposal.tool_name)
         if spec.verification_reads != ("get_task_detail",):
             raise ValueError("OperationalGoalVerifier requires the predeclared get_task_detail verification read")
+
+
+def _verification_target(transaction: WriteTransaction) -> str:
+    """Use the platform-generated task identity only after confirmed success."""
+
+    target = transaction.affected_entities[0]
+    if transaction.proposal.tool_name != "submit_task" or transaction.mutation_result is None:
+        return target
+    result = transaction.mutation_result.data.get("result")
+    if isinstance(result, Mapping):
+        generated = result.get("task_name")
+        if isinstance(generated, str) and generated.strip():
+            return generated.strip()
+    return target

@@ -49,16 +49,23 @@ bounded platform errors. It never captures a precondition, authorizes a WRITE,
 or fabricates a WRITE argument. Direct gateway WRITE calls without an
 approval-bound `precondition` are rejected with `WRITE_PRECONDITION_REQUIRED`.
 
+For the mock/simulated sandbox only, `AUTODRIVE_PLATFORM_SUBMIT_NO_TRIGGER=1`
+causes `submit_task` to create the task configuration and DAG without starting
+a scheduler run. The default, with that flag absent, retains the normal
+trigger behavior. The V2 Runtime passes the approved precondition as detached
+data; the backend recomputes the V2 target/fingerprint and performs its own
+platform-side precondition check before invoking the mutation handler.
+
 ## External smoke status
 
-The V2 stdio bridge was validated on `127.0.0.1:8765/mcp` through the
-production V2 adapter and the existing runtime stdio MCP server. The V2-owned
-in-process bridge was also validated on a separate localhost port against the
-mock/simulated platform runtime: GPU, queue, knowledge, and missing-task
-normalization passed. The current sandbox has no task configuration, so
-task-specific detail/diagnosis for existing tasks cannot yet be exercised and
-no platform mutation has been attempted. The external platform result is
-**PENDING**. The local sandbox suite independently proves
+The V2-owned in-process bridge was validated on
+`127.0.0.1:8765/mcp` against the mock/simulated platform runtime: GPU, queue,
+knowledge, and missing-task normalization passed. A disposable no-trigger
+sandbox task was created and removed through the normal V2 approval path; the
+production mutation count remains zero. The current clean sandbox has no task
+configuration, so task-specific detail/diagnosis for an existing task and a
+non-local AutoDrive endpoint remain **UNVERIFIED_EXTERNAL**. The local sandbox
+suite independently proves
 the implemented five READ tools, approval-before-WRITE, exactly-one sandbox
 mutation, post-write verification, connection-drop handling, and
 `OUTCOME_UNKNOWN` for uncertain remote WRITE outcomes.

@@ -54,7 +54,15 @@ class LegacyMutationGateway:
                 dags_dir=str(self.settings.dags_dir),
                 task_config_root=str(self.settings.task_config_root),
                 parse_timeout_sec=self.parse_timeout_sec,
-                no_trigger=False,
+                # Sandbox bootstrap may validate task creation without
+                # launching an Airflow DagRun.  Production keeps the normal
+                # trigger behavior unless both switches explicitly opt into
+                # this local-only mode.
+                no_trigger=(
+                    os.environ.get("PLATFORM_STAGE_RUNTIME", "").strip().lower() == "mock"
+                    and os.environ.get("AUTODRIVE_PLATFORM_SUBMIT_NO_TRIGGER", "0").strip()
+                    in {"1", "true", "yes"}
+                ),
                 schedule=None,
                 scheduler_interval_sec=30,
                 scheduler_once=False,

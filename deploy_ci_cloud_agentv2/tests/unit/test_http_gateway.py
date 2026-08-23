@@ -6,12 +6,15 @@ import threading
 import urllib.request
 
 import pytest
+import httpx
 
 from deploy_ci_cloud_agentv2.platform.http_gateway import (
     GatewayDispatcher,
     StdioMCPClient,
     create_server,
 )
+from deploy_ci_cloud_agentv2.config import PlatformConfig
+from deploy_ci_cloud_agentv2.platform.mcp import MCPPlatformFacade
 from deploy_ci_cloud_agentv2.platform_backend.client import InProcessPlatformClient, PlatformBackendError
 from deploy_ci_cloud_agentv2.platform_backend.core.errors import TaskConfigError
 
@@ -161,6 +164,56 @@ def test_in_process_backend_does_not_promote_generic_task_error_to_not_found():
     with pytest.raises(PlatformBackendError) as error:
         client.call("get_task_detail", {"task_name": "broken_task"})
     assert error.value.code == "PLATFORM_TOOL_ERROR"
+
+
+def test_in_process_write_requires_runtime_precondition_before_handler():
+    with pytest.raises(PlatformBackendError) as error:
+        InProcessPlatformClient(object()).call(
+            "submit_task",
+            {"task_name": "sandbox_task", "config": {}},
+        )
+    assert error.value.code == "WRITE_PRECONDITION_REQUIRED"
+
+
+def test_http_write_facade_forwards_detached_precondition():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": payload["id"], "result": {"ok": True}},
+            request=request,
+        )
+
+    facade = MCPPlatformFacade(
+        PlatformConfig(endpoint="https://platform.test/mcp", max_retries=0),
+        transport=httpx.MockTransport(handler),
+    )
+    facade.resume_task(
+        "task_A",
+        precondition={
+            "target": "task_A",
+            "tool_name": "resume_task",
+            "fingerprint": "fp",
+            "entity_version": "1",
+            "state": {"status": "SUCCESS"},
+        },
+    )
+    forwarded = requests[0]["params"]["arguments"]
+    assert forwarded["task_name"] == "task_A"
+    assert forwarded["precondition"]["fingerprint"] == "fp"
+    assert forwarded["precondition"]["state"] == {"status": "SUCCESS"}
+
+
+def test_platform_task_state_mapping_is_deterministic():
+    from deploy_ci_cloud_agentv2.platform_backend.mcp.facade import _task_state_from_runs
+
+    assert _task_state_from_runs([]) == "SUBMITTED"
+    assert _task_state_from_runs([{"state": "running"}]) == "RUNNING"
+    assert _task_state_from_runs([{"state": "success"}]) == "SUCCEEDED"
+    assert _task_state_from_runs([{"state": "failed"}]) == "FAILED"
 
 
 def test_http_health_and_json_rpc_endpoint():

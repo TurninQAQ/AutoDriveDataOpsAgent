@@ -74,6 +74,14 @@ RAG/knowledge, observability, mutation mechanics, stage scripts, and DAG
 templates. The previous project's semantic Agent/planning/evaluation layers
 are intentionally not imported into V2.
 
+For the mock/simulated sandbox only, setting
+`AUTODRIVE_PLATFORM_SUBMIT_NO_TRIGGER=1` makes `submit_task` create the task
+configuration and DAG without starting a scheduler run. The normal trigger
+behavior remains the default when that flag is absent. Approved WRITE
+preconditions are forwarded as detached data to the backend, where the V2
+target and precondition fingerprint are recomputed before the platform handler
+is called.
+
 It binds to `127.0.0.1:8765` and serves the V2-compatible `POST /mcp`
 JSON-RPC `tools/call` endpoint plus non-mutating `GET /health`. The bridge is
 transport-only; approval, mutation claims, verification, and completion remain

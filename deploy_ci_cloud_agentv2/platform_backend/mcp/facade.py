@@ -9,6 +9,7 @@ from deploy_ci_cloud_agentv2.platform_backend.core.gateways.airflow_read import 
 from deploy_ci_cloud_agentv2.platform_backend.core.gateways.docker import DockerGateway
 from deploy_ci_cloud_agentv2.platform_backend.core.gateways.gpu_runtime import create_gpu_runtime_from_env
 from deploy_ci_cloud_agentv2.platform_backend.core.gateways.legacy_mutation import LegacyMutationGateway
+from deploy_ci_cloud_agentv2.platform_backend.core.errors import TaskConfigError
 from deploy_ci_cloud_agentv2.platform_backend.core.services.airflow_read_service import AirflowReadService
 from deploy_ci_cloud_agentv2.platform_backend.core.services.diagnosis_service import DiagnosisService
 from deploy_ci_cloud_agentv2.platform_backend.core.services.docker_service import DockerService
@@ -77,7 +78,13 @@ class PlatformMCPFacade:
     ) -> dict[str, Any]:
         """Return one task's configuration, datasets, queue state and recent DagRuns."""
         with self._stdio_safe():
-            detail = self.task_query_service.get_task_detail(task_name)
+            try:
+                detail = self.task_query_service.get_task_detail(task_name)
+            except TaskConfigError as exc:
+                if str(exc).startswith("Task config not found:"):
+                    return {"status": "NOT_FOUND", "task_name": task_name, "exists": False}
+                raise
+            detail["exists"] = True
             if include_airflow_runs:
                 try:
                     detail["airflow_runs"] = self.airflow_service.runs(
@@ -87,6 +94,7 @@ class PlatformMCPFacade:
                 except Exception as exc:
                     detail["airflow_runs"] = []
                     detail["airflow_error"] = str(exc)
+            detail["state"] = _task_state_from_runs(detail.get("airflow_runs"))
         return detail
 
     def get_queue_state(self, task_name: str = "") -> dict[str, Any]:
@@ -371,3 +379,24 @@ def build_default_facade(
         verification,
         knowledge_service,
     )
+
+
+def _task_state_from_runs(runs: Any) -> str:
+    """Normalize platform run state into the V2 TaskState vocabulary."""
+
+    if not isinstance(runs, list) or not runs:
+        return "SUBMITTED"
+    state = str((runs[0] or {}).get("state") or "").strip().lower()
+    return {
+        "queued": "QUEUED",
+        "scheduled": "QUEUED",
+        "running": "RUNNING",
+        "up_for_retry": "RUNNING",
+        "up_for_reschedule": "RUNNING",
+        "deferred": "RUNNING",
+        "success": "SUCCEEDED",
+        "failed": "FAILED",
+        "upstream_failed": "FAILED",
+        "canceled": "CANCELLED",
+        "cancelled": "CANCELLED",
+    }.get(state, "SUBMITTED")

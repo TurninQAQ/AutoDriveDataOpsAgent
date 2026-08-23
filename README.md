@@ -46,7 +46,7 @@ Hosted Docker build/runtime smoke        PASS: hosted run #12
 Local Docker build/run                   BLOCKED: Docker Hub registry timeout
 V2 in-process platform backend           PASS: localhost mock/simulated READ smoke
 Missing task contract                    PASS: deterministic NOT_FOUND/exists=false
-Sandbox task creation/WRITE               PENDING: no approved target yet
+Sandbox task creation/WRITE               PASS: one mock no-trigger disposable task created and removed through V2 approval; production WRITE 0
 ```
 
 Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`

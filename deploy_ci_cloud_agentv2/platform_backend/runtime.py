@@ -35,13 +35,36 @@ def _platform_environment() -> dict[str, str]:
     env.setdefault("AIRFLOW_STATE_DIR", str(runtime_root / "state"))
     env.setdefault("AIRFLOW_TASK_QUEUE_DIR", str(runtime_root / "state" / "task_queue"))
     env.setdefault("AIRFLOW_GPU_LOCK_DIR", str(runtime_root / "state" / "gpu_locks"))
+    # The migrated task manager reads AIRFLOW_BIN at module import time.  Keep
+    # that legacy integration detail inside the V2-owned platform runtime and
+    # prefer the active runtime venv when it exists; never fall back to a
+    # host-specific source-tree path.
+    airflow_candidate = runtime_root / "venv" / "bin" / "airflow"
+    if "AIRFLOW_BIN" not in env and airflow_candidate.is_file():
+        env["AIRFLOW_BIN"] = str(airflow_candidate)
     return env
 
 
 def build_platform_facade() -> PlatformMCPFacade:
     """Build the concrete platform facade used by the V2 in-process gateway."""
 
-    settings = PlatformSettings.from_env(_platform_environment())
+    platform_env = _platform_environment()
+    # The canonical task-manager module resolves a few non-secret deployment
+    # settings from os.environ when it is lazily imported by a WRITE.  Apply
+    # only the already-normalized platform paths/binary, never credentials.
+    for key in (
+        "AIRFLOW_BIN",
+        "PLATFORM_HOME",
+        "AIRFLOW_HOME",
+        "AIRFLOW_DAGS_DIR",
+        "AIRFLOW_TASK_CONFIG_ROOT",
+        "AIRFLOW_STATE_DIR",
+        "AIRFLOW_TASK_QUEUE_DIR",
+        "AIRFLOW_GPU_LOCK_DIR",
+    ):
+        if key in platform_env:
+            os.environ.setdefault(key, platform_env[key])
+    settings = PlatformSettings.from_env(platform_env)
     source_dir = Path(
         os.environ.get(
             "AUTODRIVE_PLATFORM_KNOWLEDGE_DIR",
@@ -56,4 +79,3 @@ def build_platform_facade() -> PlatformMCPFacade:
     )
     knowledge = KnowledgeService(source_dir=source_dir, index_file=index_file)
     return build_default_facade(settings=settings, knowledge_service=knowledge)
-

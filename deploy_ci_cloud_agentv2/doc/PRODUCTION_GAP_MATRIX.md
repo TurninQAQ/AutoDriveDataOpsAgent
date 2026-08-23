@@ -13,7 +13,7 @@ The complete 43-item V2 requirement mapping is maintained in
 | Agent authority | One visible Agent loop; Runtime validates decisions | None in the authority model | Real LangGraph graph tests |
 | LangGraph | Real `StateGraph`/`interrupt()` source; offline tests had a compatibility harness | Real `langgraph==1.2.11` checkpointer serialization and interrupt/resume needed validation | Pinned runtime environment; marked real-runtime tests pass |
 | Provider | Deterministic and scripted offline providers | Structured HTTP/Qwen adapter, timeout, retry, rate-limit handling, auth isolation, telemetry | Local fake HTTP provider tests and malformed/429 coverage pass |
-| Platform | In-memory READ/WRITE facades | V2-owned platform execution layer plus custom JSON-RPC-over-HTTP transport | V2 in-process platform backend is packaged under `platform_backend`; localhost READ smoke and missing-task normalization pass; sandbox task target remains pending |
+| Platform | In-memory READ/WRITE facades | V2-owned platform execution layer plus custom JSON-RPC-over-HTTP transport | V2 in-process platform backend is packaged under `platform_backend`; localhost READ smoke, task-state normalization, missing-task normalization, and approval-bound precondition forwarding pass; one mock no-trigger disposable task was created and removed through V2 approval; production WRITE remains 0 |
 | Platform HTTP bridge | stdio canonical MCP implementation | Localhost-only V2 `tools/call` HTTP transport | `/health`, stdio/in-process gateway tests, V2 adapter READ smoke, and narrow NOT_FOUND mapping pass |
 | Result boundary | Typed result normalization, provenance, evidence qualification | Adapter must preserve raw result boundary and transport semantics | MCP mutation/identity/error tests |
 | Persistence | SQLite event/checkpoint/claim/approval durability exists | Runtime-root layout and host bootstrap | SQLite path/readiness tests |
@@ -26,8 +26,9 @@ The complete 43-item V2 requirement mapping is maintained in
 The V2 package includes a localhost-only HTTP bridge at `127.0.0.1:8765/mcp`.
 It can either start the configured canonical stdio MCP command or use the
 V2-owned in-process platform backend (`AUTODRIVE_GATEWAY_BACKEND=in_process`).
-Initial validation is READ-only; it does not make the stdio MCP server public
-and it does not create a sandbox task. The migrated backend excludes the old
+The current in-process validation includes one mock no-trigger disposable task
+created and removed through the normal V2 approval path; it does not make the
+stdio MCP server public and it performed no production mutation. The migrated backend excludes the old
 project's semantic Agent/planning/evaluation packages.
 
 ## Non-goals retained

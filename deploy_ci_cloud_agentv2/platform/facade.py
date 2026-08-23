@@ -86,11 +86,11 @@ class InMemoryReadFacade:
 
 
 class WriteFacade(Protocol):
-    def resume_task(self, task_name: str) -> Any: ...
-    def submit_task(self, task_name: str, config: Mapping[str, Any]) -> Any: ...
-    def stop_task(self, task_name: str) -> Any: ...
-    def delete_task(self, task_name: str) -> Any: ...
-    def set_task_priority(self, task_name: str, priority: int) -> Any: ...
+    def resume_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any: ...
+    def submit_task(self, task_name: str, config: Mapping[str, Any], *, precondition: Mapping[str, Any] | None = None) -> Any: ...
+    def stop_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any: ...
+    def delete_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any: ...
+    def set_task_priority(self, task_name: str, priority: int, *, precondition: Mapping[str, Any] | None = None) -> Any: ...
 
 
 class InMemoryPlatformFacade(InMemoryReadFacade):
@@ -124,7 +124,7 @@ class InMemoryPlatformFacade(InMemoryReadFacade):
         self.calls.append(("get_task_detail", {"task_name": task_name}))
         return {"status": "NOT_FOUND", "task_name": task_name, "exists": False}
 
-    def resume_task(self, task_name: str) -> Any:
+    def resume_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any:
         self._mutation_failure("resume_task")
         if task_name not in self.tasks:
             return {"ok": False, "error_code": "NOT_FOUND", "task_name": task_name}
@@ -134,7 +134,7 @@ class InMemoryPlatformFacade(InMemoryReadFacade):
         task["revision"] = int(task.get("revision", 1)) + 1
         return {"ok": True, "task_name": task_name, "state": "RUNNING", "execution_id": f"exec-{self.mutation_count}"}
 
-    def stop_task(self, task_name: str) -> Any:
+    def stop_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any:
         self._mutation_failure("stop_task")
         if task_name not in self.tasks:
             return {"ok": False, "error_code": "NOT_FOUND", "task_name": task_name}
@@ -144,7 +144,7 @@ class InMemoryPlatformFacade(InMemoryReadFacade):
         task["revision"] = int(task.get("revision", 1)) + 1
         return {"ok": True, "task_name": task_name, "state": "STOPPED"}
 
-    def delete_task(self, task_name: str) -> Any:
+    def delete_task(self, task_name: str, *, precondition: Mapping[str, Any] | None = None) -> Any:
         self._mutation_failure("delete_task")
         if task_name not in self.tasks:
             return {"ok": False, "error_code": "NOT_FOUND", "task_name": task_name}
@@ -152,7 +152,7 @@ class InMemoryPlatformFacade(InMemoryReadFacade):
         del self.tasks[task_name]
         return {"ok": True, "task_name": task_name, "deleted": True}
 
-    def set_task_priority(self, task_name: str, priority: int) -> Any:
+    def set_task_priority(self, task_name: str, priority: int, *, precondition: Mapping[str, Any] | None = None) -> Any:
         self._mutation_failure("set_task_priority")
         if task_name not in self.tasks:
             return {"ok": False, "error_code": "NOT_FOUND", "task_name": task_name}
@@ -162,7 +162,7 @@ class InMemoryPlatformFacade(InMemoryReadFacade):
         task["revision"] = int(task.get("revision", 1)) + 1
         return {"ok": True, "task_name": task_name, "priority": priority}
 
-    def submit_task(self, task_name: str, config: Mapping[str, Any]) -> Any:
+    def submit_task(self, task_name: str, config: Mapping[str, Any], *, precondition: Mapping[str, Any] | None = None) -> Any:
         self._mutation_failure("submit_task")
         if task_name in self.tasks:
             return {"ok": False, "error_code": "ALREADY_EXISTS", "task_name": task_name}
