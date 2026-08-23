@@ -181,13 +181,13 @@ The suite includes direct coverage for the architecture examples and historical 
 - Canonical Runtime state rejects unsupported mutable leaves, NaN/Infinity, binary buffers, and non-string mapping keys.
 - Tool catalog tampering, including `verification_reads`, changes effective hash and fails closed.
 - Remote JSON-RPC WRITE errors after dispatch are `OUTCOME_UNKNOWN`, not `FAILED_BEFORE_EFFECT`; replay remains blocked pending reconciliation.
-- The V2 package now contains a localhost-only HTTP JSON-RPC stdio bridge at `127.0.0.1:8765/mcp`. It delegates to the configured canonical MCP launcher, performs only transport-shape normalization, and never authorizes WRITE or captures a replacement precondition.
+- The V2 package now contains a localhost-only custom HTTP JSON-RPC gateway at `127.0.0.1:8765/mcp`. It supports the canonical stdio launcher and the V2-owned in-process platform backend; the current sandbox process uses the in-process backend. It performs only transport/result normalization and never authorizes WRITE or captures a replacement precondition.
 - Provider HTTP/network exhaustion is typed as bounded `ProviderTransportFailure`; malformed bodies are typed `ProviderResponseInvalid`.
 - Root packaging is canonical; the nested conflicting `pyproject.toml` was removed.
 
 ## 6. Validation results
 
-At this closure report generation, independently rerun on 2026-08-23:
+Historical closure results included the following run:
 
 ```text
 real runtime venv pytest -q deploy_ci_cloud_agentv2/tests
@@ -293,12 +293,23 @@ uses local fake transports.
 
 A normal installed deployment must install the declared dependency from `pyproject.toml` and should run the same suite once in an environment containing the pinned LangGraph package.
 
+Current bootstrap revalidation on 2026-08-24:
+
+```text
+V2 suite with real LangGraph environment: 235 passed
+real_langgraph marker: 4 passed, 231 deselected
+compileall: PASS
+wheel 2.0.0: PASS
+gateway health: PASS
+missing get_task_detail: NOT_FOUND, exists=false
+```
+
 ## 8. Final status
 
 ```text
 V2_ARCHITECTURE_IMPLEMENTATION_COMPLETE
 V2_DOD_43_OF_43_IMPLEMENTED
-V2_LOCAL_REGRESSION_222_PASS
+V2_LOCAL_REGRESSION_235_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
@@ -316,10 +327,10 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Area | Result | Evidence |
 |---|---|---|
 | Real Qwen/DashScope provider | PENDING | No non-empty `DASHSCOPE_API_KEY` was configured; no real request was sent |
-| Platform HTTP bridge | PASS | V2-owned stdio-to-HTTP bridge at `127.0.0.1:8765/mcp`; `/health`, gateway tests, and V2 adapter READ calls for GPU/knowledge/queue passed |
-| Real AutoDrive platform | PENDING | No external endpoint or generated task target is configured; task-specific READ validation and external sandbox validation remain pending |
+| Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
+| Real AutoDrive platform | PENDING | The localhost mock/simulated gateway is available and validated; no non-local/authorized AutoDrive endpoint is configured |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
-| Local platform sandbox | PASS | 4 collected fake JSON-RPC cases, including approval, one mutation, verification, and uncertain outcome |
+| Local platform sandbox | PASS with bounded completion note | One disposable mock/no-trigger task was created after explicit V2 approval, verified by `get_task_detail` and `diagnose_task`, and removed through a second V2 approval. The create interaction ended in bounded `BUDGET_EXHAUSTED` because the generated timestamped task identity is not yet folded into the provider-declared prefix target for CompletionGate matching; no extra mutation occurred and no task remained |
 | Docker hosted build/runtime | PASS | Hosted run #12 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
 | Hosted CI run | PASS | Hosted run #12 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
