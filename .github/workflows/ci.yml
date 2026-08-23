@@ -56,6 +56,10 @@ jobs:
           set -euo pipefail
           runtime_dir=$(mktemp -d)
           trap 'rm -rf "$runtime_dir"' EXIT
+          # The image deliberately runs as UID 10001.  A runner-created
+          # mktemp directory is normally mode 0700 and would therefore make
+          # the mounted runtime volume inaccessible to the container user.
+          chmod 0777 "$runtime_dir"
 
           test "$(docker run --rm --entrypoint id autodrive-dataops-agent-v2:ci -u)" = "10001"
           docker run --rm --read-only --tmpfs /tmp \
