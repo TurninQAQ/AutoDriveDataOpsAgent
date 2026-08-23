@@ -13,7 +13,7 @@ The complete 43-item V2 requirement mapping is maintained in
 | Agent authority | One visible Agent loop; Runtime validates decisions | None in the authority model | Real LangGraph graph tests |
 | LangGraph | Real `StateGraph`/`interrupt()` source; offline tests had a compatibility harness | Real `langgraph==1.2.11` checkpointer serialization and interrupt/resume needed validation | Pinned runtime environment; marked real-runtime tests pass |
 | Provider | Deterministic and scripted offline providers | Structured HTTP/Qwen adapter, timeout, retry, rate-limit handling, auth isolation, telemetry | Local fake HTTP provider tests and malformed/429 coverage pass |
-| RAG embedding | Offline BM25 + feature-hashing HybridRetriever | Existing dense providers/index were not constructed by the canonical platform runtime | `PLATFORM_RAG_EMBED_PROVIDER` factory now injects local/Qwen/Gemini selection into `KnowledgeService`; fake-provider/index compatibility tests pass; real Qwen embedding smoke and 443-vector local sidecar build pass. Qwen chat/Agent-model smoke remains separately quota-blocked. |
+| RAG embedding | Offline BM25 + feature-hashing HybridRetriever | Existing dense providers/index were not constructed by the canonical platform runtime | `PLATFORM_RAG_EMBED_PROVIDER` factory now injects local/Qwen/Gemini selection into `KnowledgeService`; fake-provider/index compatibility tests pass; real Qwen embedding smoke, 443-vector sidecar reuse, and canonical 30-case A/B pass. Local Top-5=`0.8667`, Qwen Top-5=`0.8667`; Qwen MRR=`0.7722` vs local=`0.7417`; no Top-5 regressions. Qwen chat/Agent-model smoke remains separately quota-blocked. |
 | Platform | In-memory READ/WRITE facades | V2-owned platform execution layer plus custom JSON-RPC-over-HTTP transport | V2 in-process platform backend is packaged under `platform_backend`; localhost 5/5 READ, task-state/priority normalization, missing-task normalization, approval-bound precondition forwarding, rejected WRITE, approved reversible WRITE, approval replay, TOCTOU, uncertain response/reconciliation, and approved cleanup pass in mock/simulated sandbox; production WRITE remains 0 |
 | Platform HTTP bridge | stdio canonical MCP implementation | Localhost-only V2 `tools/call` HTTP transport | `/health`, stdio/in-process gateway tests, V2 adapter READ smoke, and narrow NOT_FOUND mapping pass |
 | Result boundary | Typed result normalization, provenance, evidence qualification | Adapter must preserve raw result boundary and transport semantics | MCP mutation/identity/error tests |
@@ -44,3 +44,16 @@ This integration work does not add a Planner, Router, second semantic model,
 AUTO WRITE, distributed execution, multi-operator approval, or active-active
 SQLite deployment. READ remains autonomous under deterministic Runtime guards;
 WRITE remains frozen, human-approved, single-attempt execution.
+
+## Retrieval evaluation evidence
+
+The five-case `retrieval_golden.json` is retained as a smoke test. The final
+V1.1 alignment set is the immutable 30-case JSONL under
+`platform_backend/knowledge/eval/v1_1/`; its SHA-256 is
+`7cb32e25fbb35a62274732558ed00f42aa98f20c871c7281127247efcb19f7ed`.
+The evaluator calls the canonical V2 retriever and emits per-case artifacts
+under runtime evaluation state. It does not import or restore the legacy
+runtime evaluator. On 2026-08-24, local hashing and real Qwen dense both
+executed 30/30 cases; Qwen preserved Top-5 recall, improved aggregate MRR and
+had no Top-5 retrieval regression. `RERANKER_NOT_REQUIRED` is the current
+corpus decision; local remains the default embedding mode.

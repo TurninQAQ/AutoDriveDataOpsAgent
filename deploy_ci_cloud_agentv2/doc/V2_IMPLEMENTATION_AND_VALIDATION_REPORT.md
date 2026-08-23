@@ -406,3 +406,29 @@ No production platform mutation was performed. Gemini runtime wiring is covered
 by deterministic factory tests; no Gemini credential was available for an
 external smoke. See `DENSE_EMBEDDING_RUNTIME.md` for operating configuration
 and sidecar lifecycle.
+
+## 11. Canonical 30-case retrieval evaluation alignment (2026-08-24)
+
+The exact V1.1 asset was located at the retained platform evaluation source
+`/home/ubuntu/project/autodrive_dataops_runtime/opt_airflow/eval/v1_1/rag_retrieval.jsonl`.
+Only the evaluation asset was migrated into the V2-owned package at
+`platform_backend/knowledge/eval/v1_1/rag_retrieval.jsonl`; no legacy runtime,
+Agent, MCP server, or platform implementation was restored. The migrated file
+has 30 unique cases and SHA-256
+`7cb32e25fbb35a62274732558ed00f42aa98f20c871c7281127247efcb19f7ed`.
+
+The evaluator uses the production `KnowledgeService`/`HybridRetriever` path.
+The local mode completed all 30 cases with Hit@1 `0.6667`, Hit@3 `0.8333`,
+Hit@5 `0.8667`, MRR `0.7417`, nDCG@3 `0.7377`, nDCG@5 `0.7465`, and Recall@5
+`0.8167`. The real Qwen dense mode used model
+`qwen3.7-text-embedding`, dimension 1024, reused the complete 443-vector
+sidecar, and completed all 30 query embeddings with Hit@1 `0.7000`, Hit@3
+`0.8667`, Hit@5 `0.8667`, MRR `0.7722`, nDCG@3 `0.7737`, nDCG@5 `0.7737`, and
+Recall@5 `0.8167`.
+
+There were zero Top-5 retrieval regressions and zero recoveries; Qwen improved
+rank on four cases and regressed rank on one (`rag_grounding_live`) without
+losing its Top-5 hit. The evidence-based decision is
+`RERANKER_NOT_REQUIRED`; the offline local mode remains the default and Qwen
+is optional. This is external embedding evidence, not Qwen chat-provider or
+non-mock AutoDrive evidence. Production WRITE remained zero.

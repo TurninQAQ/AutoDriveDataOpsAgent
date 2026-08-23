@@ -63,12 +63,48 @@ dense mode uses dense cosine.
 
 ## Validation evidence
 
-On 2026-08-24, real Qwen `qwen3.7-text-embedding` document and query smokes
-both returned one normalized finite 1024-dimensional vector. The repository
-knowledge corpus sidecar completed with 443 vectors for 30 documents. The
-fixed five-case Golden Set measured hash Top-5 `1.00` / MRR `0.80` and Qwen
-dense Top-5 `1.00` / MRR `0.90`; queue congestion improved from rank 2 to 1.
+The five-case `retrieval_golden.json` remains a fast smoke set; it is not the
+final V1.1 benchmark. The canonical V1.1 evaluation asset is the unchanged
+30-case JSONL at:
 
-This validates retrieval only, not the separately configured Qwen chat/Agent
-provider or any external platform WRITE. `RERANKER_NOT_REQUIRED` for this V2
-phase; no reranker was added.
+```text
+platform_backend/knowledge/eval/v1_1/rag_retrieval.jsonl
+```
+
+Its SHA-256 is
+`7cb32e25fbb35a62274732558ed00f42aa98f20c871c7281127247efcb19f7ed`.
+The dependency-light evaluator validates the 30-case schema and source/section
+references, then calls the production `KnowledgeService` retriever for both
+modes. Per-case artifacts are written outside the source tree under the
+runtime evaluation state directory; they contain IDs/ranks, not secrets or
+document vectors.
+
+On 2026-08-24, real Qwen `qwen3.7-text-embedding` document and query smokes
+returned normalized finite 1024-dimensional vectors. The validated dense
+sidecar contains 443/443 vectors for 30 documents and was reused for the
+30-case query evaluation; no document vectors were regenerated.
+
+The canonical 30-case A/B result was:
+
+| Metric | Local BM25 + hash | Qwen dense hybrid | Delta |
+|---|---:|---:|---:|
+| Hit@1 | 0.6667 | 0.7000 | +0.0333 |
+| Hit@3 | 0.8333 | 0.8667 | +0.0333 |
+| Hit@5 | 0.8667 | 0.8667 | +0.0000 |
+| MRR | 0.7417 | 0.7722 | +0.0306 |
+| nDCG@3 | 0.7377 | 0.7737 | +0.0360 |
+| nDCG@5 | 0.7465 | 0.7737 | +0.0272 |
+| Recall@5 | 0.8167 | 0.8167 | +0.0000 |
+| Precision@5 | 0.1933 | 0.1933 | +0.0000 |
+
+There were no Top-5 retrieval regressions or recoveries: both modes had the
+same 26/30 Top-5 hits. Qwen improved the first relevant rank on four cases
+(`rag_gpu_stale`, `rag_gpu_exclusive`, `rag_soft_preempt_reason`,
+`rag_draining_meaning`) and regressed rank on one grounding case
+(`rag_grounding_live`), while preserving Top-5 recall. The result supports
+`RERANKER_NOT_REQUIRED` for the current corpus. It does not make Qwen the
+default: offline local hashing remains the default, and Qwen remains an
+explicit optional mode.
+
+This validates embedding retrieval only, not the separately configured Qwen
+chat/Agent provider or any external platform WRITE. No reranker was added.

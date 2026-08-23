@@ -59,6 +59,7 @@ deploy_ci_cloud_agentv2 = ["doc/*.md"]
     "knowledge/**/*.yaml",
     "knowledge/**/*.yml",
     "knowledge/**/*.json",
+    "knowledge/**/*.jsonl",
     "knowledge/**/*.txt",
     "scripts/*.sh",
     "dags/templates/*",
