@@ -123,5 +123,7 @@ V2 has no runtime imports from `deploy_ci_cloud_agent`. V1 may be read as histor
 
 Real external provider and platform smoke remain separate from local tests. In
 the current review environment no provider API key or AutoDrive endpoint is
-configured, so those results are reported as pending. Docker validation is
-also dependent on access to the `python:3.12-slim` registry image.
+configured, so those results are reported as pending. Hosted GitHub Actions
+run #11 validated the Python 3.11/3.12 matrix, wheel/import/static checks, and
+the non-root container health/readiness/persistent-volume smoke. Local Docker
+build/run remains dependent on access to the `python:3.12-slim` registry image.

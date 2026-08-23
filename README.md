@@ -37,7 +37,9 @@ Local provider adapter sandbox           PASS
 Local platform JSON-RPC sandbox          PASS
 Real Provider smoke                      PENDING: credential not configured
 Real AutoDrive platform                  PENDING: endpoint not configured
-Docker build/run                         BLOCKED: Docker Hub registry timeout
+Hosted CI (Python 3.11/3.12)             PASS: hosted run #11
+Hosted Docker build/runtime smoke        PASS: hosted run #11
+Local Docker build/run                   BLOCKED: Docker Hub registry timeout
 ```
 
 Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`

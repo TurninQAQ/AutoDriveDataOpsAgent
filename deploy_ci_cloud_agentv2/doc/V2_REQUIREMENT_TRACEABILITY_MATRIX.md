@@ -60,6 +60,6 @@ The following are implementation/local evidence, not external closure:
 | Real Provider request | `UNVERIFIED_EXTERNAL` | No non-empty provider secret is configured; no request was sent |
 | Real AutoDrive endpoint | `UNVERIFIED_EXTERNAL` | No endpoint/gateway is configured or listening |
 | Sandbox platform | PASS | Local fake JSON-RPC adapter and approval/verification suite |
-| Docker build/run | `BLOCKED_EXTERNAL` | Docker Hub `python:3.12-slim` pull timed out |
-| Hosted CI execution | `UNVERIFIED_EXTERNAL` | Workflow is present; no hosted run was observable |
-
+| Docker hosted build/runtime | `PASS` | Hosted run #11 built and ran the non-root image, health/readiness, SQLite, and same-volume smoke |
+| Docker local build/run | `BLOCKED_EXTERNAL` | Local Docker Hub `python:3.12-slim` pull timed out |
+| Hosted CI execution | `PASS` | Hosted run #11 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |

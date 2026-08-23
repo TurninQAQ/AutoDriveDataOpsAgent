@@ -238,6 +238,15 @@ production host/configuration unit tests:
 
 CLI health/readiness:
 PASS
+
+hosted GitHub Actions run #11 (`32f4d6b`):
+PASS; Python 3.11 and 3.12 matrix jobs, real-LangGraph checks, compile,
+wheel/import, and static architecture checks passed.
+
+hosted container runtime smoke in the same run:
+PASS; image build, UID 10001 non-root identity, health, no-secret
+`not_ready` readiness, SQLite creation, and second-container same-volume
+readiness all passed.
 ```
 
 Wheel content inspection confirms these runtime packages are present:
@@ -267,16 +276,19 @@ cross-process Runtime ownership    enforced; no distributed HA claim
 
 Correctness tests make zero real external LLM/API calls.
 
+Hosted CI/container evidence was independently observed at:
+`https://github.com/TurninQAQ/AutoDriveDataOpsAgent/actions/runs/32639986861`.
+
 ## 7. Environment limitations
 
 The real runtime venv and current root test environment contain the pinned
 LangGraph package. A forced import-blocker run verified that marked real tests
 are skipped (`4 skipped`) when the compatibility shim is active; they are not
-reported as real-runtime passes in that mode. The Docker daemon could
-not pull `python:3.12-slim` because registry access timed out; Docker image
-build is therefore not claimed as PASS in this environment. No live paid model
-endpoint or production MCP endpoint was called; provider/platform smoke uses
-local fake transports.
+reported as real-runtime passes in that mode. Hosted Actions validated the
+Docker image and container runtime smoke, while the local Docker daemon could
+not pull `python:3.12-slim` because registry access timed out. No live paid
+model endpoint or production MCP endpoint was called; provider/platform smoke
+uses local fake transports.
 
 A normal installed deployment must install the declared dependency from `pyproject.toml` and should run the same suite once in an environment containing the pinned LangGraph package.
 
@@ -289,8 +301,9 @@ V2_LOCAL_REGRESSION_222_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
-CI_CONFIGURATION_ADDED
-DOCKER_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
+HOSTED_CI_RUN_11_PASS
+HOSTED_CONTAINER_RUNTIME_SMOKE_PASS
+DOCKER_LOCAL_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
 REAL_PROVIDER_SMOKE_PENDING
 REAL_PLATFORM_CONNECTION_PENDING
 SANDBOX_WRITE_EXTERNAL_E2E_PENDING
@@ -304,8 +317,10 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Real AutoDrive platform | PENDING | No external endpoint was configured; default localhost port had no gateway |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
 | Local platform sandbox | PASS | 4 collected fake JSON-RPC cases, including approval, one mutation, verification, and uncertain outcome |
-| Docker build/run | BLOCKED | `python:3.12-slim` pull timed out at Docker Hub |
-| Hosted CI run | NOT OBSERVED | Workflow is present and statically parseable; GitHub API returned no workflow runs |
+| Docker hosted build/runtime | PASS | Hosted run #11 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
+| Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
+| Hosted CI run | PASS | Hosted run #11 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
 
 No paid model call, production platform request, or production WRITE was
-performed during this validation.
+performed during this validation. Local fake provider/platform tests and
+local sandbox safety tests are not external-system evidence.
