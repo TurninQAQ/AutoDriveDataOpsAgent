@@ -51,3 +51,34 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Build production container
         run: docker build --tag autodrive-dataops-agent-v2:ci .
+      - name: Run container health/readiness smoke
+        run: |
+          set -euo pipefail
+          runtime_dir=$(mktemp -d)
+          trap 'rm -rf "$runtime_dir"' EXIT
+
+          test "$(docker run --rm --entrypoint id autodrive-dataops-agent-v2:ci -u)" = "10001"
+          docker run --rm --read-only --tmpfs /tmp \
+            --volume "$runtime_dir:/var/lib/autodrive-dataops" \
+            autodrive-dataops-agent-v2:ci health
+
+          set +e
+          docker run --rm --read-only --tmpfs /tmp \
+            --volume "$runtime_dir:/var/lib/autodrive-dataops" \
+            autodrive-dataops-agent-v2:ci ready > "$runtime_dir/ready.log" 2>&1
+          ready_rc=$?
+          set -e
+          test "$ready_rc" -eq 1
+          grep -q '"status": "not_ready"' "$runtime_dir/ready.log"
+          test -f "$runtime_dir/state/autodrive.sqlite3"
+
+          # A second container sees the same local runtime volume. No external
+          # Provider/platform credentials are needed for this readiness check.
+          set +e
+          docker run --rm --read-only --tmpfs /tmp \
+            --volume "$runtime_dir:/var/lib/autodrive-dataops" \
+            autodrive-dataops-agent-v2:ci ready > "$runtime_dir/ready-second.log" 2>&1
+          second_rc=$?
+          set -e
+          test "$second_rc" -eq 1
+          grep -q '"status": "not_ready"' "$runtime_dir/ready-second.log"
