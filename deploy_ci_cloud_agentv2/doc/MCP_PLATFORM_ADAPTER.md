@@ -21,3 +21,13 @@ never classifies that error as `FAILED_BEFORE_EFFECT`.
 The local integration suite uses a fake JSON-RPC server to prove READ, approval
 pause, rejected WRITE with zero mutation, approved WRITE exactly once, and
 post-write verification.
+
+## External smoke status
+
+The current environment has no configured `AUTODRIVE_PLATFORM_ENDPOINT` beyond
+the default local placeholder and no AutoDrive gateway listening there. No
+external platform request or production WRITE was attempted. The external
+platform result is **PENDING**. The local sandbox suite independently proves
+the implemented five READ tools, approval-before-WRITE, exactly-one sandbox
+mutation, post-write verification, connection-drop handling, and
+`OUTCOME_UNKNOWN` for uncertain remote WRITE outcomes.

@@ -117,3 +117,8 @@ no fallback semantic loop.
 ## V1 boundary
 
 V2 has no runtime imports from `deploy_ci_cloud_agent`. V1 may be read as historical/reference material only; autonomy-specific V1 logic is not migrated into V2.
+
+Real external provider and platform smoke remain separate from local tests. In
+the current review environment no provider API key or AutoDrive endpoint is
+configured, so those results are reported as pending. Docker validation is
+also dependent on access to the `python:3.12-slim` registry image.

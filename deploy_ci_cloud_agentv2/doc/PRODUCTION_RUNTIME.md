@@ -29,3 +29,11 @@ does not reinterpret the live operation as a crash or start reconciliation.
 `single_instance=false` is rejected because no multi-process/HA ownership
 protocol exists in this phase. Active-active replicas, NFS state, and multiple
 writers remain unsupported.
+
+## Integration status
+
+The frozen Runtime and real LangGraph integration are locally validated. The
+structured provider and custom AutoDrive JSON-RPC adapter have passing local
+fake-transport/sandbox tests. Real provider smoke is pending until a secret is
+injected; real platform smoke is pending until an endpoint is supplied. No
+production WRITE is performed by the validation suite.

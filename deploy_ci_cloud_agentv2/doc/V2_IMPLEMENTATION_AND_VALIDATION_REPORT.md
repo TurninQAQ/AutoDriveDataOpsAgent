@@ -185,16 +185,16 @@ At this closure report generation:
 
 ```text
 real runtime venv pytest -q deploy_ci_cloud_agentv2/tests
-221 passed
+222 passed
 
 forced shim marker isolation (missing-LangGraph import):
-4 skipped, 217 deselected
+4 skipped, 218 deselected
 
 forced shim full suite:
-217 passed, 4 skipped
+218 passed, 4 skipped
 
 ordinary environment pytest -q deploy_ci_cloud_agentv2/tests
-221 passed
+222 passed
 
 real cross-process Runtime ownership tests:
 2 real OS-process tests passed (live owner rejection and hard-crash recovery)
@@ -206,7 +206,7 @@ real runtime venv python -m compileall -q deploy_ci_cloud_agentv2
 PASS
 
 arbitrary temporary-path copy:
-221 passed
+222 passed
 compileall PASS
 
 wheel build (root build environment, no build isolation):
@@ -217,7 +217,7 @@ isolated wheel install/import:
 PASS; package 2.0.0, LangGraph 1.2.11 supplied by runtime environment
 
 real LangGraph marker/runtime checks:
-4 passed, 217 deselected
+4 passed, 218 deselected
 
 production adapter integration:
 15 passed; local fake HTTP Provider and fake JSON-RPC gateway, including
@@ -275,7 +275,7 @@ A normal installed deployment must install the declared dependency from `pyproje
 ```text
 V2_ARCHITECTURE_IMPLEMENTATION_COMPLETE
 V2_DOD_43_OF_43_IMPLEMENTED
-V2_LOCAL_REGRESSION_221_PASS
+V2_LOCAL_REGRESSION_222_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
@@ -285,3 +285,17 @@ REAL_PROVIDER_SMOKE_PENDING
 REAL_PLATFORM_CONNECTION_PENDING
 SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 ```
+
+## 9. External smoke closure status
+
+| Area | Result | Evidence |
+|---|---|---|
+| Real Qwen/DashScope provider | PENDING | No non-empty `DASHSCOPE_API_KEY` was configured; no real request was sent |
+| Real AutoDrive platform | PENDING | No external endpoint was configured; default localhost port had no gateway |
+| Local provider adapter | PASS | 16 fake-transport tests, including malformed/timeout/429/5xx/network cases |
+| Local platform sandbox | PASS | 16 fake JSON-RPC tests, including approval, one mutation, verification, and uncertain outcome |
+| Docker build/run | BLOCKED | `python:3.12-slim` pull timed out at Docker Hub |
+| Hosted CI run | NOT OBSERVED | Workflow is present and statically parseable; GitHub API returned no workflow runs |
+
+No paid model call, production platform request, or production WRITE was
+performed during this validation.

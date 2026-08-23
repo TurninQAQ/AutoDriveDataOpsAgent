@@ -47,3 +47,10 @@ def test_v2_distribution_metadata_matches_complete_runtime_packages():
     for suffix in ("safety", "memory", "verification", "evaluation"):
         assert f"deploy_ci_cloud_agentv2.{suffix}" in packages
     assert not (ROOT / "pyproject.toml").exists()
+
+
+def test_ci_wheel_smoke_installs_declared_runtime_dependencies():
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "/tmp/autodrive-wheel/*.whl" in workflow
+    assert "pip install /tmp/autodrive-wheel/*.whl" in workflow
+    assert "--no-index --no-deps /tmp/autodrive-wheel" not in workflow

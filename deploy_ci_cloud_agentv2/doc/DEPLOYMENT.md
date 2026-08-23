@@ -28,3 +28,7 @@ are never baked into the image, prompts, audit events, or logs.
 Real provider and platform connectivity must be validated separately from
 local fake-transport tests. The platform adapter in this repository is a
 custom AutoDrive JSON-RPC gateway, not a claim of standards-compliant MCP.
+The current local validation environment has no configured external provider
+secret or AutoDrive endpoint. Docker build was attempted with the installed
+daemon but was blocked resolving `docker.io/library/python:3.12-slim`; therefore
+external provider, external platform, and Docker are not reported as PASS.

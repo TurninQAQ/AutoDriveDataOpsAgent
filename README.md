@@ -29,6 +29,17 @@ gateway are implemented, but real external provider/platform smoke tests and
 production deployment remain explicit operational steps. First WRITE testing
 must use a sandbox.
 
+Current validation status:
+
+```text
+Local correctness / real LangGraph       PASS
+Local provider adapter sandbox           PASS
+Local platform JSON-RPC sandbox          PASS
+Real Provider smoke                      PENDING: credential not configured
+Real AutoDrive platform                  PENDING: endpoint not configured
+Docker build/run                         BLOCKED: Docker Hub registry timeout
+```
+
 Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`
 or provide a strict JSON config; the default is
 `/home/ubuntu/project/autodrive_dataops_runtimev2`.
