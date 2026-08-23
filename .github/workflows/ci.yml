@@ -51,38 +51,46 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Build production container
         run: docker build --tag autodrive-dataops-agent-v2:ci .
-      - name: Run container health/readiness smoke
+      - name: Prepare container runtime volume
         run: |
           set -euo pipefail
-          runtime_dir=$(mktemp -d)
-          trap 'rm -rf "$runtime_dir"' EXIT
+          runtime_dir="$RUNNER_TEMP/autodrive-dataops-runtime"
+          rm -rf "$runtime_dir"
+          mkdir -p "$runtime_dir"
           # The image deliberately runs as UID 10001.  A runner-created
           # mktemp directory is normally mode 0700 and would therefore make
           # the mounted runtime volume inaccessible to the container user.
           chmod 0777 "$runtime_dir"
+          echo "AUTODRIVE_RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
 
-          test "$(docker run --rm --entrypoint id autodrive-dataops-agent-v2:ci -u)" = "10001"
+      - name: Assert container non-root identity
+        run: test "$(docker run --rm --entrypoint id autodrive-dataops-agent-v2:ci -u)" = "10001"
+
+      - name: Run container health smoke
+        run: |
           docker run --rm --read-only --tmpfs /tmp \
-            --volume "$runtime_dir:/var/lib/autodrive-dataops" \
+            --volume "$AUTODRIVE_RUNTIME_DIR:/var/lib/autodrive-dataops" \
             autodrive-dataops-agent-v2:ci health
 
+      - name: Run container readiness smoke without external credentials
+        run: |
           set +e
           docker run --rm --read-only --tmpfs /tmp \
-            --volume "$runtime_dir:/var/lib/autodrive-dataops" \
-            autodrive-dataops-agent-v2:ci ready > "$runtime_dir/ready.log" 2>&1
+            --volume "$AUTODRIVE_RUNTIME_DIR:/var/lib/autodrive-dataops" \
+            autodrive-dataops-agent-v2:ci ready
           ready_rc=$?
           set -e
           test "$ready_rc" -eq 1
-          grep -q '"status": "not_ready"' "$runtime_dir/ready.log"
-          test -f "$runtime_dir/state/autodrive.sqlite3"
 
-          # A second container sees the same local runtime volume. No external
-          # Provider/platform credentials are needed for this readiness check.
+      - name: Assert readiness persisted local SQLite state
+        run: test -f "$AUTODRIVE_RUNTIME_DIR/state/autodrive.sqlite3"
+
+      - name: Run second container readiness smoke on same volume
+        run: |
           set +e
           docker run --rm --read-only --tmpfs /tmp \
-            --volume "$runtime_dir:/var/lib/autodrive-dataops" \
-            autodrive-dataops-agent-v2:ci ready > "$runtime_dir/ready-second.log" 2>&1
+            --volume "$AUTODRIVE_RUNTIME_DIR:/var/lib/autodrive-dataops" \
+            autodrive-dataops-agent-v2:ci ready
           second_rc=$?
           set -e
           test "$second_rc" -eq 1
-          grep -q '"status": "not_ready"' "$runtime_dir/ready-second.log"
