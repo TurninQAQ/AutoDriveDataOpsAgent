@@ -239,7 +239,7 @@ production host/configuration unit tests:
 CLI health/readiness:
 PASS
 
-hosted GitHub Actions run #11 (`32f4d6b`):
+hosted GitHub Actions run #12 (`997d22a`):
 PASS; Python 3.11 and 3.12 matrix jobs, real-LangGraph checks, compile,
 wheel/import, and static architecture checks passed.
 
@@ -277,7 +277,7 @@ cross-process Runtime ownership    enforced; no distributed HA claim
 Correctness tests make zero real external LLM/API calls.
 
 Hosted CI/container evidence was independently observed at:
-`https://github.com/TurninQAQ/AutoDriveDataOpsAgent/actions/runs/32639986861`.
+`https://github.com/TurninQAQ/AutoDriveDataOpsAgent/actions/runs/32643063257`.
 
 ## 7. Environment limitations
 
@@ -317,9 +317,9 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Real AutoDrive platform | PENDING | No external endpoint was configured; default localhost port had no gateway |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
 | Local platform sandbox | PASS | 4 collected fake JSON-RPC cases, including approval, one mutation, verification, and uncertain outcome |
-| Docker hosted build/runtime | PASS | Hosted run #11 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
+| Docker hosted build/runtime | PASS | Hosted run #12 built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
-| Hosted CI run | PASS | Hosted run #11 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
+| Hosted CI run | PASS | Hosted run #12 passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
 
 No paid model call, production platform request, or production WRITE was
 performed during this validation. Local fake provider/platform tests and
