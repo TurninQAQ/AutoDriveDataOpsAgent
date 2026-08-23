@@ -17,7 +17,12 @@ from deploy_ci_cloud_agentv2.agent.decisions import (
     ToolCall,
 )
 from deploy_ci_cloud_agentv2.agent.goals import GoalDescriptor, ReadTaskState
-from deploy_ci_cloud_agentv2.agent.immutable import CanonicalizationError, FrozenMapping, canonical_snapshot
+from deploy_ci_cloud_agentv2.agent.immutable import (
+    CanonicalizationError,
+    FrozenMapping,
+    canonical_snapshot,
+    freeze_value,
+)
 from deploy_ci_cloud_agentv2.agent.results import normalize_read_result
 from deploy_ci_cloud_agentv2.platform import InMemoryReadFacade
 from deploy_ci_cloud_agentv2.providers.model import AgentProvider
@@ -29,6 +34,14 @@ from deploy_ci_cloud_agentv2.tools.runtime import ReadToolRuntime
 class Box:
     def __init__(self, value):
         self.value = value
+
+
+@dataclass(frozen=True)
+class FrozenWithHiddenCache:
+    value: str
+
+    def __post_init__(self):
+        object.__setattr__(self, "cache", [])
 
 
 @pytest.mark.parametrize(
@@ -51,6 +64,39 @@ def test_closed_canonical_domain_rejects_nested_unknown_non_string_key_and_non_f
         canonical_snapshot({"value": inf})
     with pytest.raises(CanonicalizationError):
         FrozenMapping({"value": Box(1)})
+    with pytest.raises(CanonicalizationError):
+        freeze_value(FrozenWithHiddenCache("unsafe"))
+    with pytest.raises(CanonicalizationError):
+        canonical_snapshot(FrozenWithHiddenCache("unsafe"))
+
+
+def test_existing_frozen_mapping_is_revalidated_and_rebuilt():
+    source = {"nested": {"values": [1, 2]}}
+    supplied = FrozenMapping(source)
+    accepted = canonical_snapshot(supplied)
+    assert accepted == supplied
+    assert accepted is not supplied
+    source["nested"]["values"].append(3)
+    assert accepted["nested"]["values"] == (1, 2)
+
+    forged = object.__new__(FrozenMapping)
+    object.__setattr__(forged, "_items", (("unsafe", FrozenWithHiddenCache("x")),))
+    with pytest.raises(CanonicalizationError):
+        canonical_snapshot(forged)
+
+
+@pytest.mark.parametrize("bad_key", [1, True, ("tuple",), object()])
+def test_canonical_snapshot_rejects_every_non_string_mapping_key(bad_key):
+    with pytest.raises(CanonicalizationError):
+        canonical_snapshot({bad_key: "value"})
+
+
+def test_canonical_snapshot_is_semantically_idempotent_without_aliasing():
+    first = canonical_snapshot({"nested": [{"value": "safe"}]})
+    second = canonical_snapshot(first)
+    assert second == first
+    assert second is not first
+    assert second["nested"] is not first["nested"]
 
 
 def test_canonical_values_have_no_mutable_reachable_containers():
@@ -157,6 +203,45 @@ def test_agent_decision_ingress_rejects_malformed_non_tool_fields_before_compile
         )
 
 
+@pytest.mark.parametrize(
+    "proposal",
+    [
+        object.__new__(FinalCandidate),
+        object.__new__(SingleToolCall),
+        object.__new__(ReadToolBatch),
+    ],
+)
+def test_agent_decision_ingress_is_total_for_uninitialized_exact_types(proposal):
+    with pytest.raises(AgentDecisionValidationError):
+        AgentDecisionIngressValidator().validate(proposal)
+
+
+def test_agent_decision_ingress_rejects_uninitialized_goal_descriptor():
+    descriptor = object.__new__(GoalDescriptor)
+    proposal = SingleToolCall(
+        ToolCall("c", "get_task_detail", {"task_name": "A"}),
+        descriptor,
+    )
+    with pytest.raises(AgentDecisionValidationError):
+        AgentDecisionIngressValidator().validate(proposal)
+
+
+def test_agent_decision_ingress_rejects_wrong_variant_kind_and_duplicate_batch_ids():
+    validator = AgentDecisionIngressValidator()
+    wrong_kind = FinalCandidate("done", kind="READ_TOOL_BATCH")
+    with pytest.raises(AgentDecisionValidationError):
+        validator.validate(wrong_kind)
+
+    duplicate_batch = ReadToolBatch(
+        (
+            ToolCall("same", "get_task_detail", {"task_name": "A"}),
+            ToolCall("same", "get_gpu_pool", {}),
+        )
+    )
+    with pytest.raises(AgentDecisionValidationError):
+        validator.validate(duplicate_batch)
+
+
 class MalformedThenValidProvider(AgentProvider):
     model_version = "malformed-decision-provider"
     prompt_version = "malformed-decision-test"
@@ -168,7 +253,7 @@ class MalformedThenValidProvider(AgentProvider):
     async def generate(self, context):
         self.calls += 1
         if self.calls == 1:
-            return FinalCandidate(123, referenced_goal_ids=("g1",))
+            return object.__new__(FinalCandidate)
         if self.calls == 2:
             return SingleToolCall(
                 ToolCall("task", "get_task_detail", {"task_name": "A"}),

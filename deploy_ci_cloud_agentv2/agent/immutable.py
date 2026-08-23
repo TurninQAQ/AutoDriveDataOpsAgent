@@ -35,13 +35,18 @@ class FrozenMapping(Mapping[K, V]):
     def __init__(self, value: Mapping[K, V] | None = None, **kwargs: V) -> None:
         if value is not None and not isinstance(value, Mapping):
             raise CanonicalizationError("FrozenMapping requires a mapping")
-        items: list[tuple[Any, Any]] = list(value.items()) if value is not None else []
-        items.extend(kwargs.items())
-        frozen: list[tuple[str, Any]] = []
-        for key, item in items:
-            if not isinstance(key, str):
-                raise CanonicalizationError("canonical mapping keys must be strings")
-            frozen.append((key, _freeze_internal(item)))
+        try:
+            items: list[tuple[Any, Any]] = list(value.items()) if value is not None else []
+            items.extend(kwargs.items())
+            frozen: list[tuple[str, Any]] = []
+            for key, item in items:
+                if not isinstance(key, str):
+                    raise CanonicalizationError("canonical mapping keys must be strings")
+                frozen.append((key, _freeze_internal(item)))
+        except CanonicalizationError:
+            raise
+        except Exception as exc:
+            raise CanonicalizationError("mapping cannot be canonicalized") from exc
         object.__setattr__(self, "_items", tuple(frozen))
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -86,26 +91,28 @@ CanonicalValue: TypeAlias = (
 )
 
 
+# A tiny explicit allow-list for typed Runtime values that are intentionally
+# retained by internal projections.  External canonical snapshots always
+# reduce these values to mappings; arbitrary dataclasses are never accepted.
+_CANONICAL_TYPED_DATACLASSES: set[type] = set()
+
+
+def register_canonical_dataclass(value_type: type) -> None:
+    """Register one known, field-closed Runtime dataclass.
+
+    Registration is an internal implementation detail, not a caller-facing
+    escape hatch.  The canonicalizer still checks that the instance has no
+    hidden ``__dict__`` fields and recursively canonicalizes every declared
+    field before it is retained.
+    """
+
+    if not is_dataclass(value_type) or not getattr(value_type, "__dataclass_params__", None):
+        raise TypeError("only dataclass types can be registered")
+    _CANONICAL_TYPED_DATACLASSES.add(value_type)
+
+
 def freeze_value(value: Any) -> Any:
     """Canonicalize a Runtime-owned value and reject unknown leaves."""
-
-    if isinstance(value, FrozenMapping):
-        return value
-    if is_dataclass(value) and not isinstance(value, type):
-        params = getattr(type(value), "__dataclass_params__", None)
-        if params is not None and getattr(params, "frozen", False):
-            clone = deepcopy(value)
-            try:
-                for item in fields(value):
-                    object.__setattr__(clone, item.name, _freeze_internal(getattr(clone, item.name)))
-                return clone
-            except (AttributeError, TypeError, CanonicalizationError):
-                return FrozenMapping(
-                    {item.name: _freeze_internal(getattr(value, item.name)) for item in fields(value)}
-                )
-        return FrozenMapping(
-            {item.name: _freeze_internal(getattr(value, item.name)) for item in fields(value)}
-        )
     return _freeze_internal(value)
 
 
@@ -124,16 +131,22 @@ def canonical_snapshot(value: Any) -> Any:
     deterministically projected to canonical data.
     """
 
-    if isinstance(value, FrozenMapping):
-        # FrozenMapping construction already proved every reachable child is
-        # canonical; retaining this immutable object avoids a second ingress
-        # representation for ToolObservation.data.
-        return value
     try:
         detached = deepcopy(value)
     except Exception as exc:  # pragma: no cover - defensive boundary
         raise CanonicalizationError(f"value cannot be detached: {type(value).__name__}") from exc
-    return _canonicalize(detached, allow_sets=False, dataclass_as_mapping=True)
+    try:
+        # Even an existing FrozenMapping is treated as untrusted here.  Its
+        # Mapping interface is walked and a new tree is constructed.
+        return _canonicalize(detached, allow_sets=False, dataclass_as_mapping=True)
+    except CanonicalizationError:
+        raise
+    except Exception as exc:
+        # Malformed Mapping/dataclass implementations must not leak their raw
+        # AttributeError/TypeError/KeyError through the authority boundary.
+        raise CanonicalizationError(
+            f"value cannot be normalized as a canonical snapshot: {type(value).__name__}"
+        ) from exc
 
 
 def _freeze_internal(value: Any) -> Any:
@@ -153,7 +166,12 @@ def _canonicalize(value: Any, *, allow_sets: bool, dataclass_as_mapping: bool) -
     if isinstance(value, str):
         return value
     if isinstance(value, Enum):
-        return _canonicalize(value.value, allow_sets=allow_sets, dataclass_as_mapping=dataclass_as_mapping)
+        # External payloads normalize special scalar types into the closed
+        # scalar domain.  Known internal typed dataclasses may retain their
+        # declared Enum field because that typed model is explicitly allowed.
+        if dataclass_as_mapping:
+            return _canonicalize(value.value, allow_sets=allow_sets, dataclass_as_mapping=True)
+        return value
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, (datetime, date, time)):
@@ -163,37 +181,45 @@ def _canonicalize(value: Any, *, allow_sets: bool, dataclass_as_mapping: bool) -
     if callable(value):
         raise CanonicalizationError("callable values are not canonical")
     if is_dataclass(value) and not isinstance(value, type):
-        params = getattr(type(value), "__dataclass_params__", None)
-        if not dataclass_as_mapping and params is not None and getattr(params, "frozen", False):
-            clone = deepcopy(value)
-            try:
-                for item in fields(value):
-                    object.__setattr__(
-                        clone,
-                        item.name,
-                        _canonicalize(
-                            getattr(clone, item.name),
-                            allow_sets=allow_sets,
-                            dataclass_as_mapping=False,
-                        ),
+        value_type = type(value)
+        if value_type not in _CANONICAL_TYPED_DATACLASSES:
+            raise CanonicalizationError(
+                f"arbitrary dataclass is not a canonical value: {value_type.__name__}"
+            )
+        field_names = {item.name for item in fields(value)}
+        instance_dict = getattr(value, "__dict__", None)
+        if instance_dict is not None and set(instance_dict) != field_names:
+            raise CanonicalizationError(
+                f"typed dataclass {value_type.__name__} contains hidden instance state"
+            )
+        if dataclass_as_mapping:
+            return FrozenMapping(
+                {
+                    item.name: _canonicalize(
+                        getattr(value, item.name),
+                        allow_sets=allow_sets,
+                        dataclass_as_mapping=True,
                     )
-                return clone
-            except (AttributeError, TypeError, CanonicalizationError):
-                # A typed frozen dataclass with an unsupported child is not a
-                # canonical value merely because its outer shell is frozen.
-                raise CanonicalizationError(
-                    f"frozen dataclass {type(value).__name__} contains a non-canonical field"
-                )
-        return FrozenMapping(
-            {
-                item.name: _canonicalize(
+                    for item in fields(value)
+                }
+            )
+        params = getattr(value_type, "__dataclass_params__", None)
+        if params is None or not getattr(params, "frozen", False):
+            raise CanonicalizationError(
+                f"registered dataclass {value_type.__name__} must be frozen"
+            )
+        clone = deepcopy(value)
+        for item in fields(value):
+            object.__setattr__(
+                clone,
+                item.name,
+                _canonicalize(
                     getattr(value, item.name),
                     allow_sets=allow_sets,
-                    dataclass_as_mapping=True,
-                )
-                for item in fields(value)
-            }
-        )
+                    dataclass_as_mapping=False,
+                ),
+            )
+        return clone
     if isinstance(value, Mapping):
         items: dict[str, Any] = {}
         for key, item in value.items():

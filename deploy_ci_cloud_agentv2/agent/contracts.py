@@ -17,7 +17,7 @@ from .goals import (
     InspectQueue,
     ReadTaskState,
 )
-from .immutable import FrozenMapping
+from .immutable import FrozenMapping, register_canonical_dataclass
 
 
 class RequirementKind(str, Enum):
@@ -33,6 +33,9 @@ class RequirementKind(str, Enum):
 class CompletionRequirement:
     kind: RequirementKind
     target: str
+
+
+register_canonical_dataclass(CompletionRequirement)
 
 
 @dataclass(frozen=True)
