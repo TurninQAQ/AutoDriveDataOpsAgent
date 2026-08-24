@@ -8,6 +8,7 @@ import urllib.request
 import pytest
 import httpx
 
+from deploy_ci_cloud_agentv2.agent.results import normalize_read_result
 from deploy_ci_cloud_agentv2.platform.http_gateway import (
     GatewayDispatcher,
     StdioMCPClient,
@@ -180,6 +181,36 @@ def test_stdio_missing_task_error_is_narrowly_normalized_to_not_found():
         "task_name": "missing_task",
         "exists": False,
     }
+
+
+def test_http_facade_normalizes_canonical_stdio_empty_queue():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {
+                    "structuredContent": {
+                        "version": 2,
+                        "active": None,
+                        "queue": [],
+                    }
+                },
+            },
+            request=request,
+        )
+
+    facade = MCPPlatformFacade(
+        PlatformConfig(endpoint="https://platform.test/mcp", max_retries=0),
+        transport=httpx.MockTransport(handler),
+    )
+    payload = facade.get_queue_state()
+
+    assert payload == {"version": 2, "scope": "PLATFORM", "queue": []}
+    result = normalize_read_result("get_queue_state", {"task_name": None}, payload)
+    assert result.qualifies_for_evidence()
 
 
 class _MissingTaskFacade:

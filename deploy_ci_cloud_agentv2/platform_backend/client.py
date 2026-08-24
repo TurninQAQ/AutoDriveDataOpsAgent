@@ -58,7 +58,7 @@ class InProcessPlatformClient:
                     str(args.get("query", "")), int(args.get("top_k", 5))
                 )
             if tool_name == "get_queue_state":
-                return _normalize_queue_state(self.facade.get_queue_state(args.get("task_name")))
+                return normalize_queue_state(self.facade.get_queue_state(args.get("task_name")))
             if tool_name == "diagnose_task":
                 task_name = str(args.get("task_name", ""))
                 try:
@@ -130,7 +130,7 @@ class InProcessPlatformClient:
             raise PlatformBackendError("PRECONDITION_FAILED")
 
 
-def _normalize_queue_state(value: Any) -> Any:
+def normalize_queue_state(value: Any) -> Any:
     """Map the platform queue-file shape to the strict V2 READ contract.
 
     The platform queue store represents an empty global queue as

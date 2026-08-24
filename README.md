@@ -40,7 +40,7 @@ Local correctness / real LangGraph       PASS
 Local provider adapter sandbox           PASS
 Local platform JSON-RPC sandbox          PASS
 Real Qwen Agent Provider                 PASS: qwen-plus-2025-07-28 READ E2E
-Real AutoDrive platform                  PENDING: endpoint not configured
+Real AutoDrive platform                  PENDING: host discovery found only mock/simulated runtime
 Hosted CI (Python 3.11/3.12)             PASS: hosted run #25 (32678791098)
 Hosted Docker build/runtime smoke        PASS: hosted run #25 (32678791098)
 Local Docker build/run                   BLOCKED: Docker Hub registry timeout

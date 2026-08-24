@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from ..config import PlatformConfig
+from ..platform_backend.client import normalize_queue_state
 from ..tools.runtime import ReadFailure
 from ..tools.write_runtime import MutationOutcomeUnknown
 from .errors import MCPPlatformError
@@ -166,7 +167,10 @@ class MCPPlatformFacade:
                 if is_write:
                     raise MutationOutcomeUnknown("platform response has no result after write")
                 raise ReadFailure("PLATFORM_MISSING_RESULT", "platform response has no result")
-            return _unwrap_result(payload["result"])
+            result = _unwrap_result(payload["result"])
+            if tool_name == "get_queue_state":
+                return normalize_queue_state(result)
+            return result
 
     def _post(self, tool_name: str, arguments: dict[str, Any]) -> httpx.Response:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
