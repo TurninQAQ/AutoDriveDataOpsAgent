@@ -339,7 +339,7 @@ response after the requested sandbox WRITE handler returns.
 ```text
 V2_ARCHITECTURE_IMPLEMENTATION_COMPLETE
 V2_DOD_43_OF_43_IMPLEMENTED
-V2_LOCAL_REGRESSION_242_PASS
+V2_LOCAL_REGRESSION_266_PASS
 REAL_LANGGRAPH_1_2_11_E2E_PASS
 REAL_MODEL_PROVIDER_IMPLEMENTED_LOCAL_HTTP_SMOKE_PASS
 REAL_MCP_PLATFORM_ADAPTER_IMPLEMENTED_LOCAL_SANDBOX_PASS
@@ -347,7 +347,7 @@ PLATFORM_HTTP_GATEWAY_LOCAL_READ_PASS
 HOSTED_CI_RUN_12_PASS
 HOSTED_CONTAINER_RUNTIME_SMOKE_PASS
 DOCKER_LOCAL_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
-REAL_PROVIDER_SMOKE_PENDING
+REAL_AGENT_PROVIDER_VALIDATED
 REAL_PLATFORM_CONNECTION_PENDING
 SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 ```
@@ -356,7 +356,7 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 
 | Area | Result | Evidence |
 |---|---|---|
-| Real Qwen chat/Agent provider | BLOCKED_EXTERNAL | One production `qwen-plus` request reached DashScope and returned `AllocationQuota.FreeTierOnly`; no parser or safety boundary was loosened |
+| Real Qwen chat/Agent provider | PASS | 2026-08-24 production `qwen-plus-2025-07-28` request(s) reached shared Beijing DashScope; clean single READ and combined GPU/queue/knowledge LangGraph READ E2E passed through DecisionIngress, V2 gateway, evidence, and CompletionGate. Malformed proposals were bounded/rejected; no WRITE was approved or executed |
 | Real Qwen embedding provider | PASS | `qwen3.7-text-embedding` production adapter returned normalized finite 1024-dimensional document and query vectors; canonical runtime dense retrieval and a 443-vector sidecar were exercised |
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
 | Real AutoDrive platform | PENDING | The localhost mock/simulated gateway is available and validated; no non-local/authorized AutoDrive endpoint is configured |
@@ -432,6 +432,53 @@ losing its Top-5 hit. The evidence-based decision is
 `RERANKER_NOT_REQUIRED`; the offline local mode remains the default and Qwen
 is optional. This is external embedding evidence, not Qwen chat-provider or
 non-mock AutoDrive evidence. Production WRITE remained zero.
+
+## 13. Real Qwen Agent Provider and LangGraph READ E2E (2026-08-24)
+
+The validation process loaded the secret file only into its current process and
+did not print, persist, or commit the credential. It used the production
+`QwenProvider`/`HTTPStructuredProvider` configuration below:
+
+```text
+model: qwen-plus-2025-07-28
+endpoint class: shared Beijing DashScope OpenAI-compatible
+platform endpoint: http://127.0.0.1:8765/mcp
+gateway backend: in_process
+platform stage: mock
+GPU runtime: simulated
+RAG mode: local (offline)
+```
+
+Readiness passed with provider secret present, platform configured, sealed
+catalog, stable catalog hash, and writable SQLite. A clean single-read run
+completed:
+
+```text
+QwenProvider
+→ SINGLE_TOOL_CALL(get_gpu_pool)
+→ V2 DecisionIngress
+→ HTTP JSON-RPC gateway
+→ in-process platform READ
+→ GPU_POOL evidence
+→ FINAL_CANDIDATE
+→ CompletionGate PASS
+```
+
+The combined read-only run naturally produced `READ_TOOL_BATCH` decisions for
+`get_gpu_pool`, `get_queue_state`, and `search_knowledge`. All three READ
+observations normalized successfully, all three evidence kinds were current,
+and the final candidate passed CompletionGate. The accepted batch path uses
+`ReadToolRuntime`'s bounded `asyncio.gather` execution; no WRITE proposal was
+approved and no mutation event occurred. Queue normalization was corrected at
+the V2 platform boundary so the canonical empty queue (`active: null`) is
+represented as a valid platform-scoped empty queue rather than a malformed
+numeric count.
+
+The bounded model validation also exercised queue-only and knowledge-only
+READ scenarios successfully. Some intermediate real model proposals contained
+invalid GoalDescriptor field shapes and were rejected by the existing typed
+boundary; retries remained bounded and did not bypass DecisionIngress or
+CompletionGate. No platform or production WRITE was performed.
 
 ## 12. Exact chunk evaluator maintenance correction (2026-08-24)
 

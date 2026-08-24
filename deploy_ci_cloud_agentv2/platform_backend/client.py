@@ -58,7 +58,7 @@ class InProcessPlatformClient:
                     str(args.get("query", "")), int(args.get("top_k", 5))
                 )
             if tool_name == "get_queue_state":
-                return self.facade.get_queue_state(args.get("task_name"))
+                return _normalize_queue_state(self.facade.get_queue_state(args.get("task_name")))
             if tool_name == "diagnose_task":
                 task_name = str(args.get("task_name", ""))
                 try:
@@ -128,3 +128,48 @@ class InProcessPlatformClient:
             raise PlatformBackendError("PRECONDITION_FAILED") from exc
         if current.fingerprint != fingerprint:
             raise PlatformBackendError("PRECONDITION_FAILED")
+
+
+def _normalize_queue_state(value: Any) -> Any:
+    """Map the platform queue-file shape to the strict V2 READ contract.
+
+    The platform queue store represents an empty global queue as
+    ``active=None`` and an active item as an object under ``active``.  The V2
+    result contract represents global queue state as a platform-scoped queue
+    collection; its ``active`` field is reserved for numeric aggregate counts.
+    Keep this conversion at the platform boundary so strict result parsing
+    remains fail-closed for malformed external payloads.
+    """
+    if not isinstance(value, Mapping):
+        return value
+    if "task_name" in value or "position" in value:
+        return value
+    active = value.get("active")
+    queue = value.get("queue")
+    if active is not None and not isinstance(active, Mapping):
+        return value
+    if queue is not None and not isinstance(queue, list):
+        return value
+
+    entries: list[dict[str, Any]] = []
+    if isinstance(active, Mapping):
+        entry = dict(active)
+        entry["position"] = 0
+        entry["state"] = str(entry.get("state") or entry.get("status") or "ACTIVE").upper()
+        entries.append(entry)
+    for index, item in enumerate(queue or [], start=1):
+        if not isinstance(item, Mapping):
+            return value
+        entry = dict(item)
+        entry.setdefault("position", index)
+        if "state" not in entry and "status" in entry:
+            entry["state"] = entry["status"]
+        if isinstance(entry.get("state"), str):
+            entry["state"] = entry["state"].upper()
+        entries.append(entry)
+
+    normalized = dict(value)
+    normalized.pop("active", None)
+    normalized["scope"] = "PLATFORM"
+    normalized["queue"] = entries
+    return normalized

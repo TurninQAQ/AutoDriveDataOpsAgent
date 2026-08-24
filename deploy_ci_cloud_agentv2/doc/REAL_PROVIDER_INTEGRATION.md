@@ -23,8 +23,30 @@ MockTransport only; no paid model call is part of the regression suite.
 
 The production endpoint is configured by `AUTODRIVE_PROVIDER_ENDPOINT` and the
 secret is supplied through the environment variable named by
-`AUTODRIVE_PROVIDER_API_KEY_ENV` (normally `DASHSCOPE_API_KEY`). The current
-review environment has no non-empty provider key, so no real Qwen/DashScope
-request was sent. The result is **PENDING**, not PASS. The local adapter suite
-independently covers valid structured output, malformed output, timeout, 429,
-5xx, network failure, and bounded typed failure behavior.
+`AUTODRIVE_PROVIDER_API_KEY_ENV` (normally `DASHSCOPE_API_KEY`). On 2026-08-24
+the real validation process loaded the existing secret file only into its
+process environment and used:
+
+```text
+provider: qwen
+model: qwen-plus-2025-07-28
+endpoint class: shared Beijing DashScope OpenAI-compatible
+platform: localhost V2 in-process mock/simulated gateway
+```
+
+The production `QwenProvider` sent real requests to Bailian, parsed structured
+AgentDecision proposals, and the Runtime/DecisionIngress boundary accepted
+valid READ proposals. A clean single-READ run completed
+`SINGLE_TOOL_CALL(get_gpu_pool) -> evidence -> FINAL_CANDIDATE -> CompletionGate`.
+A combined run completed two `READ_TOOL_BATCH` decisions covering
+`get_gpu_pool`, `get_queue_state`, and `search_knowledge`, followed by a
+CompletionGate-approved final candidate. Queue results were normalized at the
+V2 platform boundary from the canonical queue-file shape (`active: null` or an
+active object) into the strict platform queue result contract.
+
+The model emitted some malformed proposals during bounded recovery. They were
+rejected by the existing typed Provider/DecisionIngress path; no parser bypass,
+WRITE approval, or mutation occurred. The prompt was tightened only to state
+the already-required initial GoalDescriptor and exact goal field rules. The
+local adapter suite independently covers valid structured output, malformed
+output, timeout, 429, 5xx, network failure, and bounded typed failure behavior.

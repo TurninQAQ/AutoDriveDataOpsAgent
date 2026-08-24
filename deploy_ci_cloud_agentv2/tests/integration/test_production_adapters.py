@@ -64,6 +64,21 @@ def _minimal_provider_context():
     )
 
 
+def test_provider_prompt_requires_initial_goal_descriptor():
+    provider = HTTPStructuredProvider(_provider_config(max_retries=0))
+    request = provider._build_request(_minimal_provider_context())
+    system = request.messages[0]["content"]
+    user = request.messages[1]["content"]
+
+    assert "proposed_goal_descriptor is REQUIRED on the first tool or final decision" in system
+    assert '"required_when": "runtime_structured_context.goal_descriptor is null"' in user
+    assert '"descriptor_version": 1' in user
+    assert '"goals"' in user
+    assert '"call_id": "call_1"' in user
+    assert '"INSPECT_GPU": ["goal_id", "kind"]' in user
+    assert "never omit call_id or use null" in system
+
+
 def test_structured_provider_drives_real_graph_with_local_http_transport(monkeypatch):
     monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
     responses = [
