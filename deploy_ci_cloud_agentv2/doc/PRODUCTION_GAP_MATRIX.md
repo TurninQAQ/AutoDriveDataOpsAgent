@@ -12,7 +12,7 @@ The complete 43-item V2 requirement mapping is maintained in
 |---|---|---|---|
 | Agent authority | One visible Agent loop; Runtime validates decisions | None in the authority model | Real LangGraph graph tests |
 | LangGraph | Real `StateGraph`/`interrupt()` source; offline tests had a compatibility harness | Real `langgraph==1.2.11` checkpointer serialization and interrupt/resume needed validation | Pinned runtime environment; marked real-runtime tests pass |
-| Provider | Deterministic and scripted offline providers | Structured HTTP/Qwen adapter, timeout, retry, rate-limit handling, auth isolation, telemetry | Real Bailian `qwen-plus-2025-07-28` request, structured DecisionIngress acceptance, single READ and combined READ-only LangGraph E2E pass; malformed proposals remain bounded/rejected; local fake HTTP provider tests and malformed/429 coverage pass |
+| Provider | Deterministic and scripted offline providers | Structured HTTP/Qwen adapter, timeout, retry, rate-limit handling, auth isolation, telemetry | Historical real Bailian `qwen-plus-2025-07-28` request, structured DecisionIngress acceptance, single READ and combined READ-only LangGraph E2E pass; malformed proposals remain bounded/rejected; latest clean-restart revalidation returned schema-invalid proposals and remained blocked without weakening ingress; local fake HTTP provider tests and malformed/429 coverage pass |
 | RAG embedding | Offline BM25 + feature-hashing HybridRetriever | Existing dense providers/index were not constructed by the canonical platform runtime | `PLATFORM_RAG_EMBED_PROVIDER` factory now injects local/Qwen/Gemini selection into `KnowledgeService`; fake-provider/index compatibility tests pass; real Qwen embedding smoke, 443-vector sidecar reuse, and canonical 30-case A/B pass. Local Top-5=`0.8667`, Qwen Top-5=`0.8667`; Qwen MRR=`0.7722` vs local=`0.7417`; no Top-5 regressions. Real Qwen chat/Agent READ E2E is separately validated with `qwen-plus-2025-07-28`. |
 | Platform | In-memory READ/WRITE facades | V2-owned platform execution layer plus custom JSON-RPC-over-HTTP transport | V2 in-process platform backend is packaged under `platform_backend`; localhost 5/5 READ, real-Qwen Agent READ E2E for GPU/queue/knowledge, queue-file-to-V2 normalization, task-state/priority normalization, missing-task normalization, approval-bound precondition forwarding, rejected WRITE, approved reversible WRITE, approval replay, TOCTOU, uncertain response/reconciliation, and approved cleanup pass in mock/simulated sandbox; production WRITE remains 0 |
 | Non-mock AutoDrive staging | No non-mock endpoint is configured | Explicitly classified non-production AutoDrive endpoint and disposable namespace | Host discovery found Airflow 3.2.0 and a stdio MCP launcher, but all running platform processes explicitly use `PLATFORM_STAGE_RUNTIME=mock` and `PLATFORM_GPU_RUNTIME=simulated`; non-mock READ/WRITE remains `UNVERIFIED_EXTERNAL` |
@@ -22,8 +22,29 @@ The complete 43-item V2 requirement mapping is maintained in
 | Host API | Python `invoke`/`resume`/`reconcile` | Operator-facing CLI, pending approval inspection, health/readiness | CLI health/readiness smoke pass |
 | Configuration | Hard-coded test defaults accepted by reference tests | Strict typed environment/JSON configuration without secrets in state/context/logs | Config validation tests and `.env.example` |
 | Observability | Audit events carry provenance | Provider-safe telemetry and correlated production logs | Redaction/telemetry tests |
-| CI | Local regression report | Pinned real dependency CI, shim detection, wheel/import/static audit | Hosted run #25 (`32678791098`) passed Python 3.11/3.12, wheel/import, compile, real-LangGraph, and static checks |
-| Container/deployment | No production image | Non-root image, volumes, single-instance SQLite deployment contract | Hosted run #25 (`32678791098`) passed image build, non-root identity, health, no-secret readiness, and same-volume SQLite smoke; local daemon registry timeout still blocks local build |
+| CI | Local regression report | Pinned real dependency CI, shim detection, wheel/import/static audit | Hosted run #27 (`32680483362`) passed Python 3.11/3.12, wheel/import, compile, real-LangGraph, and static checks |
+| Container/deployment | No production image | Non-root image, volumes, single-instance SQLite deployment contract | Hosted run #27 (`32680483362`) passed image build, non-root identity, health, no-secret readiness, and same-volume SQLite smoke; local daemon registry timeout still blocks local build |
+
+## Single-node simulated release scope
+
+The product target for this release is the validated single-node simulated
+deployment. The stage and GPU behavior are intentionally simulated while the
+Agent, Qwen Provider, LangGraph Runtime, gateway, platform execution layer,
+RAG, SQLite/PostgreSQL backing services, and safety transactions remain real.
+
+```text
+NON_MOCK_AUTODRIVE=OUT_OF_SCOPE
+PHYSICAL_MULTI_GPU=OUT_OF_SCOPE
+MULTI_NODE_CLUSTER=OUT_OF_SCOPE
+```
+
+Absence of a non-mock AutoDrive endpoint is therefore not a release blocker.
+The release boundary is `PLATFORM_STAGE_RUNTIME=mock`,
+`PLATFORM_GPU_RUNTIME=simulated`, and
+`AUTODRIVE_GATEWAY_BACKEND=in_process`. A fresh clean-restart model smoke that
+produces a schema-invalid Qwen proposal remains a separate external Provider
+revalidation item; strict DecisionIngress rejection is the expected safety
+behavior and is not repaired by weakening the parser.
 
 The V2 package includes a localhost-only HTTP bridge at `127.0.0.1:8765/mcp`.
 It can either start the configured canonical stdio MCP command or use the

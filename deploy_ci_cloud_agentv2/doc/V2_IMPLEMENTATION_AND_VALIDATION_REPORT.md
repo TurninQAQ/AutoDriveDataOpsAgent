@@ -240,7 +240,7 @@ production host/configuration unit tests:
 CLI health/readiness:
 PASS
 
-hosted GitHub Actions run #25 (`32678791098`, `3867c39`):
+hosted GitHub Actions run #27 (`32680483362`, `1682a17`):
 PASS; Python 3.11 and 3.12 matrix jobs, real-LangGraph checks, compile,
 wheel/import, and static architecture checks passed.
 
@@ -348,8 +348,10 @@ HOSTED_CI_RUN_12_PASS
 HOSTED_CONTAINER_RUNTIME_SMOKE_PASS
 DOCKER_LOCAL_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
 REAL_AGENT_PROVIDER_VALIDATED
-REAL_PLATFORM_CONNECTION_PENDING
-SANDBOX_WRITE_EXTERNAL_E2E_PENDING
+NON_MOCK_AUTODRIVE_OUT_OF_SCOPE
+SINGLE_NODE_SIMULATED_PLATFORM_VALIDATED
+REAL_QWEN_CLEAN_RESTART_REVALIDATION_BLOCKED_EXTERNAL
+RELEASE_READY_NOT_CLAIMED
 ```
 
 ## 9. External smoke closure status
@@ -359,12 +361,12 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Real Qwen chat/Agent provider | PASS | 2026-08-24 production `qwen-plus-2025-07-28` request(s) reached shared Beijing DashScope; clean single READ and combined GPU/queue/knowledge LangGraph READ E2E passed through DecisionIngress, V2 gateway, evidence, and CompletionGate. Malformed proposals were bounded/rejected; no WRITE was approved or executed |
 | Real Qwen embedding provider | PASS | `qwen3.7-text-embedding` production adapter returned normalized finite 1024-dimensional document and query vectors; canonical runtime dense retrieval and a 443-vector sidecar were exercised |
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
-| Real AutoDrive platform | UNVERIFIED_EXTERNAL | Host discovery found only a mock/simulated AutoDrive runtime; no explicit non-mock staging endpoint, disposable namespace, or authorized non-local endpoint is configured |
+| Real AutoDrive platform | OUT_OF_SCOPE | The intended release target is the localhost V2 in-process mock/simulated platform; non-mock AutoDrive and physical multi-GPU infrastructure are outside this product scope |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
 | Local platform sandbox | PASS | Actual `MCPPlatformFacade → HTTP gateway → in-process backend` E2E: 5/5 READ, protected create, reject=0, approved priority=1, approval replay=0, TOCTOU=0, mock post-dispatch response loss=`OUTCOME_UNKNOWN`, READ-only effect-confirming reconciliation, old approval replay=0, restore, and approved cleanup. No task remained. |
-| Docker hosted build/runtime | PASS | Hosted run #25 (`32678791098`) built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
+| Docker hosted build/runtime | PASS | Hosted run #27 (`32680483362`) built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
-| Hosted CI run | PASS | Hosted run #25 (`32678791098`) passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
+| Hosted CI run | PASS | Hosted run #27 (`32680483362`) passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
 
 No production platform request or production WRITE was performed during this
 validation. The later real Qwen embedding evidence below is separate from the
@@ -490,30 +492,67 @@ cover matching and wrong index/source/section rejection. The canonical dataset
 hash and all 30-case local/Qwen metrics remained unchanged, so this correction
 does not alter the frozen retrieval evidence.
 
-## 13. Non-mock AutoDrive discovery (2026-08-24)
+## 14. Final single-node simulated deployment closure (2026-08-24)
 
-The host was inspected before any platform mutation. The running platform
-topology was:
-
-| Component | Endpoint/process | Classification | Evidence |
-|---|---|---|---|
-| Airflow REST API | `0.0.0.0:8080` | `MOCK/SIMULATED` platform environment | HTTP 200 on `/api/v2/monitor/health`; version `3.2.0`; metadatabase, scheduler, DAG processor, and triggerer healthy |
-| Airflow execution API | `127.0.0.1:8081` | `MOCK/SIMULATED` platform environment | Listening process; not a V2 MCP endpoint |
-| Canonical stdio MCP launcher | `/home/ubuntu/project/autodrive_dataops_runtime/bin/mcp-server` | `MOCK/SIMULATED` | Five read-only `tools/call` probes passed through a temporary V2 transport bridge; runtime config explicitly sets `PLATFORM_STAGE_RUNTIME=mock` and `PLATFORM_GPU_RUNTIME=simulated` |
-| V2 in-process gateway | `127.0.0.1:8765/mcp` | `MOCK/SIMULATED` | Running V2 gateway process with the same explicit runtime flags |
-
-The running Airflow processes have a deleted working directory under the old
-`deploy_ci_cloud_agent` tree; that is a legacy process boundary, not a second
-V2 source tree. No Docker container, systemd AutoDrive service, explicit
-staging namespace, authorized non-mock endpoint, or disposable staging target
-was found. The Airflow REST API was not treated as a V2 MCP endpoint.
-
-Consequently no non-mock Agent READ E2E or protected non-mock WRITE was
-executed. The safety gates prohibit WRITE because the environment is not an
-explicit disposable staging target. Production mutations remained zero.
+The release target is explicitly:
 
 ```text
-NON_MOCK_AUTODRIVE_READ=UNVERIFIED_EXTERNAL
-NON_MOCK_WRITE=NOT_EXECUTED
-PRODUCTION_WRITE=0
+PLATFORM_STAGE_RUNTIME=mock
+PLATFORM_GPU_RUNTIME=simulated
+AUTODRIVE_GATEWAY_BACKEND=in_process
+AUTODRIVE_PLATFORM_ENDPOINT=http://127.0.0.1:8765/mcp
+AUTODRIVE_RAG_EMBED_PROVIDER=local (default)
 ```
+
+Non-mock AutoDrive, physical multi-GPU hardware, and a multi-node cluster are
+`OUT_OF_SCOPE`, not unresolved release blockers. The external non-secret
+profile and launcher are outside the repository under
+`/home/ubuntu/project/autodrive_dataops_runtimev2/`.
+
+After a controlled stop/start of the backing services and V2 gateway:
+
+```text
+gateway /health: PASS
+CLI health: PASS
+CLI ready with external Qwen secret present: PASS
+Airflow monitor health: PASS
+execution API health: PASS
+PostgreSQL: accepting connections
+deleted legacy cwd references: 0
+port 8766: not listening
+```
+
+The fresh deployment-level simulated platform evidence is:
+
+```text
+5/5 READ: PASS
+submit_task: 1 protected mutation
+rejected priority WRITE: 0 mutation
+approved priority WRITE: 1 mutation
+approval replay: 0 additional mutations
+TOCTOU stale transaction: 0 mutation
+post-dispatch response loss: OUTCOME_UNKNOWN / REQUIRES_RECONCILIATION
+READ-only reconciliation: effect confirmed, 0 mutation
+old approval after reconciliation: blocked, 0 mutation
+priority restoration: 1 fresh protected mutation
+delete cleanup: 1 fresh protected mutation
+final task state: NOT_FOUND
+production mutations: 0
+```
+
+SQLite state remained durable across the gateway/fault-injection restart;
+the unknown-outcome checkpoint was loaded by a new Runtime context and
+reconciled without replay. The wheel built as
+`autodrive_dataops_agent_v2-2.0.0`, and the installed package includes the
+V2-owned platform knowledge/evaluation assets.
+
+The earlier real Qwen Agent Provider milestone remains valid historical
+evidence. During this final clean-restart revalidation, the configured
+`qwen-plus-2025-07-28` endpoint returned schema-invalid proposals missing the
+required V2 goal/call fields; strict `DecisionIngress` rejected them and no
+platform call or WRITE occurred. This is recorded as
+`REAL_QWEN_CLEAN_RESTART_REVALIDATION=BLOCKED_EXTERNAL`. The parser and safety
+model were not weakened. Consequently this report records
+`AUTODRIVE_DATAOPS_AGENT_V2_SINGLE_NODE_SIMULATED_PLATFORM_VALIDATED`, but does
+not claim `AUTODRIVE_DATAOPS_AGENT_V2_RELEASE_READY` until a fresh valid Qwen
+clean-restart E2E is observed.

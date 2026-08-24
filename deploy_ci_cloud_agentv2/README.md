@@ -74,6 +74,12 @@ RAG/knowledge, observability, mutation mechanics, stage scripts, and DAG
 templates. The previous project's semantic Agent/planning/evaluation layers
 are intentionally not imported into V2.
 
+The intended release profile is the single-node simulated deployment described
+in `doc/SINGLE_NODE_SIMULATED_DEPLOYMENT.md`: `PLATFORM_STAGE_RUNTIME=mock`,
+`PLATFORM_GPU_RUNTIME=simulated`, and the V2-owned in-process backend. A
+non-mock AutoDrive cluster and physical multi-GPU validation are explicitly
+out of scope for this product profile.
+
 For the mock/simulated sandbox only, setting
 `AUTODRIVE_PLATFORM_SUBMIT_NO_TRIGGER=1` makes `submit_task` create the task
 configuration and DAG without starting a scheduler run. The normal trigger

@@ -70,27 +70,10 @@ the implemented five READ tools, approval-before-WRITE, exactly-one sandbox
 mutation, post-write verification, connection-drop handling, and
 `OUTCOME_UNKNOWN` for uncertain remote WRITE outcomes.
 
-## Non-mock AutoDrive discovery (2026-08-24)
-
-Host discovery found the following running platform components:
-
-* Airflow 3.2.0 REST API on `0.0.0.0:8080` and a loopback execution API on
-  `127.0.0.1:8081`; the read-only health endpoint returned HTTP 200 and all
-  reported components were healthy.
-* The running scheduler, DAG processor, triggerer, task-submit scheduler, and
-  V2 gateway processes all explicitly carried
-  `PLATFORM_STAGE_RUNTIME=mock` and `PLATFORM_GPU_RUNTIME=simulated`.
-* A temporary read-only validation bridge at `127.0.0.1:8766/mcp` successfully
-  forwarded the existing stdio `mcp-server` to the five V2 READ tools. This
-  evidence is still mock/simulated runtime evidence, not non-mock AutoDrive
-  evidence.
-
-No explicit staging namespace, authorized non-mock endpoint, disposable staging
-target, or production/staging boundary was found. Airflow REST availability is
-not treated as a V2 MCP endpoint. Therefore:
-
-```text
-NON_MOCK_AUTODRIVE_READ=UNVERIFIED_EXTERNAL
-NON_MOCK_WRITE=NOT_EXECUTED
-PRODUCTION_WRITE=0
-```
+The product release profile is the localhost single-node simulated platform:
+`PLATFORM_STAGE_RUNTIME=mock`, `PLATFORM_GPU_RUNTIME=simulated`, and
+`AUTODRIVE_GATEWAY_BACKEND=in_process`. Non-mock AutoDrive, physical
+multi-GPU hardware, and a multi-node cluster are explicitly `OUT_OF_SCOPE`.
+The final clean-restart smoke used one canonical process on port `8765`; port
+`8766` was not listening and no process retained a deleted legacy working
+directory.

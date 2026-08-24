@@ -29,9 +29,10 @@ Real LangGraph 1.2.11 tests run only when that package is installed; in a
 shim-only environment those tests are skipped and reported as skipped.
 
 The structured HTTP provider and the custom AutoDrive JSON-RPC platform
-gateway are implemented, but real external provider/platform smoke tests and
-production deployment remain explicit operational steps. First WRITE testing
-must use a sandbox.
+gateway are implemented. The release target is a single-node simulated
+platform; non-mock AutoDrive and physical multi-GPU infrastructure are
+explicitly out of scope. First WRITE testing must use the simulated sandbox
+and the normal V2 approval path.
 
 Current validation status:
 
@@ -40,9 +41,11 @@ Local correctness / real LangGraph       PASS
 Local provider adapter sandbox           PASS
 Local platform JSON-RPC sandbox          PASS
 Real Qwen Agent Provider                 PASS: qwen-plus-2025-07-28 READ E2E
-Real AutoDrive platform                  PENDING: host discovery found only mock/simulated runtime
-Hosted CI (Python 3.11/3.12)             PASS: hosted run #25 (32678791098)
-Hosted Docker build/runtime smoke        PASS: hosted run #25 (32678791098)
+Single-node simulated platform           PASS: mock stage + simulated GPU runtime
+Non-mock AutoDrive / physical GPU        OUT_OF_SCOPE
+Fresh clean-restart Qwen E2E             BLOCKED_EXTERNAL: strict ingress rejected malformed proposals
+Hosted CI (Python 3.11/3.12)             PASS: hosted run #27 (32680483362)
+Hosted Docker build/runtime smoke        PASS: hosted run #27 (32680483362)
 Local Docker build/run                   BLOCKED: Docker Hub registry timeout
 V2 in-process platform backend           PASS: localhost mock/simulated READ smoke
 Missing task contract                    PASS: deterministic NOT_FOUND/exists=false
@@ -65,3 +68,4 @@ See:
 - `deploy_ci_cloud_agentv2/doc/REAL_PROVIDER_INTEGRATION.md`
 - `deploy_ci_cloud_agentv2/doc/MCP_PLATFORM_ADAPTER.md`
 - `deploy_ci_cloud_agentv2/doc/DEPLOYMENT.md`
+- `deploy_ci_cloud_agentv2/doc/SINGLE_NODE_SIMULATED_DEPLOYMENT.md`

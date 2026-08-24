@@ -59,8 +59,31 @@ The following are implementation/local evidence, not external closure:
 |---|---|---|
 | Real Qwen chat/Agent Provider request | `PASS` | 2026-08-24 production `QwenProvider` with `qwen-plus-2025-07-28` completed single READ and combined GPU/queue/knowledge LangGraph E2E through DecisionIngress, V2 gateway, in-process sandbox, evidence, and CompletionGate; production WRITE=0. Some malformed model proposals were bounded/rejected and never bypassed Runtime safety |
 | Real Qwen embedding provider | `PASS` | `qwen3.7-text-embedding` production adapter completed document/query requests with normalized finite 1024-dimensional vectors; the complete 443-vector sidecar was reused for the immutable canonical 30-case V1.1 A/B. Qwen preserved Top-5 recall (`0.8667`), improved MRR (`0.7722` vs local `0.7417`), and had zero Top-5 retrieval regressions; five-case smoke remains separate. |
-| Real AutoDrive endpoint | `UNVERIFIED_EXTERNAL` | 2026-08-24 host discovery found Airflow 3.2.0 REST services and a stdio MCP launcher, but every running platform process explicitly uses `PLATFORM_STAGE_RUNTIME=mock` and `PLATFORM_GPU_RUNTIME=simulated`; no explicit non-mock staging endpoint or disposable namespace was found. Local V2 gateway evidence remains separate |
+| Real AutoDrive endpoint | `OUT_OF_SCOPE` | The defined release target is the single-node mock/simulated platform; no non-mock cluster or physical multi-GPU environment is required |
 | Sandbox platform | PASS | V2-owned in-process mock/simulated gateway: `NOT_FOUND`, 5/5 HTTP-gateway READ, approved disposable create/read/diagnosis, rejected priority WRITE (0 attempts), approved priority WRITE (1 attempt), consumed-approval replay (0), stale transaction (0), mock-only post-dispatch response loss → `OUTCOME_UNKNOWN` → READ-only reconciliation → old-approval replay (0), restore, and approved cleanup. Platform nested priority is normalized strictly before verification. |
-| Docker hosted build/runtime | `PASS` | Hosted run #25 (`32678791098`) built and ran the non-root image, health/readiness, SQLite, and same-volume smoke |
+| Docker hosted build/runtime | `PASS` | Hosted run #27 (`32680483362`) built and ran the non-root image, health/readiness, SQLite, and same-volume smoke |
 | Docker local build/run | `BLOCKED_EXTERNAL` | Local Docker Hub `python:3.12-slim` pull timed out |
-| Hosted CI execution | `PASS` | Hosted run #25 (`32678791098`) passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
+| Hosted CI execution | `PASS` | Hosted run #27 (`32680483362`) passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
+
+## Release scope closure
+
+The release profile is single-node simulated. `PLATFORM_STAGE_RUNTIME=mock`
+and `PLATFORM_GPU_RUNTIME=simulated` are intentional product configuration,
+not placeholders for an unresolved staging dependency. The real components
+validated in this profile are the Qwen Provider, LangGraph, V2 Runtime,
+gateway, platform tool layer, RAG/embedding path, persistence, Airflow and
+PostgreSQL backing services, and the full approval/claim/verification safety
+chain.
+
+```text
+NON_MOCK_AUTODRIVE=OUT_OF_SCOPE
+PHYSICAL_MULTI_GPU=OUT_OF_SCOPE
+MULTI_NODE_CLUSTER=OUT_OF_SCOPE
+```
+
+The clean-restart simulated deployment evidence includes localhost gateway
+health, CLI health/readiness, five canonical READ tools, protected disposable
+task creation and cleanup, rejection, approved reversible WRITE, replay
+blocking, TOCTOU rejection, mock-only post-dispatch response loss,
+`OUTCOME_UNKNOWN`, READ-only reconciliation, SQLite persistence, wheel
+validation, and zero production mutations.
