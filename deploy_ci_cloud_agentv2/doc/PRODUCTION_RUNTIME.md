@@ -32,8 +32,9 @@ writers remain unsupported.
 
 ## Integration status
 
-The frozen Runtime and real LangGraph integration are locally validated. The
-structured provider and custom AutoDrive JSON-RPC adapter have passing local
-fake-transport/sandbox tests. Real provider smoke is pending until a secret is
-injected; real platform smoke is pending until an endpoint is supplied. No
-production WRITE is performed by the validation suite.
+The frozen Runtime, real LangGraph integration, strict Qwen Provider, custom
+JSON-RPC gateway, and mock/simulated platform profile are validated. The
+single-node release uses the real Qwen model and real V2 safety/runtime while
+the stage and GPU behavior are intentionally simulated. Non-mock AutoDrive and
+physical multi-GPU validation are outside this product scope. No production
+WRITE is performed by the validation suite.

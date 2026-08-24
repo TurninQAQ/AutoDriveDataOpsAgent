@@ -22,7 +22,7 @@ The complete 43-item V2 requirement mapping is maintained in
 | Host API | Python `invoke`/`resume`/`reconcile` | Operator-facing CLI, pending approval inspection, health/readiness | CLI health/readiness smoke pass |
 | Configuration | Hard-coded test defaults accepted by reference tests | Strict typed environment/JSON configuration without secrets in state/context/logs | Config validation tests and `.env.example` |
 | Observability | Audit events carry provenance | Provider-safe telemetry and correlated production logs | Redaction/telemetry tests |
-| CI | Local regression report | Pinned real dependency CI, shim detection, wheel/import/static audit | Hosted run #27 (`32680483362`) passed Python 3.11/3.12, wheel/import, compile, real-LangGraph, and static checks |
+| CI | Local regression report | Pinned real dependency CI, shim detection, wheel/import/static audit | Hosted run #30 (`32693072766`) passed Python 3.11/3.12, wheel/import, compile, real-LangGraph, and static checks |
 | Container/deployment | No production image | Non-root image, volumes, single-instance SQLite deployment contract | Hosted run #27 (`32680483362`) passed image build, non-root identity, health, no-secret readiness, and same-volume SQLite smoke; local daemon registry timeout still blocks local build |
 
 ## Single-node simulated release scope
@@ -41,10 +41,9 @@ MULTI_NODE_CLUSTER=OUT_OF_SCOPE
 Absence of a non-mock AutoDrive endpoint is therefore not a release blocker.
 The release boundary is `PLATFORM_STAGE_RUNTIME=mock`,
 `PLATFORM_GPU_RUNTIME=simulated`, and
-`AUTODRIVE_GATEWAY_BACKEND=in_process`. A fresh clean-restart model smoke that
-produces a schema-invalid Qwen proposal remains a separate external Provider
-revalidation item; strict DecisionIngress rejection is the expected safety
-behavior and is not repaired by weakening the parser.
+`AUTODRIVE_GATEWAY_BACKEND=in_process`. The fresh strict-schema clean-restart
+Qwen smoke and bounded five-run reliability gate passed; strict DecisionIngress
+remains the safety boundary and was not weakened.
 
 The V2 package includes a localhost-only HTTP bridge at `127.0.0.1:8765/mcp`.
 It can either start the configured canonical stdio MCP command or use the

@@ -25,10 +25,11 @@ valid sealed catalog, writable SQLite state, configured endpoints, and the
 referenced provider secret to be present. Secrets are supplied at runtime and
 are never baked into the image, prompts, audit events, or logs.
 
-Real provider and platform connectivity must be validated separately from
-local fake-transport tests. The platform adapter in this repository is a
+The v2.0.0 release profile validates the real Qwen Provider against the
+single-node simulated platform. The platform adapter in this repository is a
 custom AutoDrive JSON-RPC gateway, not a claim of standards-compliant MCP.
-The current local validation environment has no configured external provider
-secret or AutoDrive endpoint. Docker build was attempted with the installed
-daemon but was blocked resolving `docker.io/library/python:3.12-slim`; therefore
-external provider, external platform, and Docker are not reported as PASS.
+The non-secret deployment profile and launcher are outside the repository;
+the provider secret is injected only into the service process. Docker is not
+the canonical deployment mechanism for this release; use the documented
+single-node launcher and runtime installation. Non-mock AutoDrive and
+physical multi-GPU validation are intentionally out of scope.

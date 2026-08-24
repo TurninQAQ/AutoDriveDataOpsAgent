@@ -584,3 +584,35 @@ p95 31.0s), zero schema-invalid decisions, zero regeneration, zero Provider
 errors, and zero WRITE. `enable_thinking=false` is now explicit for this
 strict-schema Agent path; no parser, DecisionIngress, or safety relaxation was
 made.
+
+## 20. v2.0.0 release management closure (2026-08-24)
+
+The release profile is the single-node simulated deployment:
+
+```text
+PLATFORM_STAGE_RUNTIME=mock
+PLATFORM_GPU_RUNTIME=simulated
+AUTODRIVE_GATEWAY_BACKEND=in_process
+AUTODRIVE_PROVIDER=qwen
+AUTODRIVE_MODEL=qwen3.7-plus-2026-05-26
+AUTODRIVE_PROVIDER_STRUCTURED_MODE=json_schema
+AUTODRIVE_PROVIDER_THINKING_MODE=auto
+PLATFORM_RAG_EMBED_PROVIDER=local
+```
+
+The canonical V2 gateway runs on `127.0.0.1:8765`; no `8766` bridge or
+deleted `deploy_ci_cloud_agent` working directory remains in the process
+topology. Airflow and PostgreSQL backing services were healthy after clean
+restart. The mode-600 provider credential remains outside the repository and
+is injected only into the current service process.
+
+The release operations closure includes an online SQLite backup and isolated
+restore drill. The validated backup contained the `approval_records`,
+`checkpoints`, `events`, and `execution_claims` tables; the live database was
+not overwritten. Operations, incident, upgrade, rollback, retention, and
+scope boundaries are documented in `OPERATIONS_RUNBOOK.md`; release contents
+and intentional limitations are documented in `RELEASE_NOTES_V2.0.0.md`.
+
+The release target does not claim physical multi-GPU, a multi-node cluster,
+or non-mock AutoDrive. Those are explicitly `OUT_OF_SCOPE`, not unresolved
+release blockers.
