@@ -240,7 +240,7 @@ production host/configuration unit tests:
 CLI health/readiness:
 PASS
 
-hosted GitHub Actions run #21 (`32656130224`, `d9f06bf`):
+hosted GitHub Actions run #25 (`32678791098`, `3867c39`):
 PASS; Python 3.11 and 3.12 matrix jobs, real-LangGraph checks, compile,
 wheel/import, and static architecture checks passed.
 
@@ -362,9 +362,9 @@ SANDBOX_WRITE_EXTERNAL_E2E_PENDING
 | Real AutoDrive platform | PENDING | The localhost mock/simulated gateway is available and validated; no non-local/authorized AutoDrive endpoint is configured |
 | Local provider adapter | PASS | 12 collected fake-transport cases, including malformed/timeout/429/5xx/network cases |
 | Local platform sandbox | PASS | Actual `MCPPlatformFacade → HTTP gateway → in-process backend` E2E: 5/5 READ, protected create, reject=0, approved priority=1, approval replay=0, TOCTOU=0, mock post-dispatch response loss=`OUTCOME_UNKNOWN`, READ-only effect-confirming reconciliation, old approval replay=0, restore, and approved cleanup. No task remained. |
-| Docker hosted build/runtime | PASS | Hosted run #21 (`32656130224`) built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
+| Docker hosted build/runtime | PASS | Hosted run #25 (`32678791098`) built the image and passed non-root, health, no-secret readiness, SQLite, and same-volume smoke |
 | Docker local build/run | BLOCKED | Local daemon `python:3.12-slim` pull timed out at Docker Hub |
-| Hosted CI run | PASS | Hosted run #21 (`32656130224`) passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
+| Hosted CI run | PASS | Hosted run #25 (`32678791098`) passed Python 3.11/3.12, real-LangGraph, compile, wheel/import, container, and static jobs |
 
 No production platform request or production WRITE was performed during this
 validation. The later real Qwen embedding evidence below is separate from the

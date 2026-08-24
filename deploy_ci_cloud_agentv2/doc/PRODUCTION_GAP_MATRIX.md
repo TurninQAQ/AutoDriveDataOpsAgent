@@ -21,8 +21,8 @@ The complete 43-item V2 requirement mapping is maintained in
 | Host API | Python `invoke`/`resume`/`reconcile` | Operator-facing CLI, pending approval inspection, health/readiness | CLI health/readiness smoke pass |
 | Configuration | Hard-coded test defaults accepted by reference tests | Strict typed environment/JSON configuration without secrets in state/context/logs | Config validation tests and `.env.example` |
 | Observability | Audit events carry provenance | Provider-safe telemetry and correlated production logs | Redaction/telemetry tests |
-| CI | Local regression report | Pinned real dependency CI, shim detection, wheel/import/static audit | Hosted run #21 (`32656130224`) passed Python 3.11/3.12, wheel/import, compile, real-LangGraph, and static checks |
-| Container/deployment | No production image | Non-root image, volumes, single-instance SQLite deployment contract | Hosted run #21 (`32656130224`) passed image build, non-root identity, health, no-secret readiness, and same-volume SQLite smoke; local daemon registry timeout still blocks local build |
+| CI | Local regression report | Pinned real dependency CI, shim detection, wheel/import/static audit | Hosted run #25 (`32678791098`) passed Python 3.11/3.12, wheel/import, compile, real-LangGraph, and static checks |
+| Container/deployment | No production image | Non-root image, volumes, single-instance SQLite deployment contract | Hosted run #25 (`32678791098`) passed image build, non-root identity, health, no-secret readiness, and same-volume SQLite smoke; local daemon registry timeout still blocks local build |
 
 The V2 package includes a localhost-only HTTP bridge at `127.0.0.1:8765/mcp`.
 It can either start the configured canonical stdio MCP command or use the

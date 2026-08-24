@@ -41,8 +41,8 @@ Local provider adapter sandbox           PASS
 Local platform JSON-RPC sandbox          PASS
 Real Qwen Agent Provider                 PASS: qwen-plus-2025-07-28 READ E2E
 Real AutoDrive platform                  PENDING: endpoint not configured
-Hosted CI (Python 3.11/3.12)             PASS: hosted run #21 (32656130224)
-Hosted Docker build/runtime smoke        PASS: hosted run #21 (32656130224)
+Hosted CI (Python 3.11/3.12)             PASS: hosted run #25 (32678791098)
+Hosted Docker build/runtime smoke        PASS: hosted run #25 (32678791098)
 Local Docker build/run                   BLOCKED: Docker Hub registry timeout
 V2 in-process platform backend           PASS: localhost mock/simulated READ smoke
 Missing task contract                    PASS: deterministic NOT_FOUND/exists=false
