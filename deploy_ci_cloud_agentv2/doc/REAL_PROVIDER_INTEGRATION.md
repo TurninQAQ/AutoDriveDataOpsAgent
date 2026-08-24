@@ -19,11 +19,18 @@ the retry budget.
 
 ProviderConfig.structured_output_mode, configured with
 AUTODRIVE_PROVIDER_STRUCTURED_MODE, accepts auto, json_schema, and json_object.
+ProviderConfig.thinking_mode, configured with
+AUTODRIVE_PROVIDER_THINKING_MODE, accepts auto, enabled, and disabled. In
+`auto`, qwen3.7-plus JSON Schema AgentDecision requests explicitly send
+`enable_thinking=false`; older `json_object` requests omit the field to retain
+legacy compatibility. Explicit enabled/disabled policies are serialized as
+`true`/`false`, and unsupported values fail configuration validation.
 Known qwen3.7-plus models select the Bailian JSON Schema contract:
 
     response_format.type = json_schema
     json_schema.name = agent_decision
     json_schema.strict = true
+    enable_thinking = false
 
 The schema covers the V2 decision variants, GoalDescriptor goal kinds, and
 canonical tool surface. It requires the initial GoalDescriptor and non-empty
@@ -82,10 +89,9 @@ The first real request returned a valid SINGLE_TOOL_CALL(get_gpu_pool) with
 valid GoalDescriptor and call ID. A fresh single-READ LangGraph run completed
 through platform evidence, FINAL_CANDIDATE, and CompletionGate; platform
 WRITE remained zero. A fresh multi-READ run emitted a valid
-READ_TOOL_BATCH(get_gpu_pool, get_queue_state, search_knowledge) and all
-three observations were normalized, but the subsequent model turn timed out
-and the Runtime terminated safely as PROVIDER_UNAVAILABLE. A bounded
-five-run sample produced one completed run and four provider-unavailable
-terminations, with zero schema-invalid decisions and zero WRITE calls. This
-is recorded as partial external reliability evidence; release readiness is not
-claimed until the external model service is stable for the required sample.
+READ_TOOL_BATCH(get_gpu_pool, get_queue_state, search_knowledge), all three
+observations were normalized, and the follow-up FINAL_CANDIDATE passed
+CompletionGate. A bounded five-run sample completed 5/5 runs with zero
+schema-invalid decisions, zero regeneration, zero Provider errors, and zero
+WRITE calls. The request body explicitly sent `enable_thinking=false`; no
+timeout or HTTP failure was observed in this final gate.

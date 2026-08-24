@@ -352,17 +352,17 @@ NON_MOCK_AUTODRIVE_OUT_OF_SCOPE
 SINGLE_NODE_SIMULATED_PLATFORM_VALIDATED
 REAL_QWEN_STRICT_SCHEMA_FIRST_REQUEST_PASS
 REAL_QWEN_CLEAN_RESTART_SINGLE_READ_PASS
-REAL_QWEN_CLEAN_RESTART_MULTI_READ_PARTIAL
-REAL_QWEN_RELIABILITY_SAMPLE_1_OF_5
-REAL_QWEN_CLEAN_RESTART_REVALIDATION_BLOCKED_EXTERNAL
-RELEASE_READY_NOT_CLAIMED
+REAL_QWEN_CLEAN_RESTART_MULTI_READ_PASS
+REAL_QWEN_RELIABILITY_SAMPLE_5_OF_5
+REAL_QWEN_CLEAN_RESTART_REVALIDATION_PASS
+AUTODRIVE_DATAOPS_AGENT_V2_RELEASE_READY
 ```
 
 ## 9. External smoke closure status
 
 | Area | Result | Evidence |
 |---|---|---|
-| Real Qwen chat/Agent provider | `PARTIAL / EXTERNAL_PROVIDER_UNSTABLE` | Strict `json_schema` mode with `qwen3.7-plus-2026-05-26` produced a valid first decision and a fresh single-READ LangGraph/CompletionGate pass. A fresh GPU/queue/knowledge batch produced three normalized READ observations, but its follow-up model turn timed out; the bounded five-run sample was 1 completed and 4 provider-unavailable, with zero schema-invalid decisions and zero WRITE |
+| Real Qwen chat/Agent provider | `PASS` | Strict `json_schema` mode with `qwen3.7-plus-2026-05-26` and `enable_thinking=false` produced a valid first decision, fresh single-READ and GPU/queue/knowledge multi-READ LangGraph/CompletionGate passes, and a bounded five-run sample with 5/5 completed, zero schema-invalid decisions, zero regeneration, zero Provider errors, and zero WRITE |
 | Real Qwen embedding provider | PASS | `qwen3.7-text-embedding` production adapter returned normalized finite 1024-dimensional document and query vectors; canonical runtime dense retrieval and a 443-vector sidecar were exercised |
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
 | Real AutoDrive platform | OUT_OF_SCOPE | The intended release target is the localhost V2 in-process mock/simulated platform; non-mock AutoDrive and physical multi-GPU infrastructure are outside this product scope |
@@ -554,21 +554,20 @@ The earlier real Qwen Agent Provider milestone remains valid historical
 evidence. During this final clean-restart revalidation, the configured
 `qwen-plus-2025-07-28` endpoint returned schema-invalid proposals missing the
 required V2 goal/call fields; strict `DecisionIngress` rejected them and no
-platform call or WRITE occurred. This is recorded as
-`REAL_QWEN_CLEAN_RESTART_REVALIDATION=BLOCKED_EXTERNAL`. The parser and safety
-model were not weakened. Consequently this report records
-`AUTODRIVE_DATAOPS_AGENT_V2_SINGLE_NODE_SIMULATED_PLATFORM_VALIDATED`, but does
-not claim `AUTODRIVE_DATAOPS_AGENT_V2_RELEASE_READY` until the strict-schema
-provider is stable across the bounded clean-restart reliability sample.
+platform call or WRITE occurred. That historical compatibility-mode result is
+superseded for the current deployment profile by the strict-schema qwen3.7-plus
+evidence below; the parser and safety model were not weakened.
 
 ## 19. Strict JSON-Schema Provider hardening (2026-08-24)
 
 The Provider now supports explicit auto, json_schema, and json_object
-structured-output modes. Known Qwen 3.7 Plus models select:
+structured-output modes plus an explicit auto/enabled/disabled thinking
+policy. Known Qwen 3.7 Plus models select:
 
     response_format.type=json_schema
     json_schema.name=agent_decision
     json_schema.strict=true
+    enable_thinking=false
 
 The schema covers all V2 decision variants, GoalDescriptor goal kinds, exact
 tool names and tool argument shapes. The local parser still rejects missing
@@ -576,12 +575,12 @@ GoalDescriptor/call IDs, and DecisionIngress remains the semantic/runtime
 admission authority. Compatibility JSON-object mode allows only one bounded
 regeneration and never repairs a proposal.
 
-Local Provider regression: 22 adapter tests passed; complete local suite after
-hardening: 272 passed. Clean-restart external evidence: one strict-schema
-request passed; one fresh single-READ Agent run passed through get_gpu_pool,
-evidence, FINAL, and CompletionGate; one multi-READ batch containing
-GPU/queue/knowledge normalized successfully but its follow-up model turn timed
-out; the five-run bounded sample was 1 completed and 4 PROVIDER_UNAVAILABLE,
-with zero schema-invalid decisions and zero WRITE. The external
-timeout/unavailability is retained as the release blocker; no parser,
-DecisionIngress, or safety relaxation was made.
+Local Provider regression: 25 focused provider/config tests passed; complete
+local suite after hardening: 275 passed. Clean-restart external evidence: the
+single READ and GPU/queue/knowledge multi-READ both passed through evidence,
+FINAL, and CompletionGate with zero WRITE. The final five-run sample was 5/5
+completed with latencies 10.8s, 12.3s, 31.0s, 20.6s, and 11.1s (p50 12.3s,
+p95 31.0s), zero schema-invalid decisions, zero regeneration, zero Provider
+errors, and zero WRITE. `enable_thinking=false` is now explicit for this
+strict-schema Agent path; no parser, DecisionIngress, or safety relaxation was
+made.

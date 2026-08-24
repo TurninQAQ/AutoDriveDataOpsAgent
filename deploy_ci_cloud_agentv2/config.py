@@ -23,6 +23,7 @@ class ProviderConfig:
     endpoint: str
     api_key_env: str
     structured_output_mode: str = "auto"
+    thinking_mode: str = "auto"
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 60.0
     overall_timeout_seconds: float = 90.0
@@ -36,6 +37,10 @@ class ProviderConfig:
         if self.structured_output_mode not in {"auto", "json_schema", "json_object"}:
             raise ConfigurationError(
                 "provider.structured_output_mode must be auto, json_schema, or json_object"
+            )
+        if self.thinking_mode not in {"auto", "enabled", "disabled"}:
+            raise ConfigurationError(
+                "provider.thinking_mode must be auto, enabled, or disabled"
             )
         _http_endpoint(self.endpoint, "provider.endpoint")
         _positive(self.connect_timeout_seconds, "provider.connect_timeout_seconds")
@@ -153,6 +158,7 @@ class RuntimeConfig:
             endpoint=_env_or(env, "AUTODRIVE_PROVIDER_ENDPOINT", provider_values, "endpoint", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
             api_key_env=_env_or(env, "AUTODRIVE_PROVIDER_API_KEY_ENV", provider_values, "api_key_env", "DASHSCOPE_API_KEY"),
             structured_output_mode=_env_or(env, "AUTODRIVE_PROVIDER_STRUCTURED_MODE", provider_values, "structured_output_mode", "auto"),
+            thinking_mode=_env_or(env, "AUTODRIVE_PROVIDER_THINKING_MODE", provider_values, "thinking_mode", "auto"),
             connect_timeout_seconds=_float_env(env, "AUTODRIVE_PROVIDER_CONNECT_TIMEOUT", provider_values, "connect_timeout_seconds", 5.0),
             read_timeout_seconds=_float_env(env, "AUTODRIVE_PROVIDER_READ_TIMEOUT", provider_values, "read_timeout_seconds", 60.0),
             overall_timeout_seconds=_float_env(env, "AUTODRIVE_PROVIDER_OVERALL_TIMEOUT", provider_values, "overall_timeout_seconds", 90.0),

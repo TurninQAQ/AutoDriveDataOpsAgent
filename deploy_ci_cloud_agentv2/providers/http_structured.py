@@ -171,8 +171,23 @@ class HTTPStructuredProvider(AgentProvider):
             return "json_schema"
         return "json_object"
 
-    @staticmethod
-    def _request_body(request: ProviderRequest, *, mode: str) -> dict[str, Any]:
+    def _thinking_enabled(self, mode: str) -> bool | None:
+        configured = self.config.thinking_mode
+        if configured == "enabled":
+            return True
+        if configured == "disabled":
+            return False
+        if (
+            mode == "json_schema"
+            and self.config.name.lower() == "qwen"
+            and self.config.model.startswith("qwen3.7-plus")
+        ):
+            return False
+        # ``auto`` preserves the legacy json_object request shape for older
+        # models. Operators can explicitly disable or enable thinking.
+        return None
+
+    def _request_body(self, request: ProviderRequest, *, mode: str) -> dict[str, Any]:
         body: dict[str, Any] = {"model": request.model, "messages": list(request.messages), "temperature": 0}
         if mode == "json_schema":
             body["response_format"] = {"type": "json_schema", "json_schema": {
@@ -181,6 +196,9 @@ class HTTPStructuredProvider(AgentProvider):
             }}
         else:
             body["response_format"] = {"type": "json_object"}
+        thinking_enabled = self._thinking_enabled(mode)
+        if thinking_enabled is not None:
+            body["enable_thinking"] = thinking_enabled
         return body
 
     async def _backoff(self, retry_number: int) -> None:

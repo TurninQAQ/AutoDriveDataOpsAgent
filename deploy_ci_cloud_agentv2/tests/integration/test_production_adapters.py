@@ -9,7 +9,7 @@ import pytest
 
 from deploy_ci_cloud_agentv2 import build_system_context, invoke, reconcile, resume
 from deploy_ci_cloud_agentv2.agent.budgets import RuntimeBudgets
-from deploy_ci_cloud_agentv2.config import PlatformConfig, ProviderConfig
+from deploy_ci_cloud_agentv2.config import ConfigurationError, PlatformConfig, ProviderConfig
 from deploy_ci_cloud_agentv2.platform import InMemoryReadFacade, MCPPlatformFacade
 from deploy_ci_cloud_agentv2.providers.http_structured import HTTPStructuredProvider
 from deploy_ci_cloud_agentv2.providers import ScriptedProvider
@@ -100,15 +100,37 @@ def test_qwen_strict_schema_request_contains_canonical_contract():
     assert schema["anyOf"]
     assert "proposed_goal_descriptor" in schema["anyOf"][0]["required"]
     assert "call" in schema["anyOf"][0]["required"]
+    assert body["enable_thinking"] is False
+    assert body["temperature"] == 0
 
 
 def test_legacy_json_object_mode_remains_default_for_old_qwen_model():
     provider = HTTPStructuredProvider(_provider_config(name="qwen", model="qwen-plus-2025-07-28"))
     request = provider._build_request(_minimal_provider_context())
+    body = provider._request_body(request, mode="json_object")
     assert provider._structured_output_mode() == "json_object"
-    assert provider._request_body(request, mode="json_object")["response_format"] == {
+    assert body["response_format"] == {
         "type": "json_object"
     }
+    assert "enable_thinking" not in body
+
+
+@pytest.mark.parametrize(("thinking_mode", "expected"), [("enabled", True), ("disabled", False)])
+def test_explicit_thinking_policy_is_serialized_for_legacy_mode(thinking_mode, expected):
+    provider = HTTPStructuredProvider(
+        _provider_config(
+            name="qwen",
+            model="qwen-plus-2025-07-28",
+            thinking_mode=thinking_mode,
+        )
+    )
+    request = provider._build_request(_minimal_provider_context())
+    assert provider._request_body(request, mode="json_object")["enable_thinking"] is expected
+
+
+def test_unsupported_thinking_policy_fails_closed():
+    with pytest.raises(ConfigurationError, match="thinking_mode"):
+        _provider_config(thinking_mode="sometimes")
 
 
 def test_json_schema_mode_fails_closed_without_regeneration(monkeypatch):
