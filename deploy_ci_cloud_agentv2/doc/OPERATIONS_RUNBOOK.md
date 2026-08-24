@@ -45,10 +45,11 @@ The canonical launcher is:
 ```
 
 It loads the non-secret profile from
-`autodrive_dataops_runtimev2/config/single_node_simulated.env`, changes to
-the V2 source directory, and starts exactly one localhost gateway on port
-`8765`. Port `8766` and the deleted `deploy_ci_cloud_agent` tree are not part
-of this release.
+`autodrive_dataops_runtimev2/config/single_node_simulated.env` and starts the
+V2 package installed in `autodrive_dataops_runtimev2/.venv`. The gateway and
+CLI therefore use the same wheel, with no source-tree import dependency. It
+starts exactly one localhost gateway on port `8765`. Port `8766` and the
+deleted `deploy_ci_cloud_agent` tree are not part of this release.
 
 Airflow/PostgreSQL are backing services supplied by the existing
 `autodrive_dataops_runtime` installation. Agent state is persisted separately

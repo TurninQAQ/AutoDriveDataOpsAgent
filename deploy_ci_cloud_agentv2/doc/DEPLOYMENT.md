@@ -1,11 +1,16 @@
 # Deployment boundary
 
-The repository root is the only supported package build/install path:
+The repository root is the supported package build path. Release deployment
+installs the resulting wheel into the external runtime virtualenv:
 
 ```bash
 python -m build
 python -m pip install dist/autodrive_dataops_agent_v2-2.0.0-py3-none-any.whl
 ```
+
+The canonical single-node launcher starts the installed wheel from
+`/home/ubuntu/project/autodrive_dataops_runtimev2/.venv`; it does not import
+the source checkout at runtime.
 
 Use the `Dockerfile` for a non-root image. Runtime state and logs are mounted
 outside the source tree. The current SQLite safety model is single-instance

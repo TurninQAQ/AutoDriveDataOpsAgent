@@ -88,8 +88,10 @@ Start the one canonical V2 gateway from the external launcher:
 /home/ubuntu/project/autodrive_dataops_runtimev2/bin/start-v2-gateway
 ```
 
-The launcher loads only the non-secret profile, uses the V2 source tree, and
-executes the V2 gateway in `in_process` mode. It binds only to localhost.
+The launcher loads only the non-secret profile and executes the V2 gateway
+from the installed `autodrive_dataops_agent_v2-2.0.0` wheel in the runtime
+virtualenv. Gateway and CLI therefore use the same package, with no
+source-tree import dependency. It binds only to localhost.
 
 Stop the gateway with its service supervisor/process owner, then stop backing
 services with:
