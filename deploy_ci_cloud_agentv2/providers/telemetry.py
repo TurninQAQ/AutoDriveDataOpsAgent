@@ -17,6 +17,7 @@ class ProviderTelemetryEvent:
     retry_count: int
     error_class: str | None = None
     status_code: int | None = None
+    regeneration_count: int = 0
 
 
 class TelemetrySink(Protocol):

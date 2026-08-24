@@ -77,6 +77,126 @@ def test_provider_prompt_requires_initial_goal_descriptor():
     assert '"call_id": "call_1"' in user
     assert '"INSPECT_GPU": ["goal_id", "kind"]' in user
     assert "never omit call_id or use null" in system
+    assert "platform-wide INSPECT_QUEUE" in system
+
+
+def test_qwen_strict_schema_request_contains_canonical_contract():
+    provider = HTTPStructuredProvider(
+        _provider_config(
+            name="qwen",
+            model="qwen3.7-plus-2026-05-26",
+            structured_output_mode="json_schema",
+            max_retries=0,
+        )
+    )
+    request = provider._build_request(_minimal_provider_context())
+    body = provider._request_body(request, mode="json_schema")
+    response_format = body["response_format"]
+
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "agent_decision"
+    assert response_format["json_schema"]["strict"] is True
+    schema = response_format["json_schema"]["schema"]
+    assert schema["anyOf"]
+    assert "proposed_goal_descriptor" in schema["anyOf"][0]["required"]
+    assert "call" in schema["anyOf"][0]["required"]
+
+
+def test_legacy_json_object_mode_remains_default_for_old_qwen_model():
+    provider = HTTPStructuredProvider(_provider_config(name="qwen", model="qwen-plus-2025-07-28"))
+    request = provider._build_request(_minimal_provider_context())
+    assert provider._structured_output_mode() == "json_object"
+    assert provider._request_body(request, mode="json_object")["response_format"] == {
+        "type": "json_object"
+    }
+
+
+def test_json_schema_mode_fails_closed_without_regeneration(monkeypatch):
+    monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _response({
+            "kind": "SINGLE_TOOL_CALL",
+            "proposed_goal_descriptor": {
+                "descriptor_version": 1,
+                "goals": [{"kind": "INSPECT_GPU", "goal_id": "g1"}],
+            },
+            "call": {"call_id": "", "tool_name": "get_gpu_pool", "arguments": {}},
+        })
+
+    provider = HTTPStructuredProvider(
+        _provider_config(
+            name="qwen",
+            model="qwen3.7-plus-2026-05-26",
+            structured_output_mode="json_schema",
+            max_retries=0,
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ProviderResponseInvalid):
+        asyncio.run(provider.generate(_minimal_provider_context()))
+    assert calls == 1
+
+
+def test_json_object_mode_allows_one_bounded_schema_regeneration(monkeypatch):
+    monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
+    calls: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            return _response({
+                "kind": "SINGLE_TOOL_CALL",
+                "proposed_goal_descriptor": {
+                    "descriptor_version": 1,
+                    "goals": [{"kind": "INSPECT_GPU", "goal_id": "g1"}],
+                },
+                "call": {"call_id": "", "tool_name": "get_gpu_pool", "arguments": {}},
+            })
+        return _response({
+            "kind": "SINGLE_TOOL_CALL",
+            "proposed_goal_descriptor": {
+                "descriptor_version": 1,
+                "goals": [{"kind": "INSPECT_GPU", "goal_id": "g1"}],
+            },
+            "call": {"call_id": "read-1", "tool_name": "get_gpu_pool", "arguments": {}},
+        })
+
+    provider = HTTPStructuredProvider(
+        _provider_config(max_retries=0), transport=httpx.MockTransport(handler)
+    )
+    result = asyncio.run(provider.generate(_minimal_provider_context()))
+    assert result.call.call_id == "read-1"
+    assert len(calls) == 2
+    assert calls[1]["messages"][-1]["role"] == "user"
+    assert "failed the V2 AgentDecision schema" in calls[1]["messages"][-1]["content"]
+
+
+def test_json_object_mode_second_schema_failure_is_bounded(monkeypatch):
+    monkeypatch.setenv("AUTODRIVE_TEST_PROVIDER_KEY", "test-only-key")
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _response({
+            "kind": "SINGLE_TOOL_CALL",
+            "proposed_goal_descriptor": {
+                "descriptor_version": 1,
+                "goals": [{"kind": "INSPECT_GPU", "goal_id": "g1"}],
+            },
+            "call": {"call_id": "", "tool_name": "get_gpu_pool", "arguments": {}},
+        })
+
+    provider = HTTPStructuredProvider(
+        _provider_config(max_retries=0), transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(ProviderResponseInvalid):
+        asyncio.run(provider.generate(_minimal_provider_context()))
+    assert calls == 2
 
 
 def test_structured_provider_drives_real_graph_with_local_http_transport(monkeypatch):
@@ -158,7 +278,15 @@ def test_provider_http_429_is_bounded_retry(monkeypatch):
         calls += 1
         if calls == 1:
             return httpx.Response(429, json={"error": "rate limit"}, request=httpx.Request("POST", "https://provider.test"))
-        return _response({"kind": "FINAL_CANDIDATE", "response": "x", "referenced_goal_ids": []})
+        return _response({
+            "kind": "FINAL_CANDIDATE",
+            "proposed_goal_descriptor": {
+                "descriptor_version": 1,
+                "goals": [{"kind": "INSPECT_GPU", "goal_id": "g1"}],
+            },
+            "response": "x",
+            "referenced_goal_ids": [],
+        })
 
     provider = HTTPStructuredProvider(_provider_config(), transport=httpx.MockTransport(handler))
     # Parsing is intentionally reached only after the transport retry.

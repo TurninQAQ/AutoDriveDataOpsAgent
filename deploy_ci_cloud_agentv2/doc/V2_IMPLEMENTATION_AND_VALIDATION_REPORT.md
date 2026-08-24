@@ -350,6 +350,10 @@ DOCKER_LOCAL_BUILD_HOLD_ENVIRONMENT_REGISTRY_TIMEOUT
 REAL_AGENT_PROVIDER_VALIDATED
 NON_MOCK_AUTODRIVE_OUT_OF_SCOPE
 SINGLE_NODE_SIMULATED_PLATFORM_VALIDATED
+REAL_QWEN_STRICT_SCHEMA_FIRST_REQUEST_PASS
+REAL_QWEN_CLEAN_RESTART_SINGLE_READ_PASS
+REAL_QWEN_CLEAN_RESTART_MULTI_READ_PARTIAL
+REAL_QWEN_RELIABILITY_SAMPLE_1_OF_5
 REAL_QWEN_CLEAN_RESTART_REVALIDATION_BLOCKED_EXTERNAL
 RELEASE_READY_NOT_CLAIMED
 ```
@@ -358,7 +362,7 @@ RELEASE_READY_NOT_CLAIMED
 
 | Area | Result | Evidence |
 |---|---|---|
-| Real Qwen chat/Agent provider | PASS | 2026-08-24 production `qwen-plus-2025-07-28` request(s) reached shared Beijing DashScope; clean single READ and combined GPU/queue/knowledge LangGraph READ E2E passed through DecisionIngress, V2 gateway, evidence, and CompletionGate. Malformed proposals were bounded/rejected; no WRITE was approved or executed |
+| Real Qwen chat/Agent provider | `PARTIAL / EXTERNAL_PROVIDER_UNSTABLE` | Strict `json_schema` mode with `qwen3.7-plus-2026-05-26` produced a valid first decision and a fresh single-READ LangGraph/CompletionGate pass. A fresh GPU/queue/knowledge batch produced three normalized READ observations, but its follow-up model turn timed out; the bounded five-run sample was 1 completed and 4 provider-unavailable, with zero schema-invalid decisions and zero WRITE |
 | Real Qwen embedding provider | PASS | `qwen3.7-text-embedding` production adapter returned normalized finite 1024-dimensional document and query vectors; canonical runtime dense retrieval and a 443-vector sidecar were exercised |
 | Platform HTTP bridge | PASS | V2-owned custom gateway at `127.0.0.1:8765/mcp`; `/health`, gateway tests, V2 adapter READ calls, narrow `NOT_FOUND` mapping, and approval-bound precondition forwarding passed |
 | Real AutoDrive platform | OUT_OF_SCOPE | The intended release target is the localhost V2 in-process mock/simulated platform; non-mock AutoDrive and physical multi-GPU infrastructure are outside this product scope |
@@ -554,5 +558,30 @@ platform call or WRITE occurred. This is recorded as
 `REAL_QWEN_CLEAN_RESTART_REVALIDATION=BLOCKED_EXTERNAL`. The parser and safety
 model were not weakened. Consequently this report records
 `AUTODRIVE_DATAOPS_AGENT_V2_SINGLE_NODE_SIMULATED_PLATFORM_VALIDATED`, but does
-not claim `AUTODRIVE_DATAOPS_AGENT_V2_RELEASE_READY` until a fresh valid Qwen
-clean-restart E2E is observed.
+not claim `AUTODRIVE_DATAOPS_AGENT_V2_RELEASE_READY` until the strict-schema
+provider is stable across the bounded clean-restart reliability sample.
+
+## 19. Strict JSON-Schema Provider hardening (2026-08-24)
+
+The Provider now supports explicit auto, json_schema, and json_object
+structured-output modes. Known Qwen 3.7 Plus models select:
+
+    response_format.type=json_schema
+    json_schema.name=agent_decision
+    json_schema.strict=true
+
+The schema covers all V2 decision variants, GoalDescriptor goal kinds, exact
+tool names and tool argument shapes. The local parser still rejects missing
+GoalDescriptor/call IDs, and DecisionIngress remains the semantic/runtime
+admission authority. Compatibility JSON-object mode allows only one bounded
+regeneration and never repairs a proposal.
+
+Local Provider regression: 22 adapter tests passed; complete local suite after
+hardening: 272 passed. Clean-restart external evidence: one strict-schema
+request passed; one fresh single-READ Agent run passed through get_gpu_pool,
+evidence, FINAL, and CompletionGate; one multi-READ batch containing
+GPU/queue/knowledge normalized successfully but its follow-up model turn timed
+out; the five-run bounded sample was 1 completed and 4 PROVIDER_UNAVAILABLE,
+with zero schema-invalid decisions and zero WRITE. The external
+timeout/unavailability is retained as the release blocker; no parser,
+DecisionIngress, or safety relaxation was made.

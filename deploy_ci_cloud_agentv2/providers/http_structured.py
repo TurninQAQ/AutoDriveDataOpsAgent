@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import date, datetime, time as datetime_time
 from enum import Enum
 from typing import Any, Mapping
@@ -29,6 +29,7 @@ from ..agent.immutable import FrozenMapping
 from ..config import ProviderConfig
 from .errors import ProviderResponseInvalid, ProviderTransportFailure
 from .model import AgentProvider, ProviderUnavailable
+from .decision_schema import agent_decision_json_schema
 from .telemetry import ProviderTelemetryEvent, TelemetrySink
 
 
@@ -41,6 +42,14 @@ class ProviderRequest:
     model: str
     messages: tuple[dict[str, str], ...]
     request_id: str
+    require_goal_descriptor: bool
+
+    def with_regeneration_instruction(self) -> "ProviderRequest":
+        return replace(self, messages=self.messages + ({"role": "user", "content": (
+            "The previous response failed the V2 AgentDecision schema. Return one complete "
+            "JSON AgentDecision now. Do not explain, omit required fields, or add fields "
+            "outside the requested schema."
+        )},))
 
 
 class HTTPStructuredProvider(AgentProvider):
@@ -71,14 +80,11 @@ class HTTPStructuredProvider(AgentProvider):
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        body = {
-            "model": request.model,
-            "messages": list(request.messages),
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
+        mode = self._structured_output_mode()
+        body = self._request_body(request, mode=mode)
         started = time.perf_counter()
         retries = 0
+        regenerations = 0
         try:
             while True:
                 try:
@@ -96,13 +102,21 @@ class HTTPStructuredProvider(AgentProvider):
                         )
                     raw = response.json()
                     content = _extract_content(raw)
-                    proposal = _parse_decision(content)
+                    try:
+                        proposal = _parse_decision(content, require_goal_descriptor=request.require_goal_descriptor)
+                    except ProviderResponseInvalid:
+                        if mode != "json_object" or regenerations >= 1:
+                            raise
+                        regenerations += 1
+                        request = request.with_regeneration_instruction()
+                        body = self._request_body(request, mode=mode)
+                        continue
                     self._record(
                         request,
                         started,
                         retries,
                         input_chars=len(_safe_json(request.messages)),
-                        output_chars=len(content),
+                        output_chars=len(content), regeneration_count=regenerations,
                     )
                     return proposal
                 except ProviderResponseInvalid:
@@ -127,7 +141,7 @@ class HTTPStructuredProvider(AgentProvider):
         except ProviderResponseInvalid as exc:
             self._record(
                 request, started, retries, input_chars=len(_safe_json(request.messages)),
-                output_chars=0, error_class=type(exc).__name__,
+                output_chars=0, error_class=type(exc).__name__, regeneration_count=regenerations,
             )
             raise
         except ProviderUnavailable as exc:
@@ -135,6 +149,7 @@ class HTTPStructuredProvider(AgentProvider):
                 request, started, retries, input_chars=len(_safe_json(request.messages)),
                 output_chars=0, error_class=type(exc).__name__,
                 status_code=getattr(exc, "status_code", None),
+                regeneration_count=regenerations,
             )
             raise
 
@@ -147,6 +162,26 @@ class HTTPStructuredProvider(AgentProvider):
         async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             async with asyncio.timeout(self.config.overall_timeout_seconds):
                 return await client.post(self.config.endpoint, headers=headers, json=body)
+
+    def _structured_output_mode(self) -> str:
+        configured = self.config.structured_output_mode
+        if configured != "auto":
+            return configured
+        if self.config.name.lower() == "qwen" and self.config.model.startswith("qwen3.7-plus"):
+            return "json_schema"
+        return "json_object"
+
+    @staticmethod
+    def _request_body(request: ProviderRequest, *, mode: str) -> dict[str, Any]:
+        body: dict[str, Any] = {"model": request.model, "messages": list(request.messages), "temperature": 0}
+        if mode == "json_schema":
+            body["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "agent_decision", "strict": True,
+                "schema": agent_decision_json_schema(require_goal_descriptor=request.require_goal_descriptor),
+            }}
+        else:
+            body["response_format"] = {"type": "json_object"}
+        return body
 
     async def _backoff(self, retry_number: int) -> None:
         if self.config.retry_backoff_seconds:
@@ -179,6 +214,9 @@ class HTTPStructuredProvider(AgentProvider):
             "runtime context requires a monotonic descriptor revision. "
             "Every tool call MUST contain all three keys: a non-empty call_id, "
             "the exact tool_name, and an arguments object; never omit call_id or use null."
+            " For platform-wide INSPECT_QUEUE, use a null target and pass "
+            "task_name=null to get_queue_state unless the user supplied an exact "
+            "task identity; never turn a platform label such as AutoDrive into a task name."
         )
         user = json.dumps(
             {
@@ -236,6 +274,7 @@ class HTTPStructuredProvider(AgentProvider):
                 {"role": "user", "content": user},
             ),
             request_id=context.runtime_structured.identity.request_id,
+            require_goal_descriptor=context.runtime_structured.goal_descriptor is None,
         )
 
     def _record(
@@ -248,6 +287,7 @@ class HTTPStructuredProvider(AgentProvider):
         output_chars: int,
         error_class: str | None = None,
         status_code: int | None = None,
+        regeneration_count: int = 0,
     ) -> None:
         if self.telemetry is None:
             return
@@ -262,6 +302,7 @@ class HTTPStructuredProvider(AgentProvider):
                 retry_count=retries,
                 error_class=error_class,
                 status_code=status_code,
+                regeneration_count=regeneration_count,
             )
         )
 
@@ -298,7 +339,7 @@ def _extract_content(payload: Any) -> str:
     return content.strip()
 
 
-def _parse_decision(content: str) -> Any:
+def _parse_decision(content: str, *, require_goal_descriptor: bool = False) -> Any:
     bounded = content.strip()
     fenced = _FENCE.match(bounded)
     if fenced:
@@ -310,7 +351,15 @@ def _parse_decision(content: str) -> Any:
     if not isinstance(raw, Mapping):
         raise ProviderResponseInvalid("provider decision must be a JSON object")
     kind = raw.get("kind")
-    descriptor = _descriptor(raw.get("proposed_goal_descriptor")) if "proposed_goal_descriptor" in raw and raw.get("proposed_goal_descriptor") is not None else None
+    if "proposed_goal_descriptor" not in raw:
+        if require_goal_descriptor:
+            raise ProviderResponseInvalid("provider decision is missing GoalDescriptor")
+        descriptor = None
+    else:
+        descriptor_value = raw.get("proposed_goal_descriptor")
+        descriptor = _descriptor(descriptor_value) if descriptor_value is not None else None
+        if require_goal_descriptor and descriptor is None:
+            raise ProviderResponseInvalid("provider decision has null GoalDescriptor")
     try:
         if kind == "SINGLE_TOOL_CALL":
             return SingleToolCall(_tool_call(raw.get("call")), descriptor)
@@ -332,6 +381,12 @@ def _parse_decision(content: str) -> Any:
 def _tool_call(raw: Any) -> ToolCall:
     if not isinstance(raw, Mapping):
         raise ValueError("tool call must be an object")
+    if type(raw.get("call_id")) is not str or not raw["call_id"].strip():
+        raise ProviderResponseInvalid("tool call call_id must be a non-empty string")
+    if type(raw.get("tool_name")) is not str or not raw["tool_name"].strip():
+        raise ProviderResponseInvalid("tool call tool_name must be a non-empty string")
+    if not isinstance(raw.get("arguments"), Mapping):
+        raise ProviderResponseInvalid("tool call arguments must be an object")
     return ToolCall(raw.get("call_id"), raw.get("tool_name"), raw.get("arguments"))
 
 
