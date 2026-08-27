@@ -1,6 +1,6 @@
 # AutoDriveDataOpsAgent V3.5
 
-V3.5 is the current correctness-closure release of the V3 main architecture. V2 is preserved under `deploy_ci_cloud_agentv2/` for comparison and reuse of the simulated AutoDrive platform backend.
+V3.5 is the current correctness-closure release of the V3 main architecture. The simulated AutoDrive platform backend is packaged under `deploy_ci_cloud_agentv3/platform_backend/`; the repository has no V2 Agent runtime dependency.
 
 ## Architecture
 
@@ -92,7 +92,7 @@ GPU IDs, image tags, timeouts, scheduler defaults, and other platform defaults c
 
 ## Provider layer
 
-`providers/qwen.py` uses the OpenAI-compatible Qwen chat-completions endpoint with native `tools=[...]` function calling. The legacy V2 Agent Decision JSON DSL is not used by V3.
+`providers/qwen.py` uses the OpenAI-compatible Qwen chat-completions endpoint with native `tools=[...]` function calling.
 
 ## Local validation
 
@@ -106,4 +106,4 @@ Coverage includes capability isolation, proposal zero-side-effect behavior, appr
 
 ## Scope
 
-The platform backend remains the single-node mock/simulated AutoDrive training platform reused from V2. V3 does not claim a real production cluster, multi-agent architecture, vector database, or exactly-once distributed mutation protocol.
+The platform backend is the single-node mock/simulated AutoDrive training platform included with V3. V3 does not claim a real production cluster, multi-agent architecture, vector database, or exactly-once distributed mutation protocol.

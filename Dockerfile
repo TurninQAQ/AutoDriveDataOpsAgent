@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/autodrive
 COPY pyproject.toml README.md ./
-COPY deploy_ci_cloud_agentv2 ./deploy_ci_cloud_agentv2
+COPY deploy_ci_cloud_agentv3 ./deploy_ci_cloud_agentv3
 
 RUN python -m pip install --no-cache-dir . \
     && mkdir -p /var/lib/autodrive-dataops/config /var/lib/autodrive-dataops/data \

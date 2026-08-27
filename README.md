@@ -1,89 +1,109 @@
 # AutoDriveDataOpsAgent V3.5
 
-The repository now contains the V3.5 release mainline under `deploy_ci_cloud_agentv3/`. V2 remains intact under `deploy_ci_cloud_agentv2/` as the previous implementation and as the reusable simulated platform backend.
+V3.5 is the current correctness-closure release of the V3 main architecture. The simulated AutoDrive platform backend is packaged under `deploy_ci_cloud_agentv3/platform_backend/`; the repository has no V2 Agent runtime dependency.
 
-V3.5 follows **Single-Agent Guarded ReAct**: a four-node LangGraph (`agent`, `model_tools`, `review`, `execute_write`), standard MCP with official in-process `Client(MCPServer)` locally and Streamable HTTP remotely, separate Agent/Runtime capability profiles, native model function calling, zero-side-effect Proposal tools, fingerprint-bound HITL, runtime-derived idempotency, deterministic `WriteService`, precondition recheck, single mutation attempt, action-specific before/after verification, and structured FinalGuard.
+## Architecture
+
+V3.5 is a **Single-Agent Guarded ReAct** system with four LangGraph control nodes:
+
+```text
+agent -> model_tools -> review -> execute_write
+  ^          |                         |
+  |          +-------------------------+
+  +------------------------------------+
+```
+
+The graph is intentionally thin. Deterministic write reliability lives in `services/write_service.py`.
+
+- `agent`: LLM reasoning and native tool-call selection.
+- `model_tools`: executes model-visible safe MCP tools. READ/PREPARE calls can execute together; a Proposal must be the only tool call in its round.
+- `review`: LangGraph `interrupt()` human review of a frozen `PendingAction`.
+- `execute_write`: deterministic `WriteService` execution after exact fingerprint approval.
+
+## Standard MCP boundary
+
+A single shared tool implementation is exposed through two Streamable HTTP capability profiles:
+
+```text
+/mcp/agent
+  READ + PREPARE + PROPOSAL
+  no real WRITE tools
+
+/mcp/runtime
+  READ + runtime-internal reads + real WRITE
+  no proposal tools
+```
+
+The server implementation targets the official Python MCP SDK v2 and exposes standard `tools/list` / `tools/call`. Agent and Runtime profiles are registered from the same shared Pydantic-backed ToolDefinition registry, so remote schemas and native-function schemas use one source of truth. The default local Agent path uses the official `Client(MCPServer)` in-process transport; the remote path uses the same official client with Streamable HTTP URLs. The custom registry-only `InProcessMCPClient` remains test-only. The repository includes official-SDK in-process and Streamable HTTP integration tests; they run when the `mcp` dependency is installed.
+
+Run the MCP service after installing dependencies:
 
 ```bash
 python -m pip install '.[test]'
-python -m pytest -q deploy_ci_cloud_agentv3/tests
 autodrive-mcp-v3
 ```
 
-See `deploy_ci_cloud_agentv3/README.md`, the original V3.1 architecture baseline at `deploy_ci_cloud_agentv3/doc/AutoDriveDataOpsAgent_V3.1_ARCHITECTURE.md`, and the V3.5 MCP closure note at `deploy_ci_cloud_agentv3/doc/V3.5_MCP_LIFESPAN_CLOSURE.md`.
-
----
-
-## Preserved V2 documentation
-
-# AutoDriveDataOpsAgent V2
-
-AutoDriveDataOpsAgent V2 is a deterministic Runtime around a single semantic
-Agent. READ tools are autonomous within Runtime guards. WRITE operations are
-human-approved, transaction-bound, revalidated, claimed once, verified, and
-recoverable through SQLite-backed audit state.
-
-The repository root is the canonical packaging source:
-
-```bash
-python -m pip install '.[test]'
-autodrive-agent-v2 health
-autodrive-agent-v2 ready
-```
-
-The implementation, tests, and the migrated transport-independent platform
-execution layer live under `deploy_ci_cloud_agentv2`. The root package installs
-that exact tree; there is no second conflicting V2 package definition. The
-former `deploy_ci_cloud_agent` tree has been removed from the working tree
-after migrating the required platform execution assets into V2; a separately
-deployed runtime service remains an external process boundary only when stdio
-mode is selected.
-
-## Validation status
-
-The architecture and local correctness suites use scripted providers and fake
-platform transports. They do not call a paid model or production platform.
-Real LangGraph 1.2.11 tests run only when that package is installed; in a
-shim-only environment those tests are skipped and reported as skipped.
-
-The structured HTTP provider and the custom AutoDrive JSON-RPC platform
-gateway are implemented. The release target is a single-node simulated
-platform; non-mock AutoDrive and physical multi-GPU infrastructure are
-explicitly out of scope. First WRITE testing must use the simulated sandbox
-and the normal V2 approval path.
-
-Current validation status:
+Default endpoints:
 
 ```text
-Local correctness / real LangGraph       PASS
-Local provider adapter sandbox           PASS
-Local platform JSON-RPC sandbox          PASS
-Real Qwen Agent Provider                 PASS: qwen-plus-2025-07-28 READ E2E
-Single-node simulated platform           PASS: mock stage + simulated GPU runtime
-Non-mock AutoDrive / physical GPU        OUT_OF_SCOPE
-Fresh clean-restart Qwen E2E             BLOCKED_EXTERNAL: strict ingress rejected malformed proposals
-Hosted CI (Python 3.11/3.12)             PASS: hosted run #27 (32680483362)
-Hosted Docker build/runtime smoke        PASS: hosted run #27 (32680483362)
-Local Docker build/run                   BLOCKED: Docker Hub registry timeout
-V2 in-process platform backend           PASS: localhost mock/simulated READ smoke
-Missing task contract                    PASS: deterministic NOT_FOUND/exists=false
-Sandbox task creation/WRITE               PASS: one mock no-trigger disposable task created and removed through V2 approval; production WRITE 0
+http://127.0.0.1:8000/mcp/agent
+http://127.0.0.1:8000/mcp/runtime
 ```
 
-Runtime state is kept outside the source tree. Set `AUTODRIVE_RUNTIME_ROOT`
-or provide a strict JSON config; the default is
-`/home/ubuntu/project/autodrive_dataops_runtimev2`.
-Durable `invoke`, `resume`, and `reconcile` operations hold a Linux advisory
-lock at `<runtime_root>/run/runtime.lock` for their complete lifetime. The
-single-instance rule is enforced in code: a competing process gets
-`RUNTIME_INSTANCE_ALREADY_ACTIVE`, while process death releases the kernel
-lock and leaves normal post-`MutationStarted` reconciliation semantics intact.
+## Write lifecycle
 
-See:
+```text
+Proposal
+-> PendingAction
+-> HITL Review
+-> Approve exact fingerprint
+-> Global Precondition Recheck
+-> Action-specific Revalidation
+-> runtime-derived idempotency key
+-> single mutation attempt
+-> Runtime MCP WRITE
+-> Observe Again
+-> Post-write Verification
+-> FinalGuard
+```
 
-- `deploy_ci_cloud_agentv2/doc/V2_REQUIREMENT_TRACEABILITY_MATRIX.md`
-- `deploy_ci_cloud_agentv2/doc/PRODUCTION_RUNTIME.md`
-- `deploy_ci_cloud_agentv2/doc/REAL_PROVIDER_INTEGRATION.md`
-- `deploy_ci_cloud_agentv2/doc/MCP_PLATFORM_ADAPTER.md`
-- `deploy_ci_cloud_agentv2/doc/DEPLOYMENT.md`
-- `deploy_ci_cloud_agentv2/doc/SINGLE_NODE_SIMULATED_DEPLOYMENT.md`
+`Proposal != Execution`: model-visible `propose_*` tools have zero platform side effect. Real write tools are absent from the Agent capability profile.
+
+`API success != business success`: a successful MCP call is followed by action-specific real-platform read-back. Observation errors are not treated as absence evidence. Only `WriteResult(status="VERIFIED", verified=True)` can produce final status `write_verified`.
+
+Potentially applied mutations are not blindly retried. The mutation-attempt key is derived inside `WriteService` from the recomputed approved fingerprint and is not trusted from mutable workflow state. A transport exception after dispatch enters reconciliation by READ; if the resulting business state cannot be confirmed, the result remains `UNKNOWN_OUTCOME`.
+
+`resume_task(datasets=None)` is resolved from one fail-closed Airflow snapshot before review into an explicit failed-dataset list. That same snapshot is reused as the verification baseline, and a resume-specific precondition (including the baseline hash) is fingerprint-bound to the PendingAction. Immediately before mutation, WriteService re-reads the selected datasets: a dynamically resolved target must still have `FAILED` as its latest observed DagRun state or the action returns `PRECONDITION_FAILED` without crossing the mutation boundary. After mutation, verification requires a new progressing run for every approved dataset. Stop verification requires target execution quiescence; whole-task stop additionally requires GPU release and queue removal.
+
+## Task creation pipeline
+
+```text
+TaskDraft
+-> deterministic platform defaults
+-> schema validation
+-> PreparedArtifact (YAML + hash)
+-> propose_submit_task(artifact_id)
+-> HITL review of the frozen artifact
+-> submit_task
+-> read-back verification
+```
+
+GPU IDs, image tags, timeouts, scheduler defaults, and other platform defaults come from the repository-owned platform configuration, not from the model.
+
+## Provider layer
+
+`providers/qwen.py` uses the OpenAI-compatible Qwen chat-completions endpoint with native `tools=[...]` function calling.
+
+## Local validation
+
+The V3 unit tests use a fake facade and do not call a paid model or a real cluster:
+
+```bash
+python -m pytest -q deploy_ci_cloud_agentv3/tests
+```
+
+Coverage includes capability isolation, proposal zero-side-effect behavior, approval-time tamper attacks, runtime-derived idempotency, resume target freezing, resume-specific stale-approval revalidation, fail-closed single-snapshot resume baselines, resume before/after run-identity verification, stop quiescence verification, edit fingerprint invalidation, stale approval blocking, delete/submit verification, UNKNOWN_OUTCOME reconciliation, mixed-proposal native-tool-call rejection completeness, pipeline artifact binding, structured FinalGuard gating, context tool-call grouping, official-MCP mainline wiring, and Graph HITL flows. See `doc/V3.5_MCP_LIFESPAN_CLOSURE.md` for the current mounted-MCP closure and integration-test gate. In this build environment the official MCP/LangGraph E2E tests remain dependency-gated because external package installation is unavailable; the dependency-independent lifespan regression and all other local tests pass.
+
+## Scope
+
+The platform backend is the single-node mock/simulated AutoDrive training platform included with V3. V3 does not claim a real production cluster, multi-agent architecture, vector database, or exactly-once distributed mutation protocol.

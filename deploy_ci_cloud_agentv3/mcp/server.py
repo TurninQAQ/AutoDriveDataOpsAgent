@@ -5,7 +5,7 @@ import inspect
 from collections.abc import AsyncIterator
 from typing import Any
 
-from deploy_ci_cloud_agentv2.platform_backend.runtime import build_platform_facade
+from deploy_ci_cloud_agentv3.platform_backend.runtime import build_platform_facade
 from deploy_ci_cloud_agentv3.mcp.profiles import AGENT_TOOLS, RUNTIME_TOOLS
 from deploy_ci_cloud_agentv3.mcp.registry import ToolDefinition
 

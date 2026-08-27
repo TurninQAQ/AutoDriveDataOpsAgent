@@ -22,7 +22,7 @@ class TaskPreparationService:
     def __init__(self, facade: Any, artifact_store: ArtifactStore, defaults_path: str | Path | None = None) -> None:
         self.facade = facade
         self.artifact_store = artifact_store
-        self.defaults_path = Path(defaults_path or Path(__file__).resolve().parents[2] / "deploy_ci_cloud_agentv2" / "platform_backend" / "config" / "task_planning_defaults.yaml")
+        self.defaults_path = Path(defaults_path or Path(__file__).resolve().parents[2] / "deploy_ci_cloud_agentv3" / "platform_backend" / "config" / "task_planning_defaults.yaml")
 
     def prepare(
         self,

@@ -26,21 +26,20 @@ api = ["fastapi>=0.115,<1"]
 
 [project.scripts]
 autodrive-agent = "deploy_ci_cloud_agentv3.cli:main"
-autodrive-agent-v2 = "deploy_ci_cloud_agentv2.cli:main"
 autodrive-mcp-v3 = "deploy_ci_cloud_agentv3.mcp.server:main"
 
 [tool.pytest.ini_options]
-testpaths = ["deploy_ci_cloud_agentv3/tests", "deploy_ci_cloud_agentv2/tests"]
+testpaths = ["deploy_ci_cloud_agentv3/tests"]
 pythonpath = ["."]
 markers = ["real_langgraph: tests requiring the installed LangGraph 1.2.11 runtime"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["deploy_ci_cloud_agentv2*", "deploy_ci_cloud_agentv3*"]
+include = ["deploy_ci_cloud_agentv3*"]
 
 [tool.setuptools.package-data]
-deploy_ci_cloud_agentv2 = ["doc/*.md"]
-"deploy_ci_cloud_agentv2.platform_backend" = [
+deploy_ci_cloud_agentv3 = ["doc/*.md"]
+"deploy_ci_cloud_agentv3.platform_backend" = [
     "knowledge/**/*.md",
     "knowledge/**/*.yaml",
     "knowledge/**/*.yml",
@@ -51,4 +50,3 @@ deploy_ci_cloud_agentv2 = ["doc/*.md"]
     "dags/templates/*",
     "config/*.yaml",
 ]
-deploy_ci_cloud_agentv3 = ["doc/*.md"]

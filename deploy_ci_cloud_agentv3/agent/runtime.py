@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from deploy_ci_cloud_agentv2.platform_backend.runtime import build_platform_facade
+from deploy_ci_cloud_agentv3.platform_backend.runtime import build_platform_facade
 from deploy_ci_cloud_agentv3.agent.context_builder import ContextBuilder
 from deploy_ci_cloud_agentv3.agent.final_guard import FinalGuard
 from deploy_ci_cloud_agentv3.agent.graph import GraphDependencies, build_graph
