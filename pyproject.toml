@@ -3,14 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "autodrive-dataops-agent-v2"
-version = "2.0.0"
-description = "AutoDriveDataOpsAgent V2: deterministic DataOps automation with human-approved writes"
+name = "autodrive-dataops-agent"
+version = "3.5.0"
+description = "AutoDriveDataOpsAgent V3.5: Single-Agent Guarded ReAct with standard MCP and human-approved writes"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph==1.2.11",
+    "mcp>=2,<3",
+    "starlette>=0.37,<1",
+    "uvicorn>=0.30,<1",
     "httpx>=0.28,<1",
     "pydantic>=2,<3",
+    "typing-extensions>=4.12,<5",
     "PyYAML>=6,<7",
     "requests>=2.31,<3",
     "google-genai>=1,<4",
@@ -18,39 +22,21 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
+api = ["fastapi>=0.115,<1"]
 
 [project.scripts]
-autodrive-agent = "deploy_ci_cloud_agentv2.cli:main"
+autodrive-agent = "deploy_ci_cloud_agentv3.cli:main"
+autodrive-agent-v2 = "deploy_ci_cloud_agentv2.cli:main"
+autodrive-mcp-v3 = "deploy_ci_cloud_agentv3.mcp.server:main"
 
 [tool.pytest.ini_options]
-testpaths = ["deploy_ci_cloud_agentv2/tests"]
+testpaths = ["deploy_ci_cloud_agentv3/tests", "deploy_ci_cloud_agentv2/tests"]
+pythonpath = ["."]
 markers = ["real_langgraph: tests requiring the installed LangGraph 1.2.11 runtime"]
 
-[tool.setuptools]
-packages = [
-    "deploy_ci_cloud_agentv2",
-    "deploy_ci_cloud_agentv2.agent",
-    "deploy_ci_cloud_agentv2.platform",
-    "deploy_ci_cloud_agentv2.platform_backend",
-    "deploy_ci_cloud_agentv2.platform_backend.core",
-    "deploy_ci_cloud_agentv2.platform_backend.core.gateways",
-    "deploy_ci_cloud_agentv2.platform_backend.core.services",
-    "deploy_ci_cloud_agentv2.platform_backend.config",
-    "deploy_ci_cloud_agentv2.platform_backend.integrations",
-    "deploy_ci_cloud_agentv2.platform_backend.mcp",
-    "deploy_ci_cloud_agentv2.platform_backend.observability",
-    "deploy_ci_cloud_agentv2.platform_backend.rag",
-    "deploy_ci_cloud_agentv2.platform_backend.scripts",
-    "deploy_ci_cloud_agentv2.platform_backend.dags",
-    "deploy_ci_cloud_agentv2.platform_backend.dags.templates",
-    "deploy_ci_cloud_agentv2.providers",
-    "deploy_ci_cloud_agentv2.tools",
-    "deploy_ci_cloud_agentv2.safety",
-    "deploy_ci_cloud_agentv2.memory",
-    "deploy_ci_cloud_agentv2.verification",
-    "deploy_ci_cloud_agentv2.evaluation",
-]
-package-dir = {"" = "."}
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["deploy_ci_cloud_agentv2*", "deploy_ci_cloud_agentv3*"]
 
 [tool.setuptools.package-data]
 deploy_ci_cloud_agentv2 = ["doc/*.md"]
@@ -65,3 +51,4 @@ deploy_ci_cloud_agentv2 = ["doc/*.md"]
     "dags/templates/*",
     "config/*.yaml",
 ]
+deploy_ci_cloud_agentv3 = ["doc/*.md"]

@@ -38,21 +38,20 @@ def test_v2_production_has_no_v1_runtime_import_or_second_semantic_authority():
                 assert node.name not in forbidden_names
 
 
-def test_v2_distribution_metadata_matches_complete_runtime_packages():
+def test_v2_distribution_metadata_remains_available_inside_v3_distribution():
     with (REPOSITORY_ROOT / "pyproject.toml").open("rb") as fh:
         config = tomllib.load(fh)
-    assert config["project"]["version"] == "2.0.0"
-    assert config["project"]["dependencies"] == [
-        "langgraph==1.2.11",
-        "httpx>=0.28,<1",
-        "pydantic>=2,<3",
-        "PyYAML>=6,<7",
-        "requests>=2.31,<3",
-        "google-genai>=1,<4",
-    ]
-    packages = set(config["tool"]["setuptools"]["packages"])
-    for suffix in ("safety", "memory", "verification", "evaluation"):
-        assert f"deploy_ci_cloud_agentv2.{suffix}" in packages
+    assert config["project"]["version"] == "3.5.0"
+    deps = set(config["project"]["dependencies"])
+    for required in (
+        "langgraph==1.2.11", "httpx>=0.28,<1", "pydantic>=2,<3",
+        "PyYAML>=6,<7", "requests>=2.31,<3", "google-genai>=1,<4",
+    ):
+        assert required in deps
+    find_cfg = config["tool"]["setuptools"]["packages"]["find"]
+    assert "deploy_ci_cloud_agentv2*" in set(find_cfg["include"])
+    assert config["project"]["scripts"]["autodrive-agent-v2"] == "deploy_ci_cloud_agentv2.cli:main"
+    assert config["project"]["scripts"]["autodrive-agent"] == "deploy_ci_cloud_agentv3.cli:main"
     assert not (ROOT / "pyproject.toml").exists()
 
 

@@ -1,3 +1,21 @@
+# AutoDriveDataOpsAgent V3.5
+
+The repository now contains the V3.5 release mainline under `deploy_ci_cloud_agentv3/`. V2 remains intact under `deploy_ci_cloud_agentv2/` as the previous implementation and as the reusable simulated platform backend.
+
+V3.5 follows **Single-Agent Guarded ReAct**: a four-node LangGraph (`agent`, `model_tools`, `review`, `execute_write`), standard MCP with official in-process `Client(MCPServer)` locally and Streamable HTTP remotely, separate Agent/Runtime capability profiles, native model function calling, zero-side-effect Proposal tools, fingerprint-bound HITL, runtime-derived idempotency, deterministic `WriteService`, precondition recheck, single mutation attempt, action-specific before/after verification, and structured FinalGuard.
+
+```bash
+python -m pip install '.[test]'
+python -m pytest -q deploy_ci_cloud_agentv3/tests
+autodrive-mcp-v3
+```
+
+See `deploy_ci_cloud_agentv3/README.md`, the original V3.1 architecture baseline at `deploy_ci_cloud_agentv3/doc/AutoDriveDataOpsAgent_V3.1_ARCHITECTURE.md`, and the V3.5 MCP closure note at `deploy_ci_cloud_agentv3/doc/V3.5_MCP_LIFESPAN_CLOSURE.md`.
+
+---
+
+## Preserved V2 documentation
+
 # AutoDriveDataOpsAgent V2
 
 AutoDriveDataOpsAgent V2 is a deterministic Runtime around a single semantic
@@ -9,8 +27,8 @@ The repository root is the canonical packaging source:
 
 ```bash
 python -m pip install '.[test]'
-autodrive-agent health
-autodrive-agent ready
+autodrive-agent-v2 health
+autodrive-agent-v2 ready
 ```
 
 The implementation, tests, and the migrated transport-independent platform
