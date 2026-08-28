@@ -23,7 +23,7 @@ class UnknownRuntime:
 @pytest.mark.asyncio
 async def test_unknown_outcome_reconciles_by_read_without_retrying_write():
     runtime = UnknownRuntime(); args = {"task_name": "task_a", "priority": 5}; pre = {"v": 1}
-    fp = compute_pending_action_fingerprint(action="set_task_priority", args=args, artifact=None, precondition=pre)
+    fp = compute_pending_action_fingerprint(proposal_id="p", action="set_task_priority", args=args, artifact=None, precondition=pre)
     action = PendingAction(proposal_id="p", action="set_task_priority", args=args, reason="", expected_effect="", before={"priority": 3}, precondition=pre, fingerprint=fp)
     result = await WriteService(runtime).execute(action, fp)
     assert result.status == "VERIFIED" and result.verified is True

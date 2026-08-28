@@ -84,7 +84,7 @@ jobs:
           test "$ready_rc" -eq 1
 
       - name: Assert readiness persisted local SQLite state
-        run: test -f "$AUTODRIVE_RUNTIME_DIR/state/autodrive.sqlite3"
+        run: test -f "$AUTODRIVE_RUNTIME_DIR/state/autodrive_state.sqlite"
 
       - name: Run second container readiness smoke on same volume
         run: |

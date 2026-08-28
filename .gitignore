@@ -12,3 +12,13 @@ deploy_ci_cloud_agentv2/build/
 secrets/
 /dist/
 /build/
+
+# V3.9 runtime/release state
+runtime_state/
+knowledge_index/
+artifacts/*.json
+artifacts/*.csv
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env

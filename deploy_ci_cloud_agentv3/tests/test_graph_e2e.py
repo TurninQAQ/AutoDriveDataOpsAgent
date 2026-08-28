@@ -5,6 +5,8 @@ import pytest
 pytest.importorskip("langgraph")
 pytest.importorskip("mcp")
 
+pytestmark = pytest.mark.real_langgraph
+
 from deploy_ci_cloud_agentv3.agent.runtime import AgentRuntime
 from deploy_ci_cloud_agentv3.providers.base import AssistantMessage, ToolCall
 from deploy_ci_cloud_agentv3.providers.scripted import ScriptedProvider
@@ -79,3 +81,27 @@ async def test_edit_rebuilds_fingerprint_and_reinterrupts_before_execution():
     state = await runtime.review("edit-1", {"decision": "approve", "fingerprint": second["fingerprint"]})
     assert state["final_response"]["status"] == "write_verified"
     assert facade.priority == 7
+
+
+@pytest.mark.asyncio
+async def test_graph_audit_records_safe_tool_trace_with_run_scope(tmp_path, monkeypatch):
+    from deploy_ci_cloud_agentv3.services.audit import AuditStore
+
+    monkeypatch.setenv("AUTODRIVE_WRITE_STORE", "memory")
+    audit_path = tmp_path / "audit.sqlite"
+    facade = FakeFacade()
+    provider = ScriptedProvider([
+        AssistantMessage(tool_calls=[ToolCall(id="r-audit", name="get_task_detail", arguments={"task_name": "task_a", "api_key": "must-not-leak"})]),
+        AssistantMessage(content='{"status":"informational","message":"observed"}'),
+    ])
+    runtime = AgentRuntime.local(provider, facade=facade, audit_path=str(audit_path))
+    state = await runtime.start("audit-thread", "inspect task", run_id="audit-run")
+    assert state["final_response"]["status"] == "informational"
+
+    events = AuditStore(audit_path).query(run_id="audit-run", limit=100)
+    calls = [event for event in events if event["event_type"] == "AGENT_TOOL_CALL"]
+    results = [event for event in events if event["event_type"] == "AGENT_TOOL_RESULT"]
+    assert len(calls) == 1 and len(results) == 1
+    assert calls[0]["thread_id"] == "audit-thread"
+    assert calls[0]["payload"]["arguments"]["api_key"] == "[REDACTED]"
+    assert results[0]["payload"]["tool_name"] == "get_task_detail"

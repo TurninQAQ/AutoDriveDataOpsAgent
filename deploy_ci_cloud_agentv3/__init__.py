@@ -1,3 +1,2 @@
-"""AutoDriveDataOpsAgent V3.5: Single-Agent Guarded ReAct."""
-
-__version__ = "3.5.0"
+"""AutoDriveDataOpsAgent V3.9 Release Candidate."""
+__version__ = "3.9.0"

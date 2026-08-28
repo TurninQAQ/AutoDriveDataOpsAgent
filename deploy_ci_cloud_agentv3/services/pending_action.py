@@ -76,7 +76,9 @@ class PendingActionFactory:
                 "before_sha256": sha256_json(before),
             }
 
+        proposal_id = f"proposal_{uuid.uuid4().hex}"
         fingerprint = compute_pending_action_fingerprint(
+            proposal_id=proposal_id,
             action=proposal.action,
             args=frozen_args,
             artifact=artifact_payload,
@@ -84,7 +86,7 @@ class PendingActionFactory:
             action_precondition=action_precondition,
         )
         return PendingAction(
-            proposal_id=f"proposal_{uuid.uuid4().hex}",
+            proposal_id=proposal_id,
             action=proposal.action,
             args=frozen_args,
             reason=proposal.reason,

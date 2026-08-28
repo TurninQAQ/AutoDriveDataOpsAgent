@@ -6,6 +6,7 @@ from typing_extensions import TypedDict
 
 class AgentState(TypedDict, total=False):
     thread_id: str
+    run_id: str | None
     messages: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
     pending_action: dict[str, Any] | None

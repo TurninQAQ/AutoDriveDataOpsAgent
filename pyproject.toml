@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autodrive-dataops-agent"
-version = "3.5.0"
-description = "AutoDriveDataOpsAgent V3.5: Single-Agent Guarded ReAct with standard MCP and human-approved writes"
+version = "3.9.0"
+description = "AutoDriveDataOpsAgent V3.9 RC: durable Guarded ReAct with standard MCP, HITL, hybrid RAG, API and benchmark"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph==1.2.11",
@@ -18,11 +18,15 @@ dependencies = [
     "PyYAML>=6,<7",
     "requests>=2.31,<3",
     "google-genai>=1,<4",
+    "langgraph-checkpoint-sqlite>=2,<4",
+    "aiosqlite>=0.20,<1",
+    "fastapi>=0.115,<1",
+    "numpy>=2,<3",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
-api = ["fastapi>=0.115,<1"]
+api = []
 
 [project.scripts]
 autodrive-agent = "deploy_ci_cloud_agentv3.cli:main"
@@ -31,14 +35,14 @@ autodrive-mcp-v3 = "deploy_ci_cloud_agentv3.mcp.server:main"
 [tool.pytest.ini_options]
 testpaths = ["deploy_ci_cloud_agentv3/tests"]
 pythonpath = ["."]
-markers = ["real_langgraph: tests requiring the installed LangGraph 1.2.11 runtime"]
+markers = ["real_langgraph: installed LangGraph runtime", "integration: integration tests", "external_llm: requires external LLM", "external_embedding: requires external embedding API"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["deploy_ci_cloud_agentv3*"]
 
 [tool.setuptools.package-data]
-deploy_ci_cloud_agentv3 = ["doc/*.md"]
+deploy_ci_cloud_agentv3 = ["doc/*.md", "evaluation/*.jsonl", "evaluation/cases/*.jsonl"]
 "deploy_ci_cloud_agentv3.platform_backend" = [
     "knowledge/**/*.md",
     "knowledge/**/*.yaml",

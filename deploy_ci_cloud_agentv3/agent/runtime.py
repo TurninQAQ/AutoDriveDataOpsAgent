@@ -13,6 +13,9 @@ from deploy_ci_cloud_agentv3.services.audit import AuditStore
 from deploy_ci_cloud_agentv3.services.pending_action import PendingActionFactory
 from deploy_ci_cloud_agentv3.services.verification import VerificationService
 from deploy_ci_cloud_agentv3.services.write_service import WriteService
+from deploy_ci_cloud_agentv3.config import Settings
+from deploy_ci_cloud_agentv3.persistence.write_execution_store import SQLiteWriteExecutionStore, InMemoryWriteExecutionStore
+import os
 
 
 def _ensure_checkpointer(checkpointer: Any | None):
@@ -34,12 +37,16 @@ def _build_runtime(
     checkpointer: Any | None,
     audit_path: str | None,
 ):
+    settings = Settings.from_env()
+    settings.ensure_dirs()
+    use_memory_execution = os.environ.get("AUTODRIVE_WRITE_STORE", "sqlite").strip().lower() == "memory"
+    execution_store = InMemoryWriteExecutionStore() if use_memory_execution else SQLiteWriteExecutionStore(settings.db_path)
     deps = GraphDependencies(
         provider=provider,
         agent_mcp=agent_mcp,
         pending_factory=PendingActionFactory(runtime_mcp),
         write_service=WriteService(
-            runtime_mcp, VerificationService(runtime_mcp), AuditStore(audit_path)
+            runtime_mcp, VerificationService(runtime_mcp), AuditStore(audit_path or settings.db_path), execution_store=execution_store
         ),
         context_builder=ContextBuilder(SYSTEM_PROMPT),
         final_guard=FinalGuard(),
@@ -109,9 +116,10 @@ class AgentRuntime:
             audit_path=audit_path,
         )
 
-    async def start(self, thread_id: str, user_message: str) -> dict[str, Any]:
+    async def start(self, thread_id: str, user_message: str, *, run_id: str | None = None) -> dict[str, Any]:
         state = {
             "thread_id": thread_id,
+            "run_id": run_id,
             "messages": [{"role": "user", "content": user_message}],
             "tool_results": [],
             "pending_action": None,

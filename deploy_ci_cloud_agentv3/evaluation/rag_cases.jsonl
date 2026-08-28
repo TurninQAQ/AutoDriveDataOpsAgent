@@ -1,0 +1,30 @@
+{"case_id": "rag01", "query": "GPU reservation and allocation policy", "relevant_sources": ["platform/gpu_scheduling.md"]}
+{"case_id": "rag02", "query": "task is waiting for GPU memory what should I inspect", "relevant_sources": ["runbooks/gpu_wait.md"]}
+{"case_id": "rag03", "query": "how does queue priority work", "relevant_sources": ["platform/gpu_scheduling.md"]}
+{"case_id": "rag04", "query": "soft preemption draining recovery checkpoint", "relevant_sources": ["platform/soft_preemption_recovery.md"]}
+{"case_id": "rag05", "query": "Airflow scheduler health diagnosis", "relevant_sources": ["runbooks/airflow_health.md"]}
+{"case_id": "rag06", "query": "Docker container cleanup after task stop", "relevant_sources": ["runbooks/container_cleanup.md"]}
+{"case_id": "rag07", "query": "stage failure logs validate task", "relevant_sources": ["runbooks/stage_failure.md"]}
+{"case_id": "rag08", "query": "draining task stuck recovery", "relevant_sources": ["runbooks/draining_stuck.md"]}
+{"case_id": "rag09", "query": "how to submit task yaml configuration", "relevant_sources": ["repository/task_submit_template.yaml"]}
+{"case_id": "rag10", "query": "task planning defaults scheduler memory timeout", "relevant_sources": ["repository/task_planning_defaults.yaml"]}
+{"case_id": "rag11", "query": "supported task types configuration", "relevant_sources": ["repository/task_types.yaml"]}
+{"case_id": "rag12", "query": "write agent human approval HITL", "relevant_sources": ["repository/V0.7_WRITE_AGENT_HITL.md"]}
+{"case_id": "rag13", "query": "post write action verification business success", "relevant_sources": ["repository/V0.8_ACTION_VERIFICATION.md"]}
+{"case_id": "rag14", "query": "evaluation observability metrics audit", "relevant_sources": ["repository/V0.9_EVALUATION_OBSERVABILITY.md"]}
+{"case_id": "rag15", "query": "MCP platform read only tools", "relevant_sources": ["repository/V0.3_PLATFORM_MCP.md"]}
+{"case_id": "rag16", "query": "read only agent architecture", "relevant_sources": ["repository/V0.4_READ_ONLY_AGENT.md"]}
+{"case_id": "rag17", "query": "RAG runbook retrieval knowledge", "relevant_sources": ["repository/V0.5_RAG_RUNBOOK.md"]}
+{"case_id": "rag18", "query": "task planning natural language pipeline", "relevant_sources": ["repository/V0.6_TASK_PLANNING.md"]}
+{"case_id": "rag19", "query": "deployment guide setup platform", "relevant_sources": ["repository/deploy_guide.md"]}
+{"case_id": "rag20", "query": "usage guide how to operate agent", "relevant_sources": ["repository/usage_guide.md"]}
+{"case_id": "rag21", "query": "security grounding prevent unsupported claims", "relevant_sources": ["security/grounding.md"]}
+{"case_id": "rag22", "query": "docker lifecycle containers runtime", "relevant_sources": ["platform/docker_lifecycle.md"]}
+{"case_id": "rag23", "query": "platform architecture task gpu queue airflow docker", "relevant_sources": ["platform/architecture.md"]}
+{"case_id": "rag24", "query": "GPU simulation design", "relevant_sources": ["repository/V0.2_GPU_SIMULATION.md"]}
+{"case_id": "rag25", "query": "hardening end to end reliability", "relevant_sources": ["repository/V1.0_HARDENING_E2E.md"]}
+{"case_id": "rag26", "query": "evaluation alignment ground truth", "relevant_sources": ["repository/V1.1_EVALUATION_ALIGNMENT.md"]}
+{"case_id": "rag27", "query": "Gemini embedding provider integration", "relevant_sources": ["repository/V1.2_GEMINI_PROVIDER.md"]}
+{"case_id": "rag28", "query": "repository project overview", "relevant_sources": ["repository/README.md"]}
+{"case_id": "rag29", "query": "version information", "relevant_sources": ["repository/version.md"]}
+{"case_id": "rag30", "query": "skill instructions for AutoDrive dataops", "relevant_sources": ["repository/skill.md"]}

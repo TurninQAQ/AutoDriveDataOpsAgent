@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 
 import pytest
+
+pytest.importorskip("mcp")
 from starlette.applications import Starlette
 
 from deploy_ci_cloud_agentv3.mcp import server as server_module

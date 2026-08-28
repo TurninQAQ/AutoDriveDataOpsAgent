@@ -8,6 +8,7 @@ from deploy_ci_cloud_agentv3.models.pending_action import PendingAction
 from deploy_ci_cloud_agentv3.models.write_result import WriteResult
 from deploy_ci_cloud_agentv3.services.audit import AuditStore
 from deploy_ci_cloud_agentv3.services.verification import VerificationService
+from deploy_ci_cloud_agentv3.persistence.write_execution_store import InMemoryWriteExecutionStore
 
 
 class WriteService:
@@ -18,26 +19,45 @@ class WriteService:
     verification -> audit. A possibly-applied mutation is never blindly retried.
     """
 
-    def __init__(self, runtime_mcp: Any, verification: VerificationService | None = None, audit: AuditStore | None = None) -> None:
+    def __init__(
+        self,
+        runtime_mcp: Any,
+        verification: VerificationService | None = None,
+        audit: AuditStore | None = None,
+        execution_store: Any | None = None,
+    ) -> None:
         self.runtime_mcp = runtime_mcp
         self.verification = verification or VerificationService(runtime_mcp)
         self.audit = audit or AuditStore()
-        self._results_by_key: dict[str, WriteResult] = {}
-        self._attempted: set[str] = set()
+        self.execution_store = execution_store or InMemoryWriteExecutionStore()
 
-    async def execute(self, action: PendingAction, approved_fingerprint: str) -> WriteResult:
+    async def execute(self, action: PendingAction, approved_fingerprint: str, *, thread_id: str | None = None, run_id: str | None = None) -> WriteResult:
         actual_fingerprint = self._validate_approval(action, approved_fingerprint)
         self._validate_bound_before_snapshot(action)
         idempotency_key = self._idempotency_key(actual_fingerprint)
 
-        if idempotency_key in self._results_by_key:
-            return self._results_by_key[idempotency_key]
+        existing = await self.execution_store.get(idempotency_key)
+        if existing is not None:
+            if existing.result is not None:
+                persisted = WriteResult.model_validate(existing.result)
+                if persisted.status != "UNKNOWN_OUTCOME":
+                    return persisted
+                return await self._reconcile_unknown(
+                    action, idempotency_key, persisted.raw_result, "persisted UNKNOWN_OUTCOME requires read reconciliation",
+                    thread_id=thread_id, run_id=run_id,
+                )
+            # A persisted DISPATCHING row means a previous process may already
+            # have crossed the side-effect boundary. Reconcile by READ only.
+            return await self._reconcile_unknown(
+                action, idempotency_key, {}, "persisted DISPATCHING execution requires reconciliation",
+                thread_id=thread_id, run_id=run_id,
+            )
 
         current_precondition = await self.runtime_mcp.call_tool(
             "capture_write_precondition", {"task_name": self._precondition_target(action)}
         )
         if current_precondition != action.precondition:
-            return self._precondition_failed(
+            return await self._precondition_failed(
                 action,
                 idempotency_key,
                 actual_fingerprint,
@@ -45,6 +65,8 @@ class WriteService:
                 error="platform state changed after proposal/review",
                 expected=action.precondition,
                 actual=current_precondition,
+                thread_id=thread_id,
+                run_id=run_id,
             )
 
         admissible, evidence, reason = await self._revalidate_action_precondition(action)
@@ -54,23 +76,37 @@ class WriteService:
                 {
                     "action": action.action,
                     "fingerprint": actual_fingerprint,
-                    "action_precondition": action.action_precondition,
-                    "evidence": evidence,
+                    "action_precondition": self._safe_audit_value(action.action_precondition),
+                    "evidence": self._safe_audit_value(evidence),
                     "reason": reason,
                 },
+                thread_id=thread_id,
+                run_id=run_id,
             )
-            return self._precondition_failed(
+            return await self._precondition_failed(
                 action,
                 idempotency_key,
                 actual_fingerprint,
                 after={"action_revalidation": evidence},
                 error=reason or "action-specific precondition changed after approval",
+                thread_id=thread_id,
+                run_id=run_id,
             )
 
-        if idempotency_key in self._attempted:
-            # This approval already crossed the side-effect boundary. Reconcile only.
-            return await self._reconcile_unknown(action, idempotency_key, {}, "mutation attempt already consumed")
-        self._attempted.add(idempotency_key)
+        claimed, existing = await self.execution_store.claim(
+            idempotency_key,
+            fingerprint=actual_fingerprint,
+            action=action.action,
+            thread_id=thread_id,
+            run_id=run_id,
+        )
+        if not claimed:
+            if existing.result is not None:
+                return WriteResult.model_validate(existing.result)
+            return await self._reconcile_unknown(
+                action, idempotency_key, {}, "concurrent/persisted mutation claim already exists",
+                thread_id=thread_id, run_id=run_id,
+            )
 
         call_args = self._runtime_arguments(action)
         self.audit.append(
@@ -80,13 +116,16 @@ class WriteService:
                 "fingerprint": actual_fingerprint,
                 "idempotency_key": idempotency_key,
             },
+            thread_id=thread_id,
+            run_id=run_id,
         )
         try:
             raw = await self.runtime_mcp.call_tool(action.action, call_args)
         except Exception as exc:
             # The request may have reached the server. Never retry mutation here.
             return await self._reconcile_unknown(
-                action, idempotency_key, {}, f"{type(exc).__name__}: {exc}"
+                action, idempotency_key, {}, f"{type(exc).__name__}: {exc}",
+                thread_id=thread_id, run_id=run_id,
             )
 
         raw_dict = raw if isinstance(raw, dict) else {"result": raw}
@@ -95,7 +134,7 @@ class WriteService:
                 action.action, action.args, raw_dict, before=action.before
             )
         except Exception as exc:
-            return self._remember(
+            return await self._remember(
                 idempotency_key,
                 WriteResult(
                     id=f"write_{uuid.uuid4().hex}",
@@ -107,6 +146,8 @@ class WriteService:
                     raw_result=raw_dict,
                     error=f"verification read failed: {type(exc).__name__}: {exc}",
                 ),
+                thread_id=thread_id,
+                run_id=run_id,
             )
 
         status = "VERIFIED" if verified else "VERIFICATION_FAILED"
@@ -116,10 +157,12 @@ class WriteService:
                 "action": action.action,
                 "fingerprint": actual_fingerprint,
                 "verified": verified,
-                "after": after,
+                "after": self._safe_audit_value(after),
             },
+            thread_id=thread_id,
+            run_id=run_id,
         )
-        return self._remember(
+        return await self._remember(
             idempotency_key,
             WriteResult(
                 id=f"write_{uuid.uuid4().hex}",
@@ -131,6 +174,8 @@ class WriteService:
                 raw_result=raw_dict,
                 error=None if verified else "post-write business state did not match expected effect",
             ),
+            thread_id=thread_id,
+            run_id=run_id,
         )
 
     async def _revalidate_action_precondition(
@@ -168,6 +213,20 @@ class WriteService:
         # are allowed by the backend as intentional re-runs and therefore do not get
         # this additional state restriction.
         if condition.get("kind") != "resume_latest_state_failed":
+            if condition.get("kind") == "resume_explicit_targets":
+                before_latest = self._latest_run_by_dataset(action.before)
+                current_latest = self._latest_run_by_dataset(snapshot)
+                changed: dict[str, Any] = {}
+                for dataset in targets:
+                    before_run = before_latest.get(dataset)
+                    current_run = current_latest.get(dataset)
+                    if self._resume_state_identity(before_run) != self._resume_state_identity(current_run):
+                        changed[dataset] = {
+                            "before": before_run or {"state": "missing"},
+                            "current": current_run or {"state": "missing"},
+                        }
+                if changed:
+                    return False, snapshot, f"approved resume target state is stale: {changed}"
             return True, snapshot, None
 
         latest = self._latest_run_by_dataset(snapshot)
@@ -182,7 +241,8 @@ class WriteService:
         return True, snapshot, None
 
     async def _reconcile_unknown(
-        self, action: PendingAction, idempotency_key: str, raw: dict[str, Any], error: str
+        self, action: PendingAction, idempotency_key: str, raw: dict[str, Any], error: str,
+        *, thread_id: str | None = None, run_id: str | None = None,
     ) -> WriteResult:
         try:
             verified, after = await self.verification.verify(
@@ -193,6 +253,8 @@ class WriteService:
         self.audit.append(
             "UnknownOutcome",
             {"action": action.action, "fingerprint": action.fingerprint, "error": error},
+            thread_id=thread_id,
+            run_id=run_id,
         )
         result = WriteResult(
             id=f"write_{uuid.uuid4().hex}",
@@ -204,9 +266,9 @@ class WriteService:
             raw_result=raw,
             error=None if verified else error,
         )
-        return self._remember(idempotency_key, result)
+        return await self._remember(idempotency_key, result, thread_id=thread_id, run_id=run_id)
 
-    def _precondition_failed(
+    async def _precondition_failed(
         self,
         action: PendingAction,
         idempotency_key: str,
@@ -216,6 +278,8 @@ class WriteService:
         error: str,
         expected: dict[str, Any] | None = None,
         actual: dict[str, Any] | None = None,
+        thread_id: str | None = None,
+        run_id: str | None = None,
     ) -> WriteResult:
         payload: dict[str, Any] = {
             "action": action.action,
@@ -223,11 +287,11 @@ class WriteService:
             "error": error,
         }
         if expected is not None:
-            payload["expected"] = expected
+            payload["expected"] = self._safe_audit_value(expected)
         if actual is not None:
-            payload["actual"] = actual
-        self.audit.append("PreconditionFailed", payload)
-        return self._remember(
+            payload["actual"] = self._safe_audit_value(actual)
+        self.audit.append("PreconditionFailed", payload, thread_id=thread_id, run_id=run_id)
+        return await self._remember(
             idempotency_key,
             WriteResult(
                 id=f"write_{uuid.uuid4().hex}",
@@ -238,12 +302,49 @@ class WriteService:
                 after=after,
                 error=error,
             ),
+            persist_execution=False,
+            thread_id=thread_id,
+            run_id=run_id,
         )
 
-    def _remember(self, idempotency_key: str, result: WriteResult) -> WriteResult:
-        self._results_by_key[idempotency_key] = result
-        self.audit.append("WriteResult", result.model_dump(mode="json"))
+    async def _remember(
+        self, idempotency_key: str, result: WriteResult, *, persist_execution: bool = True,
+        thread_id: str | None = None, run_id: str | None = None,
+    ) -> WriteResult:
+        payload = result.model_dump(mode="json")
+        if persist_execution:
+            await self.execution_store.save_result(idempotency_key, status=result.status, result=payload)
+        self.audit.append("WriteResult", self._safe_audit_value(payload), thread_id=thread_id, run_id=run_id)
         return result
+
+    @staticmethod
+    def _safe_audit_value(value: Any, *, depth: int = 0) -> Any:
+        if depth >= 3:
+            return "<truncated>"
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return value if len(value) <= 240 else value[:237] + "..."
+        if isinstance(value, list):
+            items = [WriteService._safe_audit_value(item, depth=depth + 1) for item in value[:12]]
+            if len(value) > 12:
+                items.append(f"<+{len(value)-12} items>")
+            return items
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for index, (key, item) in enumerate(value.items()):
+                if index >= 24:
+                    out["<truncated>"] = f"+{len(value)-24} keys"
+                    break
+                lowered = str(key).lower()
+                if any(token in lowered for token in ("authorization", "api_key", "apikey", "secret", "token", "password", "credential")):
+                    out[str(key)] = "[REDACTED]"
+                elif lowered in {"raw_result", "config", "artifact", "yaml_text"} and isinstance(item, (dict, list, str)):
+                    out[str(key)] = f"<{type(item).__name__} omitted>"
+                else:
+                    out[str(key)] = WriteService._safe_audit_value(item, depth=depth + 1)
+            return out
+        return WriteService._safe_audit_value(str(value), depth=depth + 1)
 
     @staticmethod
     def _validate_approval(action: PendingAction, approved_fingerprint: str) -> str:
@@ -269,6 +370,16 @@ class WriteService:
             if dataset and dataset not in latest:
                 latest[dataset] = run
         return latest
+
+    @staticmethod
+    def _resume_state_identity(run: dict[str, Any] | None) -> tuple[str, str]:
+        """Compare only the latest run identity/state bound to an explicit resume."""
+        if not run:
+            return "", "missing"
+        return (
+            str(run.get("run_id") or ""),
+            str(run.get("state") or "").lower(),
+        )
 
     @staticmethod
     def _idempotency_key(actual_fingerprint: str) -> str:

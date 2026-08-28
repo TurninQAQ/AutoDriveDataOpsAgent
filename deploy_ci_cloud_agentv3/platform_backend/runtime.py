@@ -12,11 +12,11 @@ from pathlib import Path
 
 from .core.settings import PlatformSettings
 from .mcp.facade import PlatformMCPFacade, build_default_facade
-from .rag.embeddings import build_embedding_provider
-from .rag.service import KnowledgeService
+from deploy_ci_cloud_agentv3.config import Settings as AppSettings
+from deploy_ci_cloud_agentv3.rag.factory import build_rag_service
 
 
-DEFAULT_RUNTIME_ROOT = "/home/ubuntu/project/autodrive_dataops_runtimev2"
+DEFAULT_RUNTIME_ROOT = "/home/ubuntu/project/autodrive_dataops_runtime"
 
 
 def _platform_environment() -> dict[str, str]:
@@ -72,19 +72,8 @@ def build_platform_facade() -> PlatformMCPFacade:
             str(Path(__file__).resolve().parent / "knowledge"),
         )
     )
-    index_file = Path(
-        os.environ.get(
-            "AUTODRIVE_PLATFORM_KNOWLEDGE_INDEX",
-            str(settings.state_dir / "v2_knowledge" / "index.json"),
-        )
-    )
-    # The provider factory is construction-only: it selects the optional dense
-    # retrieval implementation from deployment configuration.  It cannot make
-    # semantic decisions or affect Runtime WRITE/approval authority.
-    embedding_provider = build_embedding_provider(platform_env)
-    knowledge = KnowledgeService(
-        source_dir=source_dir,
-        index_file=index_file,
-        embedding_provider=embedding_provider,
-    )
+    app_settings = AppSettings.from_env()
+    # V3.9 retrieval lives behind the same MCP READ tool. When no real dense
+    # provider is configured the service reports bm25 mode explicitly.
+    knowledge = build_rag_service(settings=app_settings, source_dir=source_dir)
     return build_default_facade(settings=settings, knowledge_service=knowledge)

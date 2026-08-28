@@ -8,6 +8,7 @@ from deploy_ci_cloud_agentv3.models.common import sha256_json
 
 def compute_pending_action_fingerprint(
     *,
+    proposal_id: str,
     action: str,
     args: dict[str, Any],
     artifact: dict[str, Any] | None,
@@ -17,6 +18,7 @@ def compute_pending_action_fingerprint(
     """Hash every runtime-owned field that can affect admission or execution semantics."""
     return sha256_json(
         {
+            "proposal_id": proposal_id,
             "action": action,
             "args": args,
             "artifact": artifact,
@@ -31,7 +33,10 @@ class PendingAction(BaseModel):
 
     The idempotency key is intentionally *not* stored here. WriteService derives it
     from the recomputed fingerprint at execution time so mutable workflow state
-    cannot mint a fresh mutation-attempt key for an already-approved action.
+    cannot mint a fresh mutation-attempt key for an already-approved action. The
+    runtime-generated ``proposal_id`` is part of the fingerprint: retries of the
+    same approved action dedupe, while a later human approval with identical
+    semantic content remains a distinct execution identity.
 
     ``action_precondition`` contains narrow, action-specific admission facts that are
     not appropriate for the global platform precondition. For resume, it records
@@ -54,6 +59,7 @@ class PendingAction(BaseModel):
 
     def recompute_fingerprint(self) -> str:
         return compute_pending_action_fingerprint(
+            proposal_id=self.proposal_id,
             action=self.action,
             args=self.args,
             artifact=self.artifact,

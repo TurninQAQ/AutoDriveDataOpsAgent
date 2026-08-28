@@ -1,5 +1,5 @@
-"""V3 keeps RAG as a normal MCP READ tool and reuses the V2 platform backend retrieval stack."""
+from .embeddings import EmbeddingProvider, DeterministicEmbeddingProvider, GeminiEmbeddingProvider
+from .index import DenseIndex
+from .service import RAGService
 
-from deploy_ci_cloud_agentv3.platform_backend.rag.service import KnowledgeService
-
-__all__ = ["KnowledgeService"]
+__all__ = ["EmbeddingProvider", "DeterministicEmbeddingProvider", "GeminiEmbeddingProvider", "DenseIndex", "RAGService"]

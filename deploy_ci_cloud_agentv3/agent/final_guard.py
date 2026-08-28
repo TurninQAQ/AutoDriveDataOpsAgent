@@ -20,9 +20,9 @@ class FinalGuard:
             )
 
         if not last_write_result:
-            if parsed.status != "informational":
-                return FinalResponse(status="write_not_executed", message="No platform write was executed in this run.")
-            return FinalResponse(status="informational", message=parsed.message)
+            if parsed.status in {"informational", "incomplete"}:
+                return FinalResponse(status=parsed.status, message=parsed.message)
+            return FinalResponse(status="write_not_executed", message="No platform write was executed in this run.")
 
         result = WriteResult.model_validate(last_write_result)
         if result.status == "VERIFIED" and result.verified is True:

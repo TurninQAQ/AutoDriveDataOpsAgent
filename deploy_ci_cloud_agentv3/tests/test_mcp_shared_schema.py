@@ -4,6 +4,8 @@ import inspect
 
 import pytest
 
+pytest.importorskip("mcp")
+
 from deploy_ci_cloud_agentv3.mcp.factory import build_tooling
 from deploy_ci_cloud_agentv3.mcp.profiles import AGENT_TOOLS, RUNTIME_TOOLS
 from deploy_ci_cloud_agentv3.mcp.server import _tool_handler

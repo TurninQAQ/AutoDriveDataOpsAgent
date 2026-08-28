@@ -13,7 +13,7 @@ from deploy_ci_cloud_agentv3.tests.fakes import FakeFacade
 def pending(facade: FakeFacade, priority: int = 5) -> PendingAction:
     pre = facade.get_write_precondition("task_a")
     args = {"task_name": "task_a", "priority": priority}
-    fingerprint = compute_pending_action_fingerprint(action="set_task_priority", args=args, artifact=None, precondition=pre)
+    fingerprint = compute_pending_action_fingerprint(proposal_id="p1", action="set_task_priority", args=args, artifact=None, precondition=pre)
     return PendingAction(
         proposal_id="p1", action="set_task_priority", args=args, reason="test",
         expected_effect="priority changes", before={"priority": facade.priority},
@@ -71,7 +71,7 @@ async def test_approved_submit_nested_yaml_tamper_is_blocked_before_mutation():
     args = {"artifact_id": "a1", "task_prefix": "train", "config": config}
     artifact = {"artifact_id": "a1", "task_prefix": "train", "config": config, "sha256": "x", "yaml_text": "..."}
     pre = facade.get_write_precondition("")
-    fp = compute_pending_action_fingerprint(action="submit_task", args=args, artifact=artifact, precondition=pre)
+    fp = compute_pending_action_fingerprint(proposal_id="p-submit", action="submit_task", args=args, artifact=artifact, precondition=pre)
     action = PendingAction(proposal_id="p-submit", action="submit_task", args=args, reason="", expected_effect="", before={}, artifact=artifact, precondition=pre, fingerprint=fp)
     approved = action.fingerprint
     action.args["config"]["datasets"][0]["dataset_path"] = "/tampered"
@@ -178,6 +178,38 @@ async def test_resume_stale_failed_dataset_revalidation_blocks_duplicate_mutatio
 
 
 @pytest.mark.asyncio
+async def test_resume_explicit_target_state_change_is_blocked_before_mutation():
+    """An explicit target cannot hide a latest-run change during approval."""
+    from deploy_ci_cloud_agentv3.models.proposal import ProposalResult
+    from deploy_ci_cloud_agentv3.services.pending_action import PendingActionFactory
+
+    runtime = ResumeTOCTOURuntime()
+    action = await PendingActionFactory(runtime).build(
+        ProposalResult(
+            action="resume_task",
+            args={"task_name": "task_a", "datasets": ["A"]},
+            reason="resume A",
+            expected_effect="A continues",
+        )
+    )
+    approved = action.fingerprint
+    runtime.snapshot = {
+        **runtime.snapshot,
+        "airflow_runs": [
+            {"run_id": "external-running", "dataset_name": "A", "state": "running"},
+            {"run_id": "old-failed", "dataset_name": "A", "state": "failed"},
+        ],
+    }
+
+    result = await WriteService(runtime).execute(action, approved)
+
+    assert result.status == "PRECONDITION_FAILED"
+    assert result.verified is False
+    assert runtime.mutation_calls == 0
+    assert "stale" in (result.error or "")
+
+
+@pytest.mark.asyncio
 async def test_resume_verification_baseline_tamper_is_blocked_before_mutation():
     from deploy_ci_cloud_agentv3.models.proposal import ProposalResult
     from deploy_ci_cloud_agentv3.services.pending_action import PendingActionFactory
@@ -197,3 +229,14 @@ async def test_resume_verification_baseline_tamper_is_blocked_before_mutation():
     with pytest.raises(PermissionError, match="before snapshot"):
         await WriteService(runtime).execute(action, approved)
     assert runtime.mutation_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_proposal_id_tamper_is_bound_by_fingerprint():
+    facade = FakeFacade(); tooling = build_tooling(facade)
+    service = WriteService(InProcessMCPClient(tooling.registry, RUNTIME_TOOLS))
+    action = pending(facade, 5); approved = action.fingerprint
+    action.proposal_id = "proposal_attacker"
+    with pytest.raises(PermissionError, match="modified"):
+        await service.execute(action, approved)
+    assert facade.mutations == []

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+pytest.importorskip("mcp")
+
 from types import SimpleNamespace
 
 import deploy_ci_cloud_agentv3.agent.runtime as runtime_module

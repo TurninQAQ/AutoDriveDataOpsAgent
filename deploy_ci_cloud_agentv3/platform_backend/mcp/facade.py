@@ -24,7 +24,7 @@ from deploy_ci_cloud_agentv3.platform_backend.core.settings import PlatformSetti
 from deploy_ci_cloud_agentv3.platform_backend.core.task_store import dataset_map, load_task_config, task_paths
 
 if TYPE_CHECKING:
-    from deploy_ci_cloud_agentv3.platform_backend.rag.service import KnowledgeService
+    from deploy_ci_cloud_agentv3.rag.service import RAGService
 
 
 class PlatformMCPFacade:
@@ -42,7 +42,7 @@ class PlatformMCPFacade:
         health_service: HealthService,
         mutation_service: PlatformMutationService | None = None,
         verification_service: ActionVerificationSnapshotService | None = None,
-        knowledge_service: KnowledgeService | None = None,
+        knowledge_service: RAGService | None = None,
     ):
         self.settings = settings
         self.task_query_service = task_query_service
@@ -229,40 +229,16 @@ class PlatformMCPFacade:
             result["dag_id"] = dag_id
             return result
 
-    def search_knowledge(self, query: str, top_k: int = 5) -> dict[str, Any]:
-        """Search the static platform knowledge index without mutating state."""
+    async def search_knowledge(self, query: str, top_k: int = 5) -> dict[str, Any]:
+        """Search AutoDrive knowledge via BM25 or real Dense/RRF retrieval."""
         if self.knowledge_service is None:
             raise RuntimeError("Knowledge search service is not configured")
         query = str(query or "").strip()
         if not query:
             raise ValueError("query must not be empty")
         limit = max(1, min(int(top_k), 100))
-        with self._stdio_safe():
-            result = self.knowledge_service.search(query, top_k=limit)
-        rows = []
-        for rank, item in enumerate(result.results, start=1):
-            rows.append(
-                {
-                    "rank": rank,
-                    "source": item.citation,
-                    "source_path": item.source_path,
-                    "chunk_id": item.chunk_id,
-                    "title": item.title,
-                    "section": item.section,
-                    "content": item.content,
-                    "score": item.score,
-                    "lexical_score": item.lexical_score,
-                    "vector_score": item.vector_score,
-                    "metadata": item.metadata,
-                }
-            )
-        return {
-            "query": result.query,
-            "top_k": limit,
-            "count": len(rows),
-            "results": rows,
-            "index_stats": result.index_stats.model_dump(mode="json") if result.index_stats else None,
-        }
+        result = await self.knowledge_service.search(query, top_k=limit)
+        return {**result, "top_k": limit, "count": len(result.get("results") or [])}
 
     def _require_mutation_service(self) -> PlatformMutationService:
         if self.mutation_service is None:
@@ -324,7 +300,7 @@ class PlatformMCPFacade:
 
 def build_default_facade(
     settings: PlatformSettings | None = None,
-    knowledge_service: KnowledgeService | None = None,
+    knowledge_service: RAGService | None = None,
 ) -> PlatformMCPFacade:
     settings = settings or PlatformSettings.from_env()
     queue_service = QueueService(settings.queue_file)

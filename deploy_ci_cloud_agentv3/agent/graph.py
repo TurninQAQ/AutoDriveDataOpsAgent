@@ -36,12 +36,12 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
         from langgraph.graph import END, START, StateGraph
         from langgraph.types import interrupt
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("langgraph is required to build the V3.5 graph") from exc
+        raise RuntimeError("langgraph is required to build the V3.9 graph") from exc
 
     async def agent(state: AgentState) -> dict[str, Any]:
         step = int(state.get("step_count") or 0) + 1
         if step > deps.max_steps:
-            final = deps.final_guard.build(FinalCandidate(status="write_uncertain", message="Agent step budget exhausted before a safe completion."), state.get("last_write_result"))
+            final = deps.final_guard.build(FinalCandidate(status="incomplete", message="Unable to complete the request within the configured Agent step budget."), state.get("last_write_result"))
             return {"step_count": step, "final_response": final.model_dump(mode="json")}
 
         mcp_tools = await deps.agent_mcp.list_tools()
@@ -66,6 +66,13 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
         proposal_calls = [call for call in calls if call.name.startswith("propose_")]
         messages = list(state.get("messages") or [])
         tool_results = list(state.get("tool_results") or [])
+        thread_id, run_id = state.get("thread_id"), state.get("run_id")
+        for call in calls:
+            deps.write_service.audit.append(
+                "AGENT_TOOL_CALL",
+                {"tool_name": call.name, "call_id": call.id, "arguments": _safe_audit_value(call.arguments)},
+                thread_id=thread_id, run_id=run_id,
+            )
 
         if proposal_calls and (len(proposal_calls) != 1 or len(calls) != 1):
             # Native Function Calling requires one Tool message for every tool_call_id
@@ -73,6 +80,11 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
             rejected_results, rejected_messages = _proposal_policy_rejection(calls)
             tool_results.extend(item.model_dump(mode="json") for item in rejected_results)
             messages.extend(rejected_messages)
+            for result in rejected_results:
+                deps.write_service.audit.append(
+                    "AGENT_TOOL_RESULT", _tool_result_audit_payload(result),
+                    thread_id=thread_id, run_id=run_id,
+                )
             return {"messages": messages, "tool_results": tool_results, "pending_action": None}
 
         if proposal_calls:
@@ -81,15 +93,26 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
                 raw = await deps.agent_mcp.call_tool(call.name, call.arguments)
                 proposal = ProposalResult.model_validate(raw)
                 pending = await deps.pending_factory.build(proposal)
-                deps.write_service.audit.append("ProposalCreated", pending.model_dump(mode="json"))
+                deps.write_service.audit.append(
+                    "ProposalCreated", _safe_audit_value(pending.model_dump(mode="json")),
+                    thread_id=thread_id, run_id=run_id,
+                )
                 result = ToolResult(kind="ACTION_PROPOSAL", tool_name=call.name, call_id=call.id, data=proposal.model_dump(mode="json"))
                 tool_results.append(result.model_dump(mode="json"))
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+                deps.write_service.audit.append(
+                    "AGENT_TOOL_RESULT", _tool_result_audit_payload(result),
+                    thread_id=thread_id, run_id=run_id,
+                )
                 return {"messages": messages, "tool_results": tool_results, "pending_action": pending.model_dump(mode="json")}
             except Exception as exc:
                 error = ToolResult(kind="TOOL_ERROR", tool_name=call.name, call_id=call.id, error=f"{type(exc).__name__}: {exc}")
                 tool_results.append(error.model_dump(mode="json"))
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": error.model_dump_json()})
+                deps.write_service.audit.append(
+                    "AGENT_TOOL_RESULT", _tool_result_audit_payload(error),
+                    thread_id=thread_id, run_id=run_id,
+                )
                 return {"messages": messages, "tool_results": tool_results, "pending_action": None}
 
         async def execute(call: ToolCall) -> tuple[ToolCall, Any, Exception | None]:
@@ -111,6 +134,10 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
                     prepared = raw
             tool_results.append(result.model_dump(mode="json"))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+            deps.write_service.audit.append(
+                "AGENT_TOOL_RESULT", _tool_result_audit_payload(result),
+                thread_id=thread_id, run_id=run_id,
+            )
         return {"messages": messages, "tool_results": tool_results, "prepared_artifact": prepared}
 
     def route_tools(state: AgentState) -> str:
@@ -137,19 +164,19 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
         if parsed["decision"] == "approve":
             approved = str(parsed.get("fingerprint") or "")
             if approved != pending.fingerprint:
-                deps.write_service.audit.append("ReviewApprovalMismatch", {"proposal_id": pending.proposal_id, "approved_fingerprint": approved, "pending_fingerprint": pending.fingerprint})
+                deps.write_service.audit.append("ReviewApprovalMismatch", {"proposal_id": pending.proposal_id, "approved_fingerprint": approved, "pending_fingerprint": pending.fingerprint}, thread_id=state.get("thread_id"), run_id=state.get("run_id"))
                 return {"approved_fingerprint": None, "review_route": "review"}
-            deps.write_service.audit.append("ReviewApproved", {"proposal_id": pending.proposal_id, "fingerprint": approved})
+            deps.write_service.audit.append("ReviewApproved", {"proposal_id": pending.proposal_id, "fingerprint": approved}, thread_id=state.get("thread_id"), run_id=state.get("run_id"))
             return {"approved_fingerprint": approved, "review_route": "execute_write"}
         if parsed["decision"] == "edit":
             edited = parsed.get("args")
             if not isinstance(edited, dict):
                 return {"review_route": "review"}
             rebuilt = await deps.pending_factory.rebuild_from_edit(pending, edited)
-            deps.write_service.audit.append("ReviewEdited", {"old_proposal_id": pending.proposal_id, "old_fingerprint": pending.fingerprint, "new_proposal_id": rebuilt.proposal_id, "new_fingerprint": rebuilt.fingerprint})
+            deps.write_service.audit.append("ReviewEdited", {"old_proposal_id": pending.proposal_id, "old_fingerprint": pending.fingerprint, "new_proposal_id": rebuilt.proposal_id, "new_fingerprint": rebuilt.fingerprint}, thread_id=state.get("thread_id"), run_id=state.get("run_id"))
             return {"pending_action": rebuilt.model_dump(mode="json"), "approved_fingerprint": None, "review_route": "review"}
 
-        deps.write_service.audit.append("ReviewRejected", {"proposal_id": pending.proposal_id, "fingerprint": pending.fingerprint, "reason": str(parsed.get("reason") or "rejected by human reviewer")})
+        deps.write_service.audit.append("ReviewRejected", {"proposal_id": pending.proposal_id, "fingerprint": pending.fingerprint, "reason": str(parsed.get("reason") or "rejected by human reviewer")}, thread_id=state.get("thread_id"), run_id=state.get("run_id"))
         rejected = WriteResult(
             id=f"write_{uuid.uuid4().hex}", action=pending.action, status="REJECTED",
             verified=False, before=pending.before, after={}, error=str(parsed.get("reason") or "rejected by human reviewer"),
@@ -165,13 +192,13 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
     async def execute_write(state: AgentState) -> dict[str, Any]:
         pending = PendingAction.model_validate(state["pending_action"])
         try:
-            result = await deps.write_service.execute(pending, str(state.get("approved_fingerprint") or ""))
+            result = await deps.write_service.execute(pending, str(state.get("approved_fingerprint") or ""), thread_id=state.get("thread_id"), run_id=state.get("run_id"))
         except PermissionError as exc:
             result = WriteResult(
                 id=f"write_{uuid.uuid4().hex}", action=pending.action, status="FAILED", verified=False,
                 before=pending.before, after={}, error=f"approval validation failed: {exc}",
             )
-            deps.write_service.audit.append("WriteBlocked", {"proposal_id": pending.proposal_id, "fingerprint": pending.fingerprint, "error": str(exc)})
+            deps.write_service.audit.append("WriteBlocked", {"proposal_id": pending.proposal_id, "fingerprint": pending.fingerprint, "error": str(exc)}, thread_id=state.get("thread_id"), run_id=state.get("run_id"))
         messages = list(state.get("messages") or [])
         messages.append({"role": "system", "content": f"Deterministic WriteResult: {result.model_dump(mode='json')}"})
         tool_results = list(state.get("tool_results") or [])
@@ -196,6 +223,51 @@ def build_graph(deps: GraphDependencies, *, checkpointer: Any | None = None):
     builder.add_edge("execute_write", "agent")
     return builder.compile(checkpointer=checkpointer)
 
+
+
+def _safe_audit_value(value: Any, *, depth: int = 0) -> Any:
+    """Bounded, secret-aware summary for durable Agent tool events."""
+    if depth >= 3:
+        return "<truncated>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 240 else value[:237] + "..."
+    if isinstance(value, list):
+        items = [_safe_audit_value(item, depth=depth + 1) for item in value[:12]]
+        if len(value) > 12:
+            items.append(f"<+{len(value)-12} items>")
+        return items
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 20:
+                out["<truncated>"] = f"+{len(value)-20} keys"
+                break
+            lowered = str(key).lower()
+            if any(token in lowered for token in ("authorization", "api_key", "apikey", "secret", "token", "password", "credential")):
+                out[str(key)] = "[REDACTED]"
+            elif lowered in {"config", "artifact", "yaml_text"} and isinstance(item, (dict, list, str)):
+                # Keep identity/shape out of the durable event stream; the full
+                # approved artifact remains in PendingAction/checkpoint.
+                out[str(key)] = f"<{type(item).__name__} omitted>"
+            else:
+                out[str(key)] = _safe_audit_value(item, depth=depth + 1)
+        return out
+    return _safe_audit_value(str(value), depth=depth + 1)
+
+
+def _tool_result_audit_payload(result: ToolResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "tool_name": result.tool_name,
+        "call_id": result.call_id,
+        "kind": result.kind,
+    }
+    if result.error:
+        payload["error"] = _safe_audit_value(result.error)
+    if result.data is not None:
+        payload["result_summary"] = _safe_audit_value(result.data)
+    return payload
 
 
 def _proposal_policy_rejection(calls: list[ToolCall]) -> tuple[list[ToolResult], list[dict[str, Any]]]:
